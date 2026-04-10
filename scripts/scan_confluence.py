@@ -1,0 +1,313 @@
+#!/usr/bin/env python3
+"""Confluence raw-data scanner.
+
+Walks every FY parent page under the ARD space, lists every child project
+page, lists every attachment, downloads each file to local disk, and
+records metadata in NorthStar postgres (confluence_page + confluence_attachment).
+
+Runs on the HOST under the user's account (inherits the VPN route).
+
+Usage (from ~/NorthStar on 71):
+    set -a && source .env && set +a
+    .venv-ingest/bin/python scripts/scan_confluence.py [--fy FY2526 --fy FY2425] [--limit 20]
+                                                       [--no-download]
+
+Default FYs: FY2122 FY2223 FY2324 FY2425 FY2526 FY2627.
+
+Files go to: data/attachments/<attachment_id><ext>
+(PG records the full path so the backend can serve them.)
+"""
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import re
+import sys
+from pathlib import Path
+from typing import Optional
+
+import httpx
+import psycopg
+from psycopg.rows import dict_row
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
+logger = logging.getLogger("scan-confluence")
+
+DEFAULT_FYS = ["FY2122", "FY2223", "FY2324", "FY2425", "FY2526", "FY2627"]
+
+PROJECT_ID_RE = re.compile(r"(LI\d{6,7}|RD\d{6,11}|TECHLED-\d+)")
+
+# Extension guesses — used only as a fallback filename hint.
+EXT_BY_MEDIA: dict[str, str] = {
+    "application/vnd.jgraph.mxfile": ".drawio",
+    "application/vnd.jgraph.mxfile.backup": ".drawio.bak",
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/svg+xml": ".svg",
+    "application/pdf": ".pdf",
+    "application/xml": ".xml",
+    "text/xml": ".xml",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "application/vnd.ms-powerpoint": ".ppt",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/vnd.ms-excel": ".xls",
+}
+
+
+def classify(media_type: str, title: str) -> str:
+    """Map a mediaType / title to a coarse file_kind for preview routing."""
+    mt = (media_type or "").lower()
+    tl = title.lower()
+    if "mxfile" in mt or tl.endswith(".drawio") or ".drawio" in tl:
+        return "drawio"
+    if mt.startswith("image/"):
+        return "image"
+    if mt == "application/pdf" or tl.endswith(".pdf"):
+        return "pdf"
+    if "presentation" in mt or tl.endswith((".ppt", ".pptx")):
+        return "office"
+    if "wordprocessingml" in mt or tl.endswith((".doc", ".docx")):
+        return "office"
+    if "spreadsheetml" in mt or tl.endswith((".xls", ".xlsx")):
+        return "office"
+    if "xml" in mt:
+        return "xml"
+    return "other"
+
+
+def extension(media_type: str, title: str) -> str:
+    # Prefer the extension that's already in the title.
+    m = re.search(r"\.[A-Za-z0-9]{2,5}$", title)
+    if m:
+        return m.group(0).lower()
+    return EXT_BY_MEDIA.get(media_type, "")
+
+
+def pg_dsn() -> str:
+    return (
+        f"host={os.environ.get('NORTHSTAR_PG_HOST', 'localhost')} "
+        f"port={os.environ.get('NORTHSTAR_PG_PORT', '5434')} "
+        f"dbname={os.environ.get('NORTHSTAR_PG_DB', 'northstar')} "
+        f"user={os.environ.get('NORTHSTAR_PG_USER', 'northstar')} "
+        f"password={os.environ.get('POSTGRES_PASSWORD', 'northstar_dev')}"
+    )
+
+
+def make_client() -> httpx.Client:
+    base = os.environ["CONFLUENCE_BASE_URL"].rstrip("/")
+    token = os.environ["CONFLUENCE_TOKEN"]
+    return httpx.Client(
+        base_url=base,
+        timeout=60.0,
+        follow_redirects=True,
+        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+    )
+
+
+def get_json(client: httpx.Client, path: str, params: Optional[dict] = None) -> dict:
+    for attempt in range(3):
+        try:
+            r = client.get(path, params=params)
+            if r.status_code in (429, 500, 502, 503, 504):
+                raise httpx.HTTPError("retriable")
+            r.raise_for_status()
+            return r.json()
+        except Exception as exc:  # noqa: BLE001
+            if attempt == 2:
+                raise
+            import time
+            time.sleep(1 << attempt)
+    return {}
+
+
+def find_fy_parent(client: httpx.Client, fy: str, space: str) -> Optional[str]:
+    data = get_json(
+        client,
+        "/rest/api/content",
+        params={"spaceKey": space, "title": f"{fy} Projects", "limit": 5},
+    )
+    results = data.get("results", [])
+    return results[0]["id"] if results else None
+
+
+def list_children(client: httpx.Client, parent_id: str) -> list[dict]:
+    out: list[dict] = []
+    start = 0
+    page_size = 50
+    while True:
+        data = get_json(
+            client,
+            f"/rest/api/content/{parent_id}/child/page",
+            params={"limit": page_size, "start": start, "expand": "_links"},
+        )
+        results = data.get("results", [])
+        out.extend(results)
+        if len(results) < page_size:
+            break
+        start += page_size
+    return out
+
+
+def list_attachments(client: httpx.Client, page_id: str) -> list[dict]:
+    data = get_json(
+        client,
+        f"/rest/api/content/{page_id}/child/attachment",
+        params={"limit": 200, "expand": "metadata,version"},
+    )
+    return data.get("results", [])
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--fy", action="append", help="Fiscal year (repeat). Defaults to all 6.")
+    ap.add_argument("--limit", type=int, default=None, help="Per-FY project cap")
+    ap.add_argument("--no-download", action="store_true", help="Only record metadata, skip downloads")
+    ap.add_argument("--kinds", nargs="*", default=None,
+                    help="Only download these file kinds (e.g. drawio image pdf)")
+    args = ap.parse_args()
+
+    fys = args.fy or DEFAULT_FYS
+    space = os.environ.get("CONFLUENCE_SPACE_KEY", "ARD")
+    base = os.environ["CONFLUENCE_BASE_URL"].rstrip("/")
+
+    root = Path(__file__).resolve().parent.parent
+    attach_root = root / "data" / "attachments"
+    attach_root.mkdir(parents=True, exist_ok=True)
+    logger.info("attachments dir: %s", attach_root)
+
+    client = make_client()
+    pg = psycopg.connect(pg_dsn())
+    pg.autocommit = False
+
+    totals = {"pages": 0, "attachments": 0, "downloaded": 0, "skipped_kind": 0, "errors": 0}
+    try:
+        for fy in fys:
+            parent_id = find_fy_parent(client, fy, space)
+            if not parent_id:
+                logger.warning("FY parent not found for %s", fy)
+                continue
+            logger.info("FY %s → parent %s", fy, parent_id)
+            pages = list_children(client, parent_id)
+            if args.limit:
+                pages = pages[: args.limit]
+            logger.info("  %d project pages", len(pages))
+
+            for i, page in enumerate(pages, 1):
+                page_id = page["id"]
+                title = page["title"]
+                project_id_match = PROJECT_ID_RE.search(title)
+                project_id = project_id_match.group(1) if project_id_match else None
+                page_url = f"{base}/pages/viewpage.action?pageId={page_id}"
+
+                with pg.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO northstar.confluence_page
+                            (page_id, fiscal_year, title, project_id, page_url, last_seen, synced_at)
+                        VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+                        ON CONFLICT (page_id) DO UPDATE SET
+                            fiscal_year = EXCLUDED.fiscal_year,
+                            title = EXCLUDED.title,
+                            project_id = EXCLUDED.project_id,
+                            page_url = EXCLUDED.page_url,
+                            last_seen = NOW()
+                        """,
+                        (page_id, fy, title, project_id, page_url),
+                    )
+                totals["pages"] += 1
+
+                try:
+                    attachments = list_attachments(client, page_id)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("    attachments list failed for %s: %s", page_id, exc)
+                    totals["errors"] += 1
+                    pg.commit()
+                    continue
+
+                for att in attachments:
+                    att_id = att["id"]
+                    a_title = att.get("title", "")
+                    mt = att.get("metadata", {}).get("mediaType", "")
+                    kind = classify(mt, a_title)
+                    size = att.get("extensions", {}).get("fileSize") or att.get("metadata", {}).get(
+                        "properties", {}
+                    ).get("fileSize", {}).get("value", 0)
+                    try:
+                        size_int = int(size) if size is not None else 0
+                    except (TypeError, ValueError):
+                        size_int = 0
+                    version = att.get("version", {}).get("number", 0)
+                    download = att.get("_links", {}).get("download", "")
+                    if not download:
+                        continue
+
+                    local_path: Optional[str] = None
+                    should_download = (
+                        not args.no_download
+                        and not a_title.startswith("drawio-backup")
+                        and not a_title.startswith("~")
+                    )
+                    if should_download and args.kinds and kind not in args.kinds:
+                        should_download = False
+                        totals["skipped_kind"] += 1
+
+                    if should_download:
+                        ext = extension(mt, a_title)
+                        local_file = attach_root / f"{att_id}{ext}"
+                        if not local_file.exists():
+                            try:
+                                with client.stream("GET", download) as resp:
+                                    resp.raise_for_status()
+                                    with open(local_file, "wb") as f:
+                                        for chunk in resp.iter_bytes(chunk_size=65536):
+                                            f.write(chunk)
+                                totals["downloaded"] += 1
+                            except Exception as exc:  # noqa: BLE001
+                                logger.warning("    download failed %s: %s", a_title, exc)
+                                totals["errors"] += 1
+                                local_file = None
+                        local_path = str(local_file.relative_to(root)) if local_file else None
+
+                    with pg.cursor() as cur:
+                        cur.execute(
+                            """
+                            INSERT INTO northstar.confluence_attachment
+                                (attachment_id, page_id, title, media_type, file_kind,
+                                 file_size, version, download_path, local_path, last_seen, synced_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                            ON CONFLICT (attachment_id) DO UPDATE SET
+                                title = EXCLUDED.title,
+                                media_type = EXCLUDED.media_type,
+                                file_kind = EXCLUDED.file_kind,
+                                file_size = EXCLUDED.file_size,
+                                version = EXCLUDED.version,
+                                download_path = EXCLUDED.download_path,
+                                local_path = coalesce(EXCLUDED.local_path, northstar.confluence_attachment.local_path),
+                                last_seen = NOW()
+                            """,
+                            (
+                                att_id, page_id, a_title, mt, kind,
+                                size_int, version, download, local_path,
+                            ),
+                        )
+                    totals["attachments"] += 1
+
+                pg.commit()
+                if i % 20 == 0:
+                    logger.info("  [%s] %d/%d pages processed", fy, i, len(pages))
+    finally:
+        client.close()
+        pg.close()
+
+    logger.info("DONE:")
+    for k, v in totals.items():
+        logger.info("  %-15s %d", k, v)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

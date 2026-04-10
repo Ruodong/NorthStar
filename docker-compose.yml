@@ -63,9 +63,11 @@ services:
       - LLM_MODEL=${LLM_MODEL:-gpt-4o}
       - LLM_ENABLED=${LLM_ENABLED:-false}
       - LOCAL_DRAWIO_ROOT=/data/local_drawio
+      - ATTACHMENT_ROOT=/app_data
       - CORS_ORIGINS=*
     volumes:
       - ./data/local_drawio:/data/local_drawio:ro
+      - ./data/attachments:/app_data:ro
 
   frontend:
     build: ./frontend

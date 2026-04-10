@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import analytics, graph, ingestion, masters
+from app.routers import admin, analytics, graph, ingestion, masters
 from app.services import neo4j_client, pg_client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
@@ -48,6 +48,7 @@ app.include_router(graph.router)
 app.include_router(analytics.router)
 app.include_router(ingestion.router)
 app.include_router(masters.router)
+app.include_router(admin.router)
 
 
 @app.get("/")
