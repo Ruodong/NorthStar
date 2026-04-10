@@ -56,6 +56,13 @@ TYPED_FIELD_ALIASES: dict[str, list[str]] = {
     "q_dt_lead": ["dt lead", "dt leader"],
 }
 
+# Patterns we accept as a canonical project/application id inside the
+# questionnaire Project ID field. Anything else is treated as free text.
+_PROJECT_ID_PATTERN = re.compile(
+    r"(LI\d{6,7}|RD\d{6,11}|TECHLED-\d+|FY\d{4}-\d+|EA\d{6})"
+)
+_APP_ID_PATTERN = re.compile(r"^A\d{3,7}$")
+
 
 def extract_typed_fields(questionnaire: dict) -> dict[str, str]:
     """Walk the parsed questionnaire sections and extract well-known fields."""
@@ -293,8 +300,29 @@ def main() -> int:
                 # Extract typed fields from the questionnaire for fast SQL join
                 typed = extract_typed_fields(body_q_obj) if body_q_obj else {}
 
-                # If questionnaire has a project_id, override the title-extracted one
-                final_project_id = typed.get("q_project_id") or project_id
+                # If title didn't yield a project_id but the questionnaire did
+                # and it matches a known pattern, use the questionnaire value.
+                final_project_id = project_id
+                if final_project_id is None and typed.get("q_project_id"):
+                    m = _PROJECT_ID_PATTERN.search(typed["q_project_id"])
+                    if m:
+                        final_project_id = m.group(1)
+
+                # Sometimes the questionnaire 'Project ID' field actually holds
+                # a CMDB application id (e.g. 'Tosca' page → A004164). Promote
+                # those to q_app_id so the page classifies as 'application'.
+                promoted_app_id = title_app_id
+                if promoted_app_id is None and typed.get("q_project_id"):
+                    if _APP_ID_PATTERN.match(typed["q_project_id"].strip()):
+                        promoted_app_id = typed["q_project_id"].strip()
+
+                # Re-classify after promotion
+                if promoted_app_id:
+                    page_type = "application"
+                elif final_project_id:
+                    page_type = "project"
+                else:
+                    page_type = "other"
 
                 with pg.cursor() as cur:
                     cur.execute(
@@ -335,7 +363,7 @@ def main() -> int:
                             typed.get("q_pm"),
                             typed.get("q_it_lead"),
                             typed.get("q_dt_lead"),
-                            title_app_id,
+                            promoted_app_id,
                             page_type,
                         ),
                     )
