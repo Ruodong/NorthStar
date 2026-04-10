@@ -103,6 +103,28 @@ CREATE TABLE IF NOT EXISTS ref_diagram (
 );
 CREATE INDEX IF NOT EXISTS idx_ref_diagram_request ON ref_diagram (request_id);
 
+-- EGM governance_request (denormalized project metadata per review request)
+CREATE TABLE IF NOT EXISTS ref_request (
+    id                      UUID PRIMARY KEY,
+    title                   VARCHAR,
+    project_id              VARCHAR,
+    project_code            VARCHAR,
+    project_name            VARCHAR,
+    project_status          VARCHAR,
+    project_pm              VARCHAR,
+    project_pm_itcode       VARCHAR,
+    project_dt_lead         VARCHAR,
+    project_dt_lead_itcode  VARCHAR,
+    project_it_lead         VARCHAR,
+    project_it_lead_itcode  VARCHAR,
+    project_start_date      VARCHAR,
+    status                  VARCHAR,
+    organization            VARCHAR,
+    create_at               TIMESTAMP,
+    synced_at               TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_ref_request_project ON ref_request (project_id);
+
 -- =============================================================================
 -- Sync audit
 -- =============================================================================

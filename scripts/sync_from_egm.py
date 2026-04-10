@@ -106,6 +106,23 @@ SYNCS = [
         ),
     ),
     (
+        "ref_request",
+        ["id"],
+        (
+            """SELECT id, title, project_id, project_code, project_name, project_status,
+                      project_pm, project_pm_itcode, project_dt_lead, project_dt_lead_itcode,
+                      project_it_lead, project_it_lead_itcode, project_start_date,
+                      status, organization, create_at
+               FROM egm.governance_request""",
+            [
+                "id", "title", "project_id", "project_code", "project_name", "project_status",
+                "project_pm", "project_pm_itcode", "project_dt_lead", "project_dt_lead_itcode",
+                "project_it_lead", "project_it_lead_itcode", "project_start_date",
+                "status", "organization", "create_at",
+            ],
+        ),
+    ),
+    (
         "ref_diagram_app",
         ["id"],
         (
