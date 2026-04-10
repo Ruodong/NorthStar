@@ -118,6 +118,7 @@ async def get_page(page_id: str) -> ApiResponse:
                body_text IS NOT NULL AS has_body,
                body_questionnaire,
                body_size_chars,
+               q_project_id, q_project_name, q_pm, q_it_lead, q_dt_lead,
                last_seen, synced_at
         FROM northstar.confluence_page
         WHERE page_id = $1
@@ -182,6 +183,116 @@ async def get_page_body(page_id: str) -> ApiResponse:
             detail="body not scanned yet — re-run scripts/scan_confluence.py",
         )
     return ApiResponse(data={"html": row["body_html"], "size_chars": row["body_size_chars"]})
+
+
+@router.get("/projects/{project_id}/overview")
+async def project_overview(project_id: str) -> ApiResponse:
+    """Unified project view joining every source keyed on project_id.
+
+    Returns ref_project (MSPO master) + confluence_page (with questionnaire) +
+    confluence attachments + Neo4j-derived applications and integrations for
+    the project. Used by the admin UI to give one-stop visibility into a
+    specific project.
+    """
+    import json as _json
+
+    # 1) MSPO master
+    mspo = await pg_client.fetchrow(
+        "SELECT * FROM northstar.ref_project WHERE project_id = $1",
+        project_id,
+    )
+
+    # 2) Confluence pages (match either title-extracted or questionnaire-extracted id)
+    pages = await pg_client.fetch(
+        """
+        SELECT page_id, fiscal_year, title, page_url, body_size_chars,
+               q_project_id, q_project_name, q_pm, q_it_lead, q_dt_lead,
+               body_questionnaire
+        FROM northstar.confluence_page
+        WHERE project_id = $1 OR q_project_id = $1
+        ORDER BY fiscal_year DESC, title
+        """,
+        project_id,
+    )
+    page_ids = [p["page_id"] for p in pages]
+
+    # 3) Attachments across all those pages
+    attachments: list[dict] = []
+    if page_ids:
+        att_rows = await pg_client.fetch(
+            """
+            SELECT attachment_id, page_id, title, media_type, file_kind,
+                   file_size, local_path
+            FROM northstar.confluence_attachment
+            WHERE page_id = ANY($1::text[])
+              AND title NOT LIKE 'drawio-backup%'
+              AND title NOT LIKE '~%'
+            ORDER BY
+              CASE file_kind
+                WHEN 'drawio' THEN 1
+                WHEN 'image' THEN 2
+                WHEN 'pdf' THEN 3
+                WHEN 'office' THEN 4
+                ELSE 5
+              END,
+              title
+            """,
+            page_ids,
+        )
+        attachments = [dict(a) for a in att_rows]
+
+    # 4) Neo4j applications + integrations for this project (read through backend Neo4j)
+    from app.services import neo4j_client as _n
+    apps_rows = await _n.run_query(
+        """
+        MATCH (p:Project {project_id: $pid})-[:INCLUDES]->(a:Application)
+        RETURN a.app_id AS app_id, a.name AS name, a.status AS status,
+               a.cmdb_linked AS cmdb_linked
+        ORDER BY a.name
+        """,
+        {"pid": project_id},
+    )
+    edge_rows = await _n.run_query(
+        """
+        MATCH (p:Project {project_id: $pid})-[:INCLUDES]->(a:Application)
+        MATCH (a)-[r:INTEGRATES_WITH]->(b:Application)
+        WHERE (p)-[:INCLUDES]->(b)
+        RETURN a.app_id AS source_app_id, b.app_id AS target_app_id,
+               r.interaction_type AS interaction_type,
+               r.business_object AS business_object,
+               r.status AS status
+        """,
+        {"pid": project_id},
+    )
+
+    # Parse questionnaire JSON payload in Python
+    page_dicts: list[dict] = []
+    for p in pages:
+        d = dict(p)
+        q = d.pop("body_questionnaire", None)
+        if q:
+            try:
+                d["questionnaire_sections"] = (
+                    (q if isinstance(q, dict) else _json.loads(q)).get("sections", [])
+                )
+            except Exception:  # noqa: BLE001
+                d["questionnaire_sections"] = None
+        else:
+            d["questionnaire_sections"] = None
+        page_dicts.append(d)
+
+    return ApiResponse(
+        data={
+            "project_id": project_id,
+            "mspo": dict(mspo) if mspo else None,
+            "confluence_pages": page_dicts,
+            "attachments": attachments,
+            "graph": {
+                "applications": apps_rows,
+                "integrations": edge_rows,
+            },
+        }
+    )
 
 
 @router.get("/confluence/attachments/{attachment_id}/raw")

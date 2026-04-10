@@ -35,6 +35,11 @@ interface Page {
   has_body: boolean;
   body_size_chars: number | null;
   questionnaire: Questionnaire | null;
+  q_project_id: string | null;
+  q_project_name: string | null;
+  q_pm: string | null;
+  q_it_lead: string | null;
+  q_dt_lead: string | null;
 }
 
 interface Attachment {
@@ -171,6 +176,59 @@ export default function ConfluencePageDetail() {
           </span>
         ) : null}
       </div>
+
+      {/* Linked project info extracted from questionnaire */}
+      {(detail.page.q_project_id ||
+        detail.page.q_pm ||
+        detail.page.q_it_lead ||
+        detail.page.q_dt_lead) && (
+        <div
+          className="panel"
+          style={{
+            marginBottom: 16,
+            padding: "14px 20px",
+            borderLeft: "2px solid var(--accent)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 10,
+              fontWeight: 600,
+              textTransform: "uppercase",
+              letterSpacing: 0.7,
+              color: "var(--accent)",
+              marginBottom: 10,
+            }}
+          >
+            Linked Project (from questionnaire)
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+              gap: 14,
+              fontSize: 12,
+            }}
+          >
+            {detail.page.q_project_id && (
+              <KV label="Project ID">
+                <Link
+                  href={`/admin/projects?q=${encodeURIComponent(detail.page.q_project_id)}`}
+                  style={{ color: "var(--accent)" }}
+                >
+                  <code>{detail.page.q_project_id}</code>
+                </Link>
+              </KV>
+            )}
+            {detail.page.q_project_name && (
+              <KV label="Name">{detail.page.q_project_name}</KV>
+            )}
+            {detail.page.q_pm && <KV label="PM">{detail.page.q_pm}</KV>}
+            {detail.page.q_it_lead && <KV label="IT Lead">{detail.page.q_it_lead}</KV>}
+            {detail.page.q_dt_lead && <KV label="DT Lead">{detail.page.q_dt_lead}</KV>}
+          </div>
+        </div>
+      )}
 
       {/* Tab bar */}
       <div
@@ -328,6 +386,32 @@ function TabButton({
     >
       {children}
     </button>
+  );
+}
+
+function KV({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div
+        style={{
+          fontSize: 9,
+          fontWeight: 500,
+          textTransform: "uppercase",
+          letterSpacing: 0.7,
+          color: "var(--text-muted)",
+          marginBottom: 4,
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ color: "var(--text)" }}>{children}</div>
+    </div>
   );
 }
 

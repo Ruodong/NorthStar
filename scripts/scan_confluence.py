@@ -43,6 +43,36 @@ DEFAULT_FYS = ["FY2122", "FY2223", "FY2324", "FY2425", "FY2526", "FY2627"]
 
 PROJECT_ID_RE = re.compile(r"(LI\d{6,7}|RD\d{6,11}|TECHLED-\d+)")
 
+# Map typed fields we want to extract from the questionnaire Metadata section.
+# Keys are field names on confluence_page; values are aliases to match against
+# the 'key' column in any parsed row (lowercase, stripped).
+TYPED_FIELD_ALIASES: dict[str, list[str]] = {
+    "q_project_id": ["project id", "projectid"],
+    "q_project_name": ["project name", "projectname"],
+    "q_pm": ["pm", "project manager"],
+    "q_it_lead": ["it lead", "it leader", "it pm"],
+    "q_dt_lead": ["dt lead", "dt leader"],
+}
+
+
+def extract_typed_fields(questionnaire: dict) -> dict[str, str]:
+    """Walk the parsed questionnaire sections and extract well-known fields."""
+    out: dict[str, str] = {}
+    if not questionnaire:
+        return out
+    for section in questionnaire.get("sections", []):
+        for row in section.get("rows", []):
+            key = (row.get("key") or "").strip().lower()
+            value = (row.get("value") or "").strip()
+            if not key or not value:
+                continue
+            for field, aliases in TYPED_FIELD_ALIASES.items():
+                if field in out:
+                    continue
+                if key in aliases:
+                    out[field] = value[:500]
+    return out
+
 # Extension guesses — used only as a fallback filename hint.
 EXT_BY_MEDIA: dict[str, str] = {
     "application/vnd.jgraph.mxfile": ".drawio",
@@ -227,24 +257,29 @@ def main() -> int:
                 body_html = fetch_page_body(client, page_id) if not args.no_body else None
                 body_text = ""
                 body_q_json: Optional[str] = None
+                body_q_obj: Optional[dict] = None
                 body_size = 0
                 if body_html:
                     try:
                         parsed_body = parse_body(body_html)
+                        body_q_obj = {
+                            "sections": parsed_body.get("sections", []),
+                            "expand_panels": parsed_body.get("expand_panels", []),
+                            "stats": parsed_body.get("stats", {}),
+                        }
                         body_text = parsed_body.get("text", "")
-                        body_q_json = json.dumps(
-                            {
-                                "sections": parsed_body.get("sections", []),
-                                "expand_panels": parsed_body.get("expand_panels", []),
-                                "stats": parsed_body.get("stats", {}),
-                            },
-                            ensure_ascii=False,
-                        )
+                        body_q_json = json.dumps(body_q_obj, ensure_ascii=False)
                         body_size = len(body_html)
                         totals["bodies_parsed"] = totals.get("bodies_parsed", 0) + 1
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("    body parse failed for %s: %s", page_id, exc)
                         totals["errors"] += 1
+
+                # Extract typed fields from the questionnaire for fast SQL join
+                typed = extract_typed_fields(body_q_obj) if body_q_obj else {}
+
+                # If questionnaire has a project_id, override the title-extracted one
+                final_project_id = typed.get("q_project_id") or project_id
 
                 with pg.cursor() as cur:
                     cur.execute(
@@ -252,22 +287,35 @@ def main() -> int:
                         INSERT INTO northstar.confluence_page
                             (page_id, fiscal_year, title, project_id, page_url,
                              body_html, body_text, body_questionnaire, body_size_chars,
+                             q_project_id, q_project_name, q_pm, q_it_lead, q_dt_lead,
                              last_seen, synced_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, NOW(), NOW())
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s,
+                                %s, %s, %s, %s, %s,
+                                NOW(), NOW())
                         ON CONFLICT (page_id) DO UPDATE SET
                             fiscal_year = EXCLUDED.fiscal_year,
                             title = EXCLUDED.title,
-                            project_id = EXCLUDED.project_id,
+                            project_id = COALESCE(EXCLUDED.project_id, northstar.confluence_page.project_id),
                             page_url = EXCLUDED.page_url,
                             body_html = COALESCE(EXCLUDED.body_html, northstar.confluence_page.body_html),
                             body_text = COALESCE(EXCLUDED.body_text, northstar.confluence_page.body_text),
                             body_questionnaire = COALESCE(EXCLUDED.body_questionnaire, northstar.confluence_page.body_questionnaire),
                             body_size_chars = COALESCE(EXCLUDED.body_size_chars, northstar.confluence_page.body_size_chars),
+                            q_project_id = COALESCE(EXCLUDED.q_project_id, northstar.confluence_page.q_project_id),
+                            q_project_name = COALESCE(EXCLUDED.q_project_name, northstar.confluence_page.q_project_name),
+                            q_pm = COALESCE(EXCLUDED.q_pm, northstar.confluence_page.q_pm),
+                            q_it_lead = COALESCE(EXCLUDED.q_it_lead, northstar.confluence_page.q_it_lead),
+                            q_dt_lead = COALESCE(EXCLUDED.q_dt_lead, northstar.confluence_page.q_dt_lead),
                             last_seen = NOW()
                         """,
                         (
-                            page_id, fy, title, project_id, page_url,
+                            page_id, fy, title, final_project_id, page_url,
                             body_html, body_text, body_q_json, body_size,
+                            typed.get("q_project_id"),
+                            typed.get("q_project_name"),
+                            typed.get("q_pm"),
+                            typed.get("q_it_lead"),
+                            typed.get("q_dt_lead"),
                         ),
                     )
                 totals["pages"] += 1
