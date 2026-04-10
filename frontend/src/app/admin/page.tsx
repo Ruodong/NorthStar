@@ -32,16 +32,22 @@ export default function AdminOverview() {
     <div>
       <h1>Master Data Overview</h1>
       <p className="subtitle">
-        Raw master data mirrored from EGM and Confluence. Sourced from{" "}
-        <code>egm-postgres</code> and <code>km.xpaas.lenovo.com</code>.
+        Raw master data for review. Click a card to drill into the table, or jump to
+        Confluence Raw to inspect the source files.
       </p>
 
       {err && <div className="panel" style={{ borderColor: "#5b1f1f" }}>Error: {err}</div>}
 
-      <div className="kpi-grid">
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(3, 1fr)",
+          gap: 16,
+          marginBottom: 28,
+        }}
+      >
         <Stat label="Applications" value={summary?.applications} href="/admin/applications" />
         <Stat label="Projects (MSPO)" value={summary?.projects} href="/admin/projects" />
-        <Stat label="Employees" value={summary?.employees} />
         <Stat
           label="Parsed diagrams (EGM)"
           value={summary?.diagram_apps}
@@ -49,28 +55,77 @@ export default function AdminOverview() {
         />
       </div>
 
-      <div className="panel-grid">
-        <SourcePanel
-          title="EGM Master Data"
-          desc="Synced from egm-postgres via scripts/sync_from_egm.py — 6 tables, updated on demand."
-          items={[
-            ["ref_application", "CMDB application registry", "3,168 rows"],
-            ["ref_employee", "Full employee directory + manager chain", "79,703 rows"],
-            ["ref_project", "MSPO project master (PM / DT / IT Lead)", "2,356 rows"],
-            ["ref_request", "Governance review requests", "4,172 rows"],
-            ["ref_diagram", "EGM parsed drawio (with XML)", "28 rows"],
-            ["ref_diagram_app / ref_diagram_interaction", "Per-diagram extracted apps & edges", "297 / 241"],
-          ]}
-        />
-        <SourcePanel
-          title="Confluence Raw"
-          desc="Scanned from Architecture & Solution Review space (ARD). Run scripts/scan_confluence.py to refresh."
-          items={[
-            ["FY2122 → FY2627 Projects", "Parent pages per fiscal year", "6 FYs"],
-            ["Project pages", "Review pages with attachments", "2000+"],
-            ["Attachments", "drawio / png / pdf / pptx raw files", "—"],
-          ]}
-        />
+      <div className="panel">
+        <div className="panel-title">Confluence Raw Data</div>
+        <p style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 0, marginBottom: 18 }}>
+          Scanned from the Architecture &amp; Solution Review space (ARD). Run{" "}
+          <code>scripts/scan_confluence.py</code> to refresh. Every project page and
+          attachment (drawio, png, pdf, pptx) is indexed with the original URL and a local
+          copy, so you can review any raw file inline from the Confluence Raw tab.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Source</th>
+              <th>Description</th>
+              <th style={{ textAlign: "right" }}>Size</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>
+                <code>FY2122 → FY2627 Projects</code>
+              </td>
+              <td style={{ color: "var(--text-muted)" }}>Parent pages per fiscal year</td>
+              <td
+                style={{
+                  textAlign: "right",
+                  fontFamily: "var(--font-mono)",
+                  color: "var(--text-dim)",
+                }}
+              >
+                6 FYs
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>Project pages</code>
+              </td>
+              <td style={{ color: "var(--text-muted)" }}>Review pages with attachments</td>
+              <td
+                style={{
+                  textAlign: "right",
+                  fontFamily: "var(--font-mono)",
+                  color: "var(--text-dim)",
+                }}
+              >
+                2000+
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <code>Attachments</code>
+              </td>
+              <td style={{ color: "var(--text-muted)" }}>
+                drawio / png / pdf / pptx raw files
+              </td>
+              <td
+                style={{
+                  textAlign: "right",
+                  fontFamily: "var(--font-mono)",
+                  color: "var(--text-dim)",
+                }}
+              >
+                —
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div style={{ marginTop: 16 }}>
+          <Link href="/admin/confluence" className="btn">
+            Open Confluence Raw →
+          </Link>
+        </div>
       </div>
     </div>
   );
@@ -115,51 +170,4 @@ function Stat({
     );
   }
   return <div className="kpi-card">{body}</div>;
-}
-
-function SourcePanel({
-  title,
-  desc,
-  items,
-}: {
-  title: string;
-  desc: string;
-  items: [string, string, string][];
-}) {
-  return (
-    <div className="panel">
-      <div className="panel-title">{title}</div>
-      <p style={{ fontSize: 13, color: "var(--text-muted)", marginTop: 0, marginBottom: 18 }}>
-        {desc}
-      </p>
-      <table>
-        <thead>
-          <tr>
-            <th>Table</th>
-            <th>Description</th>
-            <th style={{ textAlign: "right" }}>Size</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map(([t, d, s]) => (
-            <tr key={t}>
-              <td>
-                <code>{t}</code>
-              </td>
-              <td style={{ color: "var(--text-muted)" }}>{d}</td>
-              <td
-                style={{
-                  textAlign: "right",
-                  fontFamily: "var(--font-mono)",
-                  color: "var(--text-dim)",
-                }}
-              >
-                {s}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
 }
