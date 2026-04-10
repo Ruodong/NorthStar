@@ -134,9 +134,11 @@ def main() -> int:
     logger.info("loaded employees: %d", len(employees))
 
     # Join drawio attachments to their Confluence page metadata +
-    # (optional) MSPO master. Only include pages that have a project_id
-    # (either from the title or from the questionnaire) — otherwise we can't
-    # reliably group apps under a project.
+    # (optional) MSPO master. Two page types produce a node in the graph:
+    #   - project pages → merged as Project node keyed on LI.../RD... id
+    #   - application pages (A-prefix) → merged as Project node keyed on A-id
+    #     so we can still use INCLUDES edges, AND the A-id becomes one of the
+    #     Application nodes too (automatically CMDB-linked because it IS CMDB).
     with src.cursor() as cur:
         cur.execute(
             """
@@ -147,9 +149,11 @@ def main() -> int:
                 a.media_type,
                 p.page_id,
                 p.title              AS page_title,
+                p.page_type,
                 p.fiscal_year,
                 p.page_url,
-                COALESCE(p.q_project_id, p.project_id) AS project_id,
+                COALESCE(p.q_app_id, p.q_project_id, p.project_id) AS project_id,
+                p.q_app_id,
                 p.q_project_name,
                 p.q_pm,
                 p.q_it_lead,
@@ -170,7 +174,7 @@ def main() -> int:
               AND a.title NOT LIKE 'drawio-backup%'
               AND a.title NOT LIKE '~%'
               AND a.title NOT LIKE '%.png'
-              AND COALESCE(p.q_project_id, p.project_id) IS NOT NULL
+              AND COALESCE(p.q_app_id, p.q_project_id, p.project_id) IS NOT NULL
             ORDER BY p.fiscal_year DESC, p.title, a.title
             """
         )
@@ -237,12 +241,15 @@ def main() -> int:
                 project_name = r["q_project_name"] or r["mspo_name"] or r["page_title"]
 
                 # MERGE Project node (once per project, not per file)
+                page_type = r.get("page_type") or "project"
+                q_app_id = r.get("q_app_id")
                 if project_id not in seen_projects:
                     seen_projects.add(project_id)
                     ns.run(
                         """
                         MERGE (p:Project {project_id: $project_id})
                         SET p.name = $name,
+                            p.page_type = $page_type,
                             p.fiscal_year = $fiscal_year,
                             p.page_url = $page_url,
                             p.page_id = $page_id,
@@ -263,6 +270,7 @@ def main() -> int:
                         """,
                         project_id=project_id,
                         name=(project_name or project_id)[:200],
+                        page_type=page_type,
                         fiscal_year=r["fiscal_year"] or "",
                         page_url=r["page_url"] or "",
                         page_id=r["page_id"] or "",
@@ -278,6 +286,35 @@ def main() -> int:
                         now=now_iso(),
                     )
                     stats["projects_merged"] += 1
+
+                    # Application pages: the A-id from the title IS a CMDB app.
+                    # Immediately create the Application node with CMDB canonical
+                    # metadata and link it to the page, so even if the drawio on
+                    # this page is empty we still get the Project→CMDB edge.
+                    if page_type == "application" and q_app_id and q_app_id in cmdb:
+                        cmdb_row = cmdb[q_app_id]
+                        ns.run(
+                            """
+                            MERGE (a:Application {app_id: $app_id})
+                            SET a.name = $name,
+                                a.status = $status,
+                                a.description = $desc,
+                                a.cmdb_linked = true,
+                                a.source = coalesce(a.source, 'Confluence application page'),
+                                a.last_updated = $now
+                            WITH a
+                            MATCH (p:Project {project_id: $project_id})
+                            MERGE (p)-[:INCLUDES]->(a)
+                            """,
+                            app_id=q_app_id,
+                            name=(cmdb_row["name"] or q_app_id)[:200],
+                            status=cmdb_row["status"] or "Active",
+                            desc=(cmdb_row.get("short_description") or "")[:500],
+                            project_id=project_id,
+                            now=now_iso(),
+                        )
+                        stats["cmdb_hits"] += 1
+                        stats["applications_merged"] += 1
 
                 # App cell_id → canonical app_id map (scoped to this diagram)
                 diagram_scope = f"{project_id}:{r['attachment_id']}"

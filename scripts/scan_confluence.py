@@ -42,6 +42,8 @@ logger = logging.getLogger("scan-confluence")
 DEFAULT_FYS = ["FY2122", "FY2223", "FY2324", "FY2425", "FY2526", "FY2627"]
 
 PROJECT_ID_RE = re.compile(r"(LI\d{6,7}|RD\d{6,11}|TECHLED-\d+)")
+# Application review pages use "A<5-7 digits>" + separator + name
+APP_TITLE_RE = re.compile(r"^(A\d{3,7})[\s_\-:]+(.+)$")
 
 # Map typed fields we want to extract from the questionnaire Metadata section.
 # Keys are field names on confluence_page; values are aliases to match against
@@ -251,6 +253,19 @@ def main() -> int:
                 title = page["title"]
                 project_id_match = PROJECT_ID_RE.search(title)
                 project_id = project_id_match.group(1) if project_id_match else None
+
+                # Detect application review pages: "A000394 - LBP", "A002025 Survey Center", etc.
+                app_title_match = APP_TITLE_RE.match(title)
+                title_app_id = app_title_match.group(1) if app_title_match else None
+
+                # Classify page type
+                if title_app_id:
+                    page_type = "application"
+                elif project_id:
+                    page_type = "project"
+                else:
+                    page_type = "other"
+
                 page_url = f"{base}/pages/viewpage.action?pageId={page_id}"
 
                 # Fetch + parse the page body (questionnaire lives here)
@@ -288,9 +303,11 @@ def main() -> int:
                             (page_id, fiscal_year, title, project_id, page_url,
                              body_html, body_text, body_questionnaire, body_size_chars,
                              q_project_id, q_project_name, q_pm, q_it_lead, q_dt_lead,
+                             q_app_id, page_type,
                              last_seen, synced_at)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s,
                                 %s, %s, %s, %s, %s,
+                                %s, %s,
                                 NOW(), NOW())
                         ON CONFLICT (page_id) DO UPDATE SET
                             fiscal_year = EXCLUDED.fiscal_year,
@@ -306,6 +323,8 @@ def main() -> int:
                             q_pm = COALESCE(EXCLUDED.q_pm, northstar.confluence_page.q_pm),
                             q_it_lead = COALESCE(EXCLUDED.q_it_lead, northstar.confluence_page.q_it_lead),
                             q_dt_lead = COALESCE(EXCLUDED.q_dt_lead, northstar.confluence_page.q_dt_lead),
+                            q_app_id = COALESCE(EXCLUDED.q_app_id, northstar.confluence_page.q_app_id),
+                            page_type = EXCLUDED.page_type,
                             last_seen = NOW()
                         """,
                         (
@@ -316,6 +335,8 @@ def main() -> int:
                             typed.get("q_pm"),
                             typed.get("q_it_lead"),
                             typed.get("q_dt_lead"),
+                            title_app_id,
+                            page_type,
                         ),
                     )
                 totals["pages"] += 1

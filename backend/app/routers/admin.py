@@ -41,18 +41,31 @@ async def confluence_summary() -> ApiResponse:
         ORDER BY n DESC
         """
     )
+    types = await pg_client.fetch(
+        """
+        SELECT COALESCE(page_type, 'other') AS type, count(*) AS n
+        FROM northstar.confluence_page
+        GROUP BY page_type
+        ORDER BY n DESC
+        """
+    )
     totals = await pg_client.fetchrow(
         """
         SELECT
           (SELECT count(*) FROM northstar.confluence_page) AS total_pages,
           (SELECT count(*) FROM northstar.confluence_attachment) AS total_attachments,
-          (SELECT count(*) FROM northstar.confluence_attachment WHERE local_path IS NOT NULL) AS downloaded
+          (SELECT count(*) FROM northstar.confluence_attachment WHERE local_path IS NOT NULL) AS downloaded,
+          (SELECT count(*) FROM northstar.confluence_page p WHERE p.project_id IS NOT NULL
+             AND EXISTS (SELECT 1 FROM northstar.ref_project r WHERE r.project_id = p.project_id)) AS projects_linked_mspo,
+          (SELECT count(*) FROM northstar.confluence_page p WHERE p.q_app_id IS NOT NULL
+             AND EXISTS (SELECT 1 FROM northstar.ref_application r WHERE r.app_id = p.q_app_id)) AS apps_linked_cmdb
         """
     )
     return ApiResponse(
         data={
             "by_fy": [dict(r) for r in pages],
             "by_kind": [dict(r) for r in attach_kinds],
+            "by_type": [dict(r) for r in types],
             "totals": dict(totals) if totals else {},
         }
     )
@@ -62,6 +75,7 @@ async def confluence_summary() -> ApiResponse:
 async def list_pages(
     fiscal_year: Optional[str] = None,
     q: Optional[str] = None,
+    page_type: Optional[str] = None,
     has_drawio: Optional[bool] = None,
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
@@ -71,9 +85,14 @@ async def list_pages(
     if fiscal_year:
         args.append(fiscal_year)
         where.append(f"p.fiscal_year = ${len(args)}")
+    if page_type:
+        args.append(page_type)
+        where.append(f"p.page_type = ${len(args)}")
     if q:
         args.append(f"%{q}%")
-        where.append(f"(p.title ILIKE ${len(args)} OR p.project_id ILIKE ${len(args)})")
+        where.append(
+            f"(p.title ILIKE ${len(args)} OR p.project_id ILIKE ${len(args)} OR p.q_app_id ILIKE ${len(args)})"
+        )
     if has_drawio:
         where.append(
             "EXISTS (SELECT 1 FROM northstar.confluence_attachment a "
@@ -84,12 +103,20 @@ async def list_pages(
     args.extend([limit, offset])
     rows = await pg_client.fetch(
         f"""
-        SELECT p.page_id, p.fiscal_year, p.title, p.project_id, p.page_url,
+        SELECT p.page_id, p.fiscal_year, p.title, p.page_url, p.page_type,
+               p.project_id,
+               rp.project_name AS project_name,
+               p.q_app_id      AS app_id,
+               ra.name         AS app_name,
+               (rp.project_id IS NOT NULL) AS project_in_mspo,
+               (ra.app_id IS NOT NULL)     AS app_in_cmdb,
                (SELECT count(*) FROM northstar.confluence_attachment a WHERE a.page_id = p.page_id) AS attachment_count,
                (SELECT count(*) FROM northstar.confluence_attachment a
                   WHERE a.page_id = p.page_id AND a.file_kind = 'drawio'
                     AND a.title NOT LIKE 'drawio-backup%' AND a.title NOT LIKE '~%') AS drawio_count
         FROM northstar.confluence_page p
+        LEFT JOIN northstar.ref_project rp ON rp.project_id = p.project_id
+        LEFT JOIN northstar.ref_application ra ON ra.app_id = p.q_app_id
         {where_clause}
         ORDER BY p.fiscal_year DESC, p.title
         LIMIT ${len(args) - 1} OFFSET ${len(args)}

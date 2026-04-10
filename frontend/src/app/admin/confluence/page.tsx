@@ -8,6 +8,12 @@ interface PageRow {
   fiscal_year: string;
   title: string;
   project_id: string | null;
+  project_name: string | null;
+  app_id: string | null;
+  app_name: string | null;
+  page_type: string | null; // 'project' | 'application' | 'other'
+  project_in_mspo: boolean;
+  app_in_cmdb: boolean;
   page_url: string;
   attachment_count: number;
   drawio_count: number;
@@ -21,7 +27,14 @@ interface ListResult {
 interface Summary {
   by_fy: { fiscal_year: string; pages: number }[];
   by_kind: { file_kind: string; n: number }[];
-  totals: { total_pages: number; total_attachments: number; downloaded: number };
+  by_type: { type: string; n: number }[];
+  totals: {
+    total_pages: number;
+    total_attachments: number;
+    downloaded: number;
+    projects_linked_mspo: number;
+    apps_linked_cmdb: number;
+  };
 }
 
 const PAGE_SIZE = 50;
@@ -31,6 +44,7 @@ export default function ConfluenceIndex() {
   const [q, setQ] = useState("");
   const [qDebounced, setQDebounced] = useState("");
   const [fy, setFy] = useState("");
+  const [pageType, setPageType] = useState("");
   const [hasDrawio, setHasDrawio] = useState(false);
   const [page, setPage] = useState(0);
   const [data, setData] = useState<ListResult | null>(null);
@@ -56,10 +70,7 @@ export default function ConfluenceIndex() {
   }, [q]);
 
   useEffect(() => {
-    setPage(0);
-  }, [qDebounced, fy, hasDrawio]);
-
-  useEffect(() => {
+    let cancelled = false;
     (async () => {
       setLoading(true);
       setErr(null);
@@ -67,20 +78,24 @@ export default function ConfluenceIndex() {
         const params = new URLSearchParams();
         if (qDebounced) params.set("q", qDebounced);
         if (fy) params.set("fiscal_year", fy);
+        if (pageType) params.set("page_type", pageType);
         if (hasDrawio) params.set("has_drawio", "true");
         params.set("limit", String(PAGE_SIZE));
         params.set("offset", String(page * PAGE_SIZE));
         const r = await fetch(`/api/admin/confluence/pages?${params}`, { cache: "no-store" });
         const j = await r.json();
         if (!j.success) throw new Error(j.error);
-        setData(j.data);
+        if (!cancelled) setData(j.data);
       } catch (e) {
-        setErr(String(e));
+        if (!cancelled) setErr(String(e));
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
-  }, [qDebounced, fy, hasDrawio, page]);
+    return () => {
+      cancelled = true;
+    };
+  }, [qDebounced, fy, pageType, hasDrawio, page]);
 
   const total = data?.total ?? 0;
   const maxPage = Math.max(0, Math.ceil(total / PAGE_SIZE) - 1);
@@ -98,29 +113,85 @@ export default function ConfluenceIndex() {
           <div className="kpi-card">
             <div className="kpi-label">Pages scanned</div>
             <div className="kpi-value">{summary.totals.total_pages?.toLocaleString() ?? 0}</div>
+            <div
+              style={{
+                marginTop: 10,
+                display: "flex",
+                gap: 10,
+                flexWrap: "wrap",
+                fontFamily: "var(--font-mono)",
+                fontSize: 10,
+                color: "var(--text-muted)",
+              }}
+            >
+              {summary.by_type?.map((t) => (
+                <span key={t.type}>
+                  {t.type}:{" "}
+                  <strong style={{ color: "var(--text)" }}>{t.n.toLocaleString()}</strong>
+                </span>
+              ))}
+            </div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-label">Linked to MSPO</div>
+            <div className="kpi-value">
+              {summary.totals.projects_linked_mspo?.toLocaleString() ?? 0}
+            </div>
+            <div
+              style={{
+                marginTop: 6,
+                fontFamily: "var(--font-mono)",
+                fontSize: 10,
+                color: "var(--text-dim)",
+              }}
+            >
+              project pages with LI/RD id in ref_project
+            </div>
+          </div>
+          <div className="kpi-card">
+            <div className="kpi-label">Linked to CMDB</div>
+            <div className="kpi-value">
+              {summary.totals.apps_linked_cmdb?.toLocaleString() ?? 0}
+            </div>
+            <div
+              style={{
+                marginTop: 6,
+                fontFamily: "var(--font-mono)",
+                fontSize: 10,
+                color: "var(--text-dim)",
+              }}
+            >
+              application pages with A-id in ref_application
+            </div>
           </div>
           <div className="kpi-card">
             <div className="kpi-label">Attachments</div>
             <div className="kpi-value">
-              {summary.totals.total_attachments?.toLocaleString() ?? 0}
+              {summary.totals.downloaded?.toLocaleString() ?? 0}
+              <span
+                style={{
+                  fontSize: 14,
+                  color: "var(--text-dim)",
+                  fontWeight: 400,
+                  marginLeft: 6,
+                }}
+              >
+                / {summary.totals.total_attachments?.toLocaleString() ?? 0}
+              </span>
             </div>
-          </div>
-          <div className="kpi-card">
-            <div className="kpi-label">Downloaded</div>
-            <div className="kpi-value">{summary.totals.downloaded?.toLocaleString() ?? 0}</div>
-          </div>
-          <div className="kpi-card">
-            <div className="kpi-label">Kinds</div>
-            <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <div
+              style={{
+                marginTop: 10,
+                display: "flex",
+                gap: 8,
+                flexWrap: "wrap",
+                fontFamily: "var(--font-mono)",
+                fontSize: 10,
+                color: "var(--text-muted)",
+              }}
+            >
               {summary.by_kind.map((k) => (
-                <span
-                  key={k.file_kind}
-                  style={{
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 11,
-                    color: "var(--text-muted)",
-                  }}
-                >
+                <span key={k.file_kind}>
                   {k.file_kind}:{" "}
                   <strong style={{ color: "var(--text)" }}>{k.n.toLocaleString()}</strong>
                 </span>
@@ -142,6 +213,20 @@ export default function ConfluenceIndex() {
           {summary?.by_fy.map((f) => (
             <option key={f.fiscal_year} value={f.fiscal_year}>
               {f.fiscal_year} ({f.pages})
+            </option>
+          ))}
+        </select>
+        <select
+          value={pageType}
+          onChange={(e) => {
+            setPageType(e.target.value);
+            setPage(0);
+          }}
+        >
+          <option value="">All types</option>
+          {summary?.by_type?.map((t) => (
+            <option key={t.type} value={t.type}>
+              {t.type} ({t.n.toLocaleString()})
             </option>
           ))}
         </select>
@@ -171,11 +256,13 @@ export default function ConfluenceIndex() {
         <table>
           <thead>
             <tr>
-              <th style={{ width: 80 }}>FY</th>
-              <th style={{ width: 130 }}>Project ID</th>
-              <th>Title</th>
-              <th style={{ width: 120, textAlign: "right" }}>Attachments</th>
-              <th style={{ width: 100, textAlign: "right" }}>Drawio</th>
+              <th style={{ width: 70 }}>FY</th>
+              <th style={{ width: 110 }}>Project ID</th>
+              <th>Project Name</th>
+              <th style={{ width: 110 }}>App ID</th>
+              <th>App Name</th>
+              <th style={{ width: 80, textAlign: "right" }}>Attach.</th>
+              <th style={{ width: 80, textAlign: "right" }}>Drawio</th>
               <th style={{ width: 90 }}></th>
             </tr>
           </thead>
@@ -186,15 +273,40 @@ export default function ConfluenceIndex() {
                   <code>{r.fiscal_year}</code>
                 </td>
                 <td>
-                  <code>{r.project_id || "—"}</code>
+                  <IdCell
+                    id={r.project_id}
+                    verified={r.project_in_mspo}
+                    href={r.project_in_mspo && r.project_id
+                      ? `/admin/projects/${encodeURIComponent(r.project_id)}`
+                      : undefined}
+                    kind="project"
+                  />
                 </td>
                 <td>
-                  <Link
-                    href={`/admin/confluence/${r.page_id}`}
-                    style={{ color: "var(--text)" }}
-                  >
-                    {r.title}
-                  </Link>
+                  <NameCell
+                    primary={r.project_name}
+                    fallback={r.page_type === "project" ? r.title : null}
+                    pageId={r.page_id}
+                    muted={!r.project_name}
+                  />
+                </td>
+                <td>
+                  <IdCell
+                    id={r.app_id}
+                    verified={r.app_in_cmdb}
+                    href={r.app_in_cmdb && r.app_id
+                      ? `/admin/applications?q=${encodeURIComponent(r.app_id)}`
+                      : undefined}
+                    kind="app"
+                  />
+                </td>
+                <td>
+                  <NameCell
+                    primary={r.app_name}
+                    fallback={r.page_type === "application" ? r.title : null}
+                    pageId={r.page_id}
+                    muted={!r.app_name}
+                  />
                 </td>
                 <td
                   style={{
@@ -234,7 +346,7 @@ export default function ConfluenceIndex() {
             ))}
             {!loading && data?.rows.length === 0 && (
               <tr>
-                <td colSpan={6} className="empty" style={{ padding: 40 }}>
+                <td colSpan={8} className="empty" style={{ padding: 40 }}>
                   No scanned pages. Run <code>scripts/scan_confluence.py</code> on 71.
                 </td>
               </tr>
@@ -278,5 +390,91 @@ export default function ConfluenceIndex() {
         </button>
       </div>
     </div>
+  );
+}
+
+function IdCell({
+  id,
+  verified,
+  href,
+  kind,
+}: {
+  id: string | null;
+  verified: boolean;
+  href?: string;
+  kind: "project" | "app";
+}) {
+  if (!id) return <span style={{ color: "var(--text-dim)" }}>—</span>;
+  const color = verified
+    ? kind === "app"
+      ? "var(--accent)"
+      : "#6ba6e8"
+    : "#e8716b";
+  const title = verified
+    ? `${id} found in ${kind === "app" ? "CMDB ref_application" : "MSPO ref_project"}`
+    : `${id} not found in ${kind === "app" ? "CMDB" : "MSPO"} (orphan)`;
+  const dot = (
+    <span
+      style={{
+        display: "inline-block",
+        width: 6,
+        height: 6,
+        borderRadius: "50%",
+        background: color,
+        marginRight: 6,
+        verticalAlign: "middle",
+        boxShadow: verified ? `0 0 0 1px ${color}66` : `0 0 0 1px #e8716b66`,
+      }}
+    />
+  );
+  const content = (
+    <span
+      title={title}
+      style={{
+        fontFamily: "var(--font-mono)",
+        fontSize: 12,
+        color: verified ? "var(--text)" : "var(--text-muted)",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {dot}
+      {id}
+    </span>
+  );
+  if (href) {
+    return (
+      <Link href={href} style={{ textDecoration: "none" }}>
+        {content}
+      </Link>
+    );
+  }
+  return content;
+}
+
+function NameCell({
+  primary,
+  fallback,
+  pageId,
+  muted,
+}: {
+  primary: string | null;
+  fallback: string | null;
+  pageId: string;
+  muted?: boolean;
+}) {
+  const label = primary || fallback;
+  if (!label) return <span style={{ color: "var(--text-dim)" }}>—</span>;
+  return (
+    <Link
+      href={`/admin/confluence/${pageId}`}
+      style={{
+        color: muted ? "var(--text-muted)" : "var(--text)",
+        fontSize: 13,
+        fontStyle: primary ? "normal" : "italic",
+      }}
+      title={primary ? "From MSPO / CMDB" : "From Confluence page title (no master match)"}
+    >
+      {label}
+    </Link>
   );
 }
