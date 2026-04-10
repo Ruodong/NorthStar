@@ -166,19 +166,67 @@ SYNCS = [
             ],
         ),
     ),
+    # Project master — switched from egm.project to eam.project (richer schema:
+    # 32 columns including objectives, investment_cost, overall_status, EA
+    # approval dates, etc.)
     (
         "ref_project",
         ["project_id"],
-        "egm",
+        "eam",
         (
             """SELECT project_id, project_name, type, status,
                       pm, pm_itcode, dt_lead, dt_lead_itcode, it_lead, it_lead_itcode,
-                      start_date, go_live_date, end_date, ai_related, source
-               FROM egm.project""",
+                      start_date, go_live_date, end_date, pps_exit_date,
+                      duration, objectives, investment_cost, yearly_ma_cost,
+                      currency, expected_man_days, comment, overall_status,
+                      ea_review_type, domain_ea_reviewer,
+                      ea_approval_dt, approved_time,
+                      ai_related, source
+               FROM eam.project
+               WHERE project_id IS NOT NULL""",
             [
                 "project_id", "project_name", "type", "status",
                 "pm", "pm_itcode", "dt_lead", "dt_lead_itcode", "it_lead", "it_lead_itcode",
-                "start_date", "go_live_date", "end_date", "ai_related", "source",
+                "start_date", "go_live_date", "end_date", "pps_exit_date",
+                "duration", "objectives", "investment_cost", "yearly_ma_cost",
+                "currency", "expected_man_days", "comment", "overall_status",
+                "ea_review_type", "domain_ea_reviewer",
+                "ea_approval_dt", "approved_time",
+                "ai_related", "source",
+            ],
+        ),
+    ),
+    (
+        "ref_project_team_member",
+        ["project_id", "itcode"],
+        "eam",
+        (
+            """SELECT DISTINCT ON (project_id, itcode)
+                      project_id, itcode, name, worker_type, manager_itcode
+               FROM eam.project_team_members
+               WHERE project_id IS NOT NULL AND itcode IS NOT NULL
+               ORDER BY project_id, itcode, create_at DESC NULLS LAST""",
+            ["project_id", "itcode", "name", "worker_type", "manager_itcode"],
+        ),
+    ),
+    (
+        "ref_project_summary",
+        ["project_id"],
+        "eam",
+        (
+            """SELECT DISTINCT ON (project_id)
+                      project_id, business_owner1, business_owner2, cost, schedule,
+                      function_summary, benefit, paint_point, application_list,
+                      architect_summary, ea_status, status_remark, attachments,
+                      ea_review_submitter, comments_app, ea_review_type, domain_ea_reviewer
+               FROM eam.eam_project_summary
+               WHERE project_id IS NOT NULL
+               ORDER BY project_id""",
+            [
+                "project_id", "business_owner1", "business_owner2", "cost", "schedule",
+                "function_summary", "benefit", "paint_point", "application_list",
+                "architect_summary", "ea_status", "status_remark", "attachments",
+                "ea_review_submitter", "comments_app", "ea_review_type", "domain_ea_reviewer",
             ],
         ),
     ),
