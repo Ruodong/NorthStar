@@ -1508,15 +1508,9 @@ def _parse_tech_arch(root: ET.Element) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Primary app matching — moved to app.services.architecture_simulation.primary_app_service
-# Kept as re-exports for backward compatibility during migration
+# Primary app matching — NorthStar does not use these (they live in EGM's
+# architecture_simulation module). Re-exports removed.
 # ---------------------------------------------------------------------------
-from app.services.architecture_simulation.primary_app_service import (  # noqa: E402
-    fuzzy_match as _fuzzy_match,
-    match_tech_to_primary_apps,
-    extract_tech_from_name as _extract_tech_from_name,
-    infer_layer_from_zone as _infer_layer_from_zone,
-)
 
 
 # ---------------------------------------------------------------------------
