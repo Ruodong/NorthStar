@@ -6,8 +6,13 @@ import { useEffect, useState } from "react";
 interface AppRow {
   app_id: string;
   name: string;
+  app_full_name: string | null;
   status: string;
-  short_description: string | null;
+  u_service_area: string | null;
+  portfolio_mgt: string | null;
+  app_classification: string | null;
+  budget_k: number | null;
+  actual_k: number | null;
 }
 
 interface ListResult {
@@ -23,6 +28,13 @@ const STATUS_COLORS: Record<string, string> = {
   Decommissioned: "#6b7488",
   Retain: "#e8b458",
 };
+
+function formatMoney(k: number | null): string {
+  if (k == null) return "—";
+  if (Math.abs(k) < 0.01) return "$0";
+  if (Math.abs(k) < 1000) return `$${k.toFixed(2)}k`;
+  return `$${(k / 1000).toFixed(2)}M`;
+}
 
 interface StatusCount {
   status: string;
@@ -92,7 +104,10 @@ export default function AdminApplications() {
     <div>
       <h1>Applications (CMDB)</h1>
       <p className="subtitle">
-        Application master data from Lenovo CMDB, synced via EGM. 3,168 rows.
+        Active application portfolio from EAM. Driven by{" "}
+        <code>application_tco</code> (apps with budgeted/actual spend this FY),
+        joined to <code>cmdb_application</code> for name, status, classification
+        and portfolio decision. Ordered by budget descending.
       </p>
 
       <div className="toolbar">
@@ -134,10 +149,13 @@ export default function AdminApplications() {
         <table>
           <thead>
             <tr>
-              <th style={{ width: 120 }}>App ID</th>
+              <th style={{ width: 110 }}>App ID</th>
               <th>Name</th>
-              <th style={{ width: 140 }}>Status</th>
-              <th>Description</th>
+              <th style={{ width: 130 }}>Status</th>
+              <th style={{ width: 110 }}>Portfolio</th>
+              <th style={{ width: 140 }}>Service Area</th>
+              <th style={{ width: 110, textAlign: "right" }}>Budget</th>
+              <th style={{ width: 110, textAlign: "right" }}>Actual</th>
             </tr>
           </thead>
           <tbody>
@@ -157,6 +175,17 @@ export default function AdminApplications() {
                     style={{ color: "var(--text)" }}
                   >
                     {r.name}
+                    {r.app_full_name && r.app_full_name !== r.name && (
+                      <span
+                        style={{
+                          color: "var(--text-dim)",
+                          fontSize: 11,
+                          marginLeft: 8,
+                        }}
+                      >
+                        {r.app_full_name}
+                      </span>
+                    )}
                   </Link>
                 </td>
                 <td>
@@ -171,13 +200,38 @@ export default function AdminApplications() {
                   </span>
                 </td>
                 <td style={{ color: "var(--text-muted)", fontSize: 12 }}>
-                  {r.short_description || "—"}
+                  {r.portfolio_mgt || "—"}
+                </td>
+                <td style={{ color: "var(--text-muted)", fontSize: 12 }}>
+                  {r.u_service_area || "—"}
+                </td>
+                <td
+                  style={{
+                    textAlign: "right",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 12,
+                    color: "var(--text)",
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  {formatMoney(r.budget_k)}
+                </td>
+                <td
+                  style={{
+                    textAlign: "right",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 12,
+                    color: "var(--text-muted)",
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  {formatMoney(r.actual_k)}
                 </td>
               </tr>
             ))}
             {!loading && data?.rows.length === 0 && (
               <tr>
-                <td colSpan={4} className="empty" style={{ padding: 40 }}>
+                <td colSpan={7} className="empty" style={{ padding: 40 }}>
                   No results.
                 </td>
               </tr>

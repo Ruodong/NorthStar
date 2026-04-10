@@ -64,36 +64,70 @@ async def list_applications(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> ApiResponse:
+    """List applications driven by ref_application_tco (the active portfolio).
+
+    ref_application (full EAM CMDB, 3169 rows) contains decommissioned and
+    legacy records. ref_application_tco (1237 rows) is EAM's *active* tracked
+    set — apps that have budget allocation this fiscal year. Using TCO as the
+    driving table gives a cleaner, more current list.
+
+    Each row LEFT JOINs ref_application for display metadata (name, status,
+    owners, classification).
+    """
     where = []
     args: list = []
     if q:
         args.append(f"%{q}%")
-        where.append(f"(name ILIKE ${len(args)} OR app_id ILIKE ${len(args)})")
+        where.append(
+            f"(COALESCE(a.name, t.app_name) ILIKE ${len(args)} OR t.app_id ILIKE ${len(args)})"
+        )
     if status == EMPTY_SENTINEL:
-        where.append("(status IS NULL OR status = '')")
+        where.append("(a.status IS NULL OR a.status = '')")
     elif status:
         args.append(status)
-        where.append(f"status = ${len(args)}")
+        where.append(f"a.status = ${len(args)}")
     where_clause = ("WHERE " + " AND ".join(where)) if where else ""
     args.extend([limit, offset])
     rows = await pg_client.fetch(
         f"""
-        SELECT app_id, name, status, short_description
-        FROM northstar.ref_application
+        SELECT
+            t.app_id,
+            COALESCE(a.name, t.app_name)     AS name,
+            a.app_full_name,
+            COALESCE(a.status, 'Active')     AS status,
+            a.u_service_area,
+            a.portfolio_mgt,
+            COALESCE(a.app_classification, t.application_classification) AS app_classification,
+            t.budget_k,
+            t.actual_k
+        FROM northstar.ref_application_tco t
+        LEFT JOIN northstar.ref_application a ON a.app_id = t.app_id
         {where_clause}
-        ORDER BY name
+        ORDER BY t.budget_k DESC NULLS LAST, t.app_id
         LIMIT ${len(args) - 1} OFFSET ${len(args)}
         """,
         *args,
     )
     total = await pg_client.fetchval(
-        f"SELECT count(*) FROM northstar.ref_application {where_clause}",
+        f"""
+        SELECT count(*)
+        FROM northstar.ref_application_tco t
+        LEFT JOIN northstar.ref_application a ON a.app_id = t.app_id
+        {where_clause}
+        """,
         *args[:-2],
     )
+
+    # Convert Decimal → float for JSON
+    from decimal import Decimal as _D
+
+    def clean(r: dict) -> dict:
+        return {k: (float(v) if isinstance(v, _D) else v) for k, v in r.items()}
+
     return ApiResponse(
         data={
             "total": total,
-            "rows": [dict(r) for r in rows],
+            "rows": [clean(dict(r)) for r in rows],
         }
     )
 
