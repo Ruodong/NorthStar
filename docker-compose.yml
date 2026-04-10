@@ -1,0 +1,63 @@
+services:
+  neo4j:
+    image: neo4j:5-community
+    container_name: northstar-neo4j
+    restart: unless-stopped
+    ports:
+      - "7474:7474"   # Neo4j Browser
+      - "7687:7687"   # Bolt
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    environment:
+      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD}
+      - NEO4J_server_memory_heap_initial__size=512M
+      - NEO4J_server_memory_heap_max__size=1G
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:7474"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: ./backend
+    image: northstar-backend
+    container_name: northstar-backend
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    depends_on:
+      neo4j:
+        condition: service_healthy
+    environment:
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
+      - CONFLUENCE_BASE_URL=${CONFLUENCE_BASE_URL:-}
+      - CONFLUENCE_TOKEN=${CONFLUENCE_TOKEN:-}
+      - CONFLUENCE_SPACE_KEY=${CONFLUENCE_SPACE_KEY:-ARD}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o}
+      - LLM_ENABLED=${LLM_ENABLED:-false}
+      - LOCAL_DRAWIO_ROOT=/data/local_drawio
+      - CORS_ORIGINS=*
+    volumes:
+      - ./data/local_drawio:/data/local_drawio:ro
+
+  frontend:
+    build: ./frontend
+    image: northstar-frontend
+    container_name: northstar-frontend
+    restart: unless-stopped
+    ports:
+      - "3003:3000"
+    depends_on:
+      - backend
+    environment:
+      - BACKEND_URL=http://backend:8000
+      - NODE_ENV=production
+
+volumes:
+  neo4j_data:
+  neo4j_logs:
