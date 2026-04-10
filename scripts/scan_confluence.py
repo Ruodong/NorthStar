@@ -20,6 +20,7 @@ Files go to: data/attachments/<attachment_id><ext>
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import re
@@ -30,6 +31,10 @@ from typing import Optional
 import httpx
 import psycopg
 from psycopg.rows import dict_row
+
+# Local module
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from confluence_body import parse_body
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
 logger = logging.getLogger("scan-confluence")
@@ -152,6 +157,20 @@ def list_children(client: httpx.Client, parent_id: str) -> list[dict]:
     return out
 
 
+def fetch_page_body(client: httpx.Client, page_id: str) -> Optional[str]:
+    """Return the raw body.storage.value HTML, or None on failure."""
+    try:
+        data = get_json(
+            client,
+            f"/rest/api/content/{page_id}",
+            params={"expand": "body.storage"},
+        )
+        return data.get("body", {}).get("storage", {}).get("value", "")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("body fetch failed %s: %s", page_id, exc)
+        return None
+
+
 def list_attachments(client: httpx.Client, page_id: str) -> list[dict]:
     data = get_json(
         client,
@@ -166,6 +185,7 @@ def main() -> int:
     ap.add_argument("--fy", action="append", help="Fiscal year (repeat). Defaults to all 6.")
     ap.add_argument("--limit", type=int, default=None, help="Per-FY project cap")
     ap.add_argument("--no-download", action="store_true", help="Only record metadata, skip downloads")
+    ap.add_argument("--no-body", action="store_true", help="Skip body.storage.value fetch + parse")
     ap.add_argument("--kinds", nargs="*", default=None,
                     help="Only download these file kinds (e.g. drawio image pdf)")
     args = ap.parse_args()
@@ -203,20 +223,52 @@ def main() -> int:
                 project_id = project_id_match.group(1) if project_id_match else None
                 page_url = f"{base}/pages/viewpage.action?pageId={page_id}"
 
+                # Fetch + parse the page body (questionnaire lives here)
+                body_html = fetch_page_body(client, page_id) if not args.no_body else None
+                body_text = ""
+                body_q_json: Optional[str] = None
+                body_size = 0
+                if body_html:
+                    try:
+                        parsed_body = parse_body(body_html)
+                        body_text = parsed_body.get("text", "")
+                        body_q_json = json.dumps(
+                            {
+                                "sections": parsed_body.get("sections", []),
+                                "expand_panels": parsed_body.get("expand_panels", []),
+                                "stats": parsed_body.get("stats", {}),
+                            },
+                            ensure_ascii=False,
+                        )
+                        body_size = len(body_html)
+                        totals["bodies_parsed"] = totals.get("bodies_parsed", 0) + 1
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("    body parse failed for %s: %s", page_id, exc)
+                        totals["errors"] += 1
+
                 with pg.cursor() as cur:
                     cur.execute(
                         """
                         INSERT INTO northstar.confluence_page
-                            (page_id, fiscal_year, title, project_id, page_url, last_seen, synced_at)
-                        VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+                            (page_id, fiscal_year, title, project_id, page_url,
+                             body_html, body_text, body_questionnaire, body_size_chars,
+                             last_seen, synced_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, NOW(), NOW())
                         ON CONFLICT (page_id) DO UPDATE SET
                             fiscal_year = EXCLUDED.fiscal_year,
                             title = EXCLUDED.title,
                             project_id = EXCLUDED.project_id,
                             page_url = EXCLUDED.page_url,
+                            body_html = COALESCE(EXCLUDED.body_html, northstar.confluence_page.body_html),
+                            body_text = COALESCE(EXCLUDED.body_text, northstar.confluence_page.body_text),
+                            body_questionnaire = COALESCE(EXCLUDED.body_questionnaire, northstar.confluence_page.body_questionnaire),
+                            body_size_chars = COALESCE(EXCLUDED.body_size_chars, northstar.confluence_page.body_size_chars),
                             last_seen = NOW()
                         """,
-                        (page_id, fy, title, project_id, page_url),
+                        (
+                            page_id, fy, title, project_id, page_url,
+                            body_html, body_text, body_q_json, body_size,
+                        ),
                     )
                 totals["pages"] += 1
 

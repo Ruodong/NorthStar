@@ -110,12 +110,37 @@ async def list_pages(
 
 @router.get("/confluence/pages/{page_id}")
 async def get_page(page_id: str) -> ApiResponse:
+    # Exclude body_html from the default detail payload — it can be huge.
+    # Use /confluence/pages/{id}/body to fetch raw HTML when needed.
     page = await pg_client.fetchrow(
-        "SELECT * FROM northstar.confluence_page WHERE page_id = $1",
+        """
+        SELECT page_id, fiscal_year, title, project_id, page_url,
+               body_text IS NOT NULL AS has_body,
+               body_questionnaire,
+               body_size_chars,
+               last_seen, synced_at
+        FROM northstar.confluence_page
+        WHERE page_id = $1
+        """,
         page_id,
     )
     if page is None:
         raise HTTPException(status_code=404, detail=f"Page {page_id} not found")
+
+    import json as _json
+    page_dict = dict(page)
+    # Parse JSONB questionnaire payload for the client
+    qraw = page_dict.pop("body_questionnaire", None)
+    if qraw:
+        try:
+            page_dict["questionnaire"] = (
+                qraw if isinstance(qraw, dict) else _json.loads(qraw)
+            )
+        except Exception:  # noqa: BLE001
+            page_dict["questionnaire"] = None
+    else:
+        page_dict["questionnaire"] = None
+
     attachments = await pg_client.fetch(
         """
         SELECT attachment_id, title, media_type, file_kind, file_size, version,
@@ -136,10 +161,27 @@ async def get_page(page_id: str) -> ApiResponse:
     )
     return ApiResponse(
         data={
-            "page": dict(page),
+            "page": page_dict,
             "attachments": [dict(a) for a in attachments],
         }
     )
+
+
+@router.get("/confluence/pages/{page_id}/body")
+async def get_page_body(page_id: str) -> ApiResponse:
+    """Return the raw Confluence HTML body for a page (for iframe preview)."""
+    row = await pg_client.fetchrow(
+        "SELECT body_html, body_size_chars FROM northstar.confluence_page WHERE page_id = $1",
+        page_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"Page {page_id} not found")
+    if not row["body_html"]:
+        raise HTTPException(
+            status_code=404,
+            detail="body not scanned yet — re-run scripts/scan_confluence.py",
+        )
+    return ApiResponse(data={"html": row["body_html"], "size_chars": row["body_size_chars"]})
 
 
 @router.get("/confluence/attachments/{attachment_id}/raw")
