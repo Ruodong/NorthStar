@@ -34,9 +34,15 @@ import os
 import sys
 from datetime import datetime, timezone
 
+# Make backend/app importable so we can reuse drawio_parser verbatim.
+from pathlib import Path as _P
+sys.path.insert(0, str(_P(__file__).resolve().parent.parent / "backend"))
+
 import psycopg
 from psycopg.rows import dict_row
 from neo4j import GraphDatabase
+
+from app.services.drawio_parser import parse_drawio_xml  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -122,11 +128,11 @@ def main() -> int:
         cmdb = {r["app_id"]: r for r in cur.fetchall()}
     logger.info("loaded CMDB: %d applications", len(cmdb))
 
-    # Diagrams with their request + project metadata
+    # Diagrams with their request + project metadata AND raw drawio XML
     with src.cursor() as cur:
         cur.execute(
             """
-            SELECT d.id AS diagram_id, d.diagram_type, d.file_name,
+            SELECT d.id AS diagram_id, d.diagram_type, d.file_name, d.drawio_xml,
                    r.id AS request_id, r.project_id,
                    COALESCE(r.project_name, r.title) AS project_name,
                    r.project_pm, r.project_pm_itcode,
@@ -192,18 +198,19 @@ def main() -> int:
                 )
                 stats["projects_merged"] += 1
 
-                # Load this diagram's apps
-                with src.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT id, app_id AS cell_id, app_name, standard_id, id_is_standard,
-                               application_status, functions
-                        FROM northstar.ref_diagram_app
-                        WHERE diagram_id = %s
-                        """,
-                        (diagram_id,),
-                    )
-                    apps = cur.fetchall()
+                # Re-parse the raw drawio XML — gives us apps + interactions
+                # with consistent cell_id → app linkage (the PG summary tables
+                # drop this linkage).
+                raw_xml = diag.get("drawio_xml")
+                if not raw_xml:
+                    continue
+                try:
+                    parsed = parse_drawio_xml(raw_xml, "App_Arch")
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("parse failed for diagram %s: %s", diagram_id, exc)
+                    continue
+                apps = parsed.get("applications", [])
+                inters = parsed.get("interactions", [])
 
                 app_id_by_cell: dict[str, str] = {}
                 for a in apps:
@@ -212,19 +219,19 @@ def main() -> int:
                     if cmdb_hit:
                         stats["cmdb_hits"] += 1
 
-                    app_id = derive_app_id(raw_std, a["app_name"], diagram_id, cmdb_hit)
+                    app_name = a.get("app_name") or ""
+                    app_id = derive_app_id(raw_std, app_name, diagram_id, cmdb_hit)
                     cell_id = a.get("cell_id") or ""
                     if cell_id:
                         app_id_by_cell[cell_id] = app_id
 
-                    canonical_name = cmdb[raw_std]["name"] if cmdb_hit else a["app_name"]
+                    canonical_name = cmdb[raw_std]["name"] if cmdb_hit else app_name
                     canonical_status = (
                         cmdb[raw_std]["status"]
                         if cmdb_hit
                         else (a.get("application_status") or "Unknown")
                     )
-                    funcs = a.get("functions") or []
-                    description = ", ".join(funcs) if funcs else ""
+                    description = a.get("functions") or ""
 
                     ns.run(
                         """
@@ -257,22 +264,9 @@ def main() -> int:
                     )
                     stats["applications_merged"] += 1
 
-                # Integrations for this diagram
-                with src.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT source_app_id, target_app_id, interaction_type,
-                               direction, business_object, interface_status
-                        FROM northstar.ref_diagram_interaction
-                        WHERE diagram_id = %s
-                        """,
-                        (diagram_id,),
-                    )
-                    inters = cur.fetchall()
-
                 for inter in inters:
-                    src_cell = inter.get("source_app_id")
-                    tgt_cell = inter.get("target_app_id")
+                    src_cell = inter.get("source_id")
+                    tgt_cell = inter.get("target_id")
                     src_app_id = app_id_by_cell.get(src_cell)
                     tgt_app_id = app_id_by_cell.get(tgt_cell)
                     if not src_app_id or not tgt_app_id:
@@ -282,14 +276,16 @@ def main() -> int:
                         MATCH (a:Application {app_id: $src}), (b:Application {app_id: $tgt})
                         MERGE (a)-[r:INTEGRATES_WITH {interaction_type: $itype, business_object: $bobj}]->(b)
                         SET r.status = $status,
-                            r.direction = $direction
+                            r.direction = $direction,
+                            r.protocol = $protocol
                         """,
                         src=src_app_id,
                         tgt=tgt_app_id,
                         itype=inter.get("interaction_type") or "",
                         bobj=inter.get("business_object") or "",
-                        status=inter.get("interface_status") or "Keep",
+                        status=inter.get("interaction_status") or "Keep",
                         direction=inter.get("direction") or "outbound",
+                        protocol=inter.get("label") or "",
                     )
                     stats["integrations_merged"] += 1
 

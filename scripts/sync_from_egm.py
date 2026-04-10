@@ -101,8 +101,8 @@ SYNCS = [
         "ref_diagram",
         ["id"],
         (
-            "SELECT id, request_id, diagram_type, file_name, create_at FROM egm.architecture_diagram",
-            ["id", "request_id", "diagram_type", "file_name", "create_at"],
+            "SELECT id, request_id, diagram_type, file_name, create_at, drawio_xml FROM egm.architecture_diagram",
+            ["id", "request_id", "diagram_type", "file_name", "create_at", "drawio_xml"],
         ),
     ),
     (
