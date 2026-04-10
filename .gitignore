@@ -28,5 +28,4 @@ data/local_drawio/*
 *.log
 
 # Claude workspace
-.claude/worktrees/
-.claude/plans/
+.claude/
