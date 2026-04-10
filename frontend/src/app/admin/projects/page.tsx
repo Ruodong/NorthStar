@@ -24,14 +24,32 @@ interface ListResult {
 
 const PAGE_SIZE = 50;
 
+interface StatusCount {
+  status: string;
+  count: number;
+}
+
 export default function AdminProjects() {
   const [q, setQ] = useState("");
   const [qDebounced, setQDebounced] = useState("");
   const [status, setStatus] = useState("");
+  const [statuses, setStatuses] = useState<StatusCount[]>([]);
   const [page, setPage] = useState(0);
   const [data, setData] = useState<ListResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch("/api/masters/projects/statuses", { cache: "no-store" });
+        const j = await r.json();
+        if (j.success) setStatuses(j.data);
+      } catch {
+        // non-blocking
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => setQDebounced(q), 250);
@@ -84,11 +102,11 @@ export default function AdminProjects() {
         />
         <select value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="">All statuses</option>
-          <option value="Kickoff">Kickoff</option>
-          <option value="In Progress">In Progress</option>
-          <option value="Completed">Completed</option>
-          <option value="On Hold">On Hold</option>
-          <option value="Cancelled">Cancelled</option>
+          {statuses.map((s) => (
+            <option key={s.status || "__empty__"} value={s.status}>
+              {s.status || "(empty)"} ({s.count.toLocaleString()})
+            </option>
+          ))}
         </select>
         <div style={{ flex: 1 }} />
         <div

@@ -23,14 +23,32 @@ const STATUS_COLORS: Record<string, string> = {
   Retain: "#e8b458",
 };
 
+interface StatusCount {
+  status: string;
+  count: number;
+}
+
 export default function AdminApplications() {
   const [q, setQ] = useState("");
   const [qDebounced, setQDebounced] = useState("");
   const [status, setStatus] = useState("");
+  const [statuses, setStatuses] = useState<StatusCount[]>([]);
   const [page, setPage] = useState(0);
   const [data, setData] = useState<ListResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch("/api/masters/applications/statuses", { cache: "no-store" });
+        const j = await r.json();
+        if (j.success) setStatuses(j.data);
+      } catch {
+        // non-blocking
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     const t = setTimeout(() => setQDebounced(q), 250);
@@ -82,10 +100,11 @@ export default function AdminApplications() {
         />
         <select value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="">All statuses</option>
-          <option value="Active">Active</option>
-          <option value="Planned">Planned</option>
-          <option value="Decommissioned">Decommissioned</option>
-          <option value="Retain">Retain</option>
+          {statuses.map((s) => (
+            <option key={s.status || "__empty__"} value={s.status}>
+              {s.status || "(empty)"} ({s.count.toLocaleString()})
+            </option>
+          ))}
         </select>
         <div style={{ flex: 1 }} />
         <div

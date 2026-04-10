@@ -14,6 +14,32 @@ from app.services import pg_client
 router = APIRouter(prefix="/api/masters", tags=["masters"])
 
 
+@router.get("/applications/statuses")
+async def application_statuses() -> ApiResponse:
+    rows = await pg_client.fetch(
+        """
+        SELECT COALESCE(status, '') AS status, count(*) AS count
+        FROM northstar.ref_application
+        GROUP BY COALESCE(status, '')
+        ORDER BY count DESC
+        """
+    )
+    return ApiResponse(data=[dict(r) for r in rows])
+
+
+@router.get("/projects/statuses")
+async def project_statuses() -> ApiResponse:
+    rows = await pg_client.fetch(
+        """
+        SELECT COALESCE(status, '') AS status, count(*) AS count
+        FROM northstar.ref_project
+        GROUP BY COALESCE(status, '')
+        ORDER BY count DESC
+        """
+    )
+    return ApiResponse(data=[dict(r) for r in rows])
+
+
 @router.get("/summary")
 async def summary() -> ApiResponse:
     rows = await pg_client.fetch(
