@@ -51,15 +51,15 @@ export default function AdminApplications() {
   }, []);
 
   useEffect(() => {
-    const t = setTimeout(() => setQDebounced(q), 250);
+    const t = setTimeout(() => {
+      setQDebounced(q);
+      setPage(0);
+    }, 250);
     return () => clearTimeout(t);
   }, [q]);
 
   useEffect(() => {
-    setPage(0);
-  }, [qDebounced, status]);
-
-  useEffect(() => {
+    let cancelled = false;
     (async () => {
       setLoading(true);
       setErr(null);
@@ -72,13 +72,16 @@ export default function AdminApplications() {
         const r = await fetch(`/api/masters/applications?${params}`, { cache: "no-store" });
         const j = await r.json();
         if (!j.success) throw new Error(j.error);
-        setData(j.data);
+        if (!cancelled) setData(j.data);
       } catch (e) {
-        setErr(String(e));
+        if (!cancelled) setErr(String(e));
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [qDebounced, status, page]);
 
   const total = data?.total ?? 0;
@@ -98,10 +101,16 @@ export default function AdminApplications() {
           onChange={(e) => setQ(e.target.value)}
           style={{ minWidth: 320 }}
         />
-        <select value={status} onChange={(e) => setStatus(e.target.value)}>
+        <select
+          value={status}
+          onChange={(e) => {
+            setStatus(e.target.value);
+            setPage(0);
+          }}
+        >
           <option value="">All statuses</option>
           {statuses.map((s) => (
-            <option key={s.status || "__empty__"} value={s.status}>
+            <option key={s.status || "__EMPTY__"} value={s.status || "__EMPTY__"}>
               {s.status || "(empty)"} ({s.count.toLocaleString()})
             </option>
           ))}

@@ -54,6 +54,9 @@ async def summary() -> ApiResponse:
     return ApiResponse(data={r["entity"]: r["count"] for r in rows})
 
 
+EMPTY_SENTINEL = "__EMPTY__"
+
+
 @router.get("/applications")
 async def list_applications(
     q: Optional[str] = None,
@@ -66,7 +69,9 @@ async def list_applications(
     if q:
         args.append(f"%{q}%")
         where.append(f"(name ILIKE ${len(args)} OR app_id ILIKE ${len(args)})")
-    if status:
+    if status == EMPTY_SENTINEL:
+        where.append("(status IS NULL OR status = '')")
+    elif status:
         args.append(status)
         where.append(f"status = ${len(args)}")
     where_clause = ("WHERE " + " AND ".join(where)) if where else ""
@@ -116,7 +121,9 @@ async def list_projects(
     if q:
         args.append(f"%{q}%")
         where.append(f"(project_name ILIKE ${len(args)} OR project_id ILIKE ${len(args)})")
-    if status:
+    if status == EMPTY_SENTINEL:
+        where.append("(status IS NULL OR status = '')")
+    elif status:
         args.append(status)
         where.append(f"status = ${len(args)}")
     where_clause = ("WHERE " + " AND ".join(where)) if where else ""
