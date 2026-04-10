@@ -218,6 +218,150 @@ async def get_page_body(page_id: str) -> ApiResponse:
     return ApiResponse(data={"html": row["body_html"], "size_chars": row["body_size_chars"]})
 
 
+@router.get("/applications/{app_id}/overview")
+async def application_overview(app_id: str) -> ApiResponse:
+    """Unified CMDB application detail.
+
+    CMDB itself is minimal (5 columns, short_description all null), so we
+    enrich with everything else we know about this app_id:
+      - CMDB master row
+      - Confluence application page(s) matching q_app_id
+      - All attachments on those pages
+      - Neo4j Project nodes that INCLUDES the app (from any drawio)
+      - Neo4j Integrations in/out of the app
+      - Count of drawio cells referencing this standard_id (from ref_diagram_app)
+    """
+    import json as _json
+
+    # 1) CMDB master row
+    cmdb = await pg_client.fetchrow(
+        """
+        SELECT app_id, name, short_description, status, synced_at
+        FROM northstar.ref_application
+        WHERE app_id = $1
+        """,
+        app_id,
+    )
+    if cmdb is None:
+        raise HTTPException(status_code=404, detail=f"{app_id} not found in CMDB")
+
+    # 2) Confluence pages with this A-id in title
+    pages = await pg_client.fetch(
+        """
+        SELECT page_id, fiscal_year, title, page_url, body_size_chars,
+               q_pm, q_it_lead, q_dt_lead,
+               body_questionnaire
+        FROM northstar.confluence_page
+        WHERE q_app_id = $1
+        ORDER BY fiscal_year DESC, title
+        """,
+        app_id,
+    )
+    page_ids = [p["page_id"] for p in pages]
+
+    # Parse questionnaire sections per page (for inline rendering)
+    page_dicts: list[dict] = []
+    for p in pages:
+        d = dict(p)
+        q = d.pop("body_questionnaire", None)
+        if q:
+            try:
+                d["questionnaire_sections"] = (
+                    (q if isinstance(q, dict) else _json.loads(q)).get("sections", [])
+                )
+            except Exception:  # noqa: BLE001
+                d["questionnaire_sections"] = None
+        else:
+            d["questionnaire_sections"] = None
+        page_dicts.append(d)
+
+    # 3) Attachments across those pages
+    attachments: list[dict] = []
+    if page_ids:
+        rows = await pg_client.fetch(
+            """
+            SELECT attachment_id, page_id, title, media_type, file_kind,
+                   file_size, local_path
+            FROM northstar.confluence_attachment
+            WHERE page_id = ANY($1::text[])
+              AND title NOT LIKE 'drawio-backup%'
+              AND title NOT LIKE '~%'
+            ORDER BY
+              CASE file_kind
+                WHEN 'drawio' THEN 1
+                WHEN 'image' THEN 2
+                WHEN 'pdf' THEN 3
+                WHEN 'office' THEN 4
+                ELSE 5
+              END, title
+            """,
+            page_ids,
+        )
+        attachments = [dict(r) for r in rows]
+
+    # 4) Neo4j: projects that INCLUDE this app + integrations
+    from app.services import neo4j_client as _n
+    projects = await _n.run_query(
+        """
+        MATCH (p:Project)-[:INCLUDES]->(a:Application {app_id: $id})
+        RETURN p.project_id AS project_id, p.name AS name,
+               p.fiscal_year AS fiscal_year, p.page_type AS page_type,
+               p.pm AS pm, p.it_lead AS it_lead, p.dt_lead AS dt_lead
+        ORDER BY p.fiscal_year DESC, p.project_id
+        """,
+        {"id": app_id},
+    )
+    outbound = await _n.run_query(
+        """
+        MATCH (a:Application {app_id: $id})-[r:INTEGRATES_WITH]->(b:Application)
+        RETURN b.app_id AS target_app_id, b.name AS target_name, b.status AS target_status,
+               r.interaction_type AS interaction_type, r.business_object AS business_object,
+               r.status AS status
+        ORDER BY b.name
+        """,
+        {"id": app_id},
+    )
+    inbound = await _n.run_query(
+        """
+        MATCH (b:Application)-[r:INTEGRATES_WITH]->(a:Application {app_id: $id})
+        RETURN b.app_id AS source_app_id, b.name AS source_name, b.status AS source_status,
+               r.interaction_type AS interaction_type, r.business_object AS business_object,
+               r.status AS status
+        ORDER BY b.name
+        """,
+        {"id": app_id},
+    )
+
+    # 5) Appearances in EGM-parsed diagrams (ref_diagram_app)
+    diagram_hits = await pg_client.fetch(
+        """
+        SELECT d.id AS diagram_id, d.file_name, d.diagram_type,
+               r.project_id, r.project_name, r.project_pm
+        FROM northstar.ref_diagram_app da
+        JOIN northstar.ref_diagram d ON d.id = da.diagram_id
+        LEFT JOIN northstar.ref_request r ON r.id = d.request_id
+        WHERE da.standard_id = $1
+        ORDER BY d.create_at DESC
+        """,
+        app_id,
+    )
+
+    return ApiResponse(
+        data={
+            "app_id": app_id,
+            "cmdb": dict(cmdb),
+            "confluence_pages": page_dicts,
+            "attachments": attachments,
+            "graph": {
+                "projects": projects,
+                "outbound": outbound,
+                "inbound": inbound,
+            },
+            "egm_diagram_hits": [dict(r) for r in diagram_hits],
+        }
+    )
+
+
 @router.get("/projects/{project_id}/overview")
 async def project_overview(project_id: str) -> ApiResponse:
     """Unified project view joining every source keyed on project_id.

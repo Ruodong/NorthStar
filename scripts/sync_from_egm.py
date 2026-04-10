@@ -45,6 +45,16 @@ def egm_dsn() -> str:
     )
 
 
+def eam_dsn() -> str:
+    return (
+        f"host={os.environ.get('EAM_PG_HOST', 'localhost')} "
+        f"port={os.environ.get('EAM_PG_PORT', '5432')} "
+        f"dbname={os.environ.get('EAM_PG_DB', 'eam_local')} "
+        f"user={os.environ.get('EAM_PG_USER', 'postgres')} "
+        f"password={os.environ.get('EAM_PG_PASSWORD', 'postgres')}"
+    )
+
+
 def northstar_dsn() -> str:
     return (
         f"host={os.environ.get('NORTHSTAR_PG_HOST', 'localhost')} "
@@ -58,20 +68,94 @@ def northstar_dsn() -> str:
 # -----------------------------------------------------------------------------
 # Sync definitions
 # -----------------------------------------------------------------------------
-# Each entry: (dest_table, pk_columns, (source_select_sql, dest_columns))
+# Each entry: (dest_table, pk_columns, source_name, (source_select_sql, dest_columns))
+#   source_name is 'egm' or 'eam' — tells the runner which source DB to use.
 
 SYNCS = [
+    # CMDB master — use EAM directly (22 columns, 3229 rows), not the EGM
+    # 5-column mirror. The EAM table has NULLs for 'name' in a few rows, so
+    # coalesce to keep the NOT NULL constraint happy.
     (
         "ref_application",
         ["app_id"],
+        "eam",
         (
-            "SELECT app_id, name, short_description, status FROM egm.cmdb_application",
-            ["app_id", "name", "short_description", "status"],
+            """SELECT
+                   app_id,
+                   COALESCE(name, app_full_name, app_id) AS name,
+                   short_description,
+                   COALESCE(u_status, 'Active')          AS status,
+                   app_full_name,
+                   u_service_area,
+                   app_classification,
+                   app_ownership,
+                   app_solution_type,
+                   portfolio_mgt,
+                   owned_by,
+                   app_it_owner,
+                   app_dt_owner,
+                   app_operation_owner,
+                   app_owner_tower,
+                   app_owner_domain,
+                   app_operation_owner_tower,
+                   app_operation_owner_domain,
+                   patch_level,
+                   decommissioned_at,
+                   'EAM' AS source_system
+               FROM eam.cmdb_application
+               WHERE app_id IS NOT NULL""",
+            [
+                "app_id", "name", "short_description", "status",
+                "app_full_name", "u_service_area", "app_classification",
+                "app_ownership", "app_solution_type", "portfolio_mgt",
+                "owned_by", "app_it_owner", "app_dt_owner",
+                "app_operation_owner", "app_owner_tower", "app_owner_domain",
+                "app_operation_owner_tower", "app_operation_owner_domain",
+                "patch_level", "decommissioned_at", "source_system",
+            ],
+        ),
+    ),
+    # TCO / financial data (1239 apps have budget/actual)
+    (
+        "ref_application_tco",
+        ["app_id"],
+        "eam",
+        (
+            """SELECT DISTINCT ON (app_id)
+                   app_id, app_name, application_classification,
+                   stamp_k, budget_k, actual_k,
+                   allocation_stamp_k, allocation_actual_k
+               FROM eam.application_tco
+               WHERE app_id IS NOT NULL
+               ORDER BY app_id, id DESC""",
+            [
+                "app_id", "app_name", "application_classification",
+                "stamp_k", "budget_k", "actual_k",
+                "allocation_stamp_k", "allocation_actual_k",
+            ],
+        ),
+    ),
+    # Business Capability master
+    (
+        "ref_business_capability",
+        ["bc_id"],
+        "eam",
+        (
+            """SELECT bc_id, parent_bc_id, bc_name, bc_name_cn, level, alias,
+                      bc_description, biz_group, geo, biz_owner, biz_team,
+                      dt_owner, dt_team, data_version
+               FROM eam.bcpf_master_data""",
+            [
+                "bc_id", "parent_bc_id", "bc_name", "bc_name_cn", "level", "alias",
+                "bc_description", "biz_group", "geo", "biz_owner", "biz_team",
+                "dt_owner", "dt_team", "data_version",
+            ],
         ),
     ),
     (
         "ref_employee",
         ["itcode"],
+        "egm",
         (
             """SELECT itcode, name, email, job_role, worker_type, country,
                       tier_1_org, tier_2_org, manager_itcode, manager_name
@@ -85,6 +169,7 @@ SYNCS = [
     (
         "ref_project",
         ["project_id"],
+        "egm",
         (
             """SELECT project_id, project_name, type, status,
                       pm, pm_itcode, dt_lead, dt_lead_itcode, it_lead, it_lead_itcode,
@@ -100,6 +185,7 @@ SYNCS = [
     (
         "ref_diagram",
         ["id"],
+        "egm",
         (
             "SELECT id, request_id, diagram_type, file_name, create_at, drawio_xml FROM egm.architecture_diagram",
             ["id", "request_id", "diagram_type", "file_name", "create_at", "drawio_xml"],
@@ -108,6 +194,7 @@ SYNCS = [
     (
         "ref_request",
         ["id"],
+        "egm",
         (
             """SELECT id, title, project_id, project_code, project_name, project_status,
                       project_pm, project_pm_itcode, project_dt_lead, project_dt_lead_itcode,
@@ -125,6 +212,7 @@ SYNCS = [
     (
         "ref_diagram_app",
         ["id"],
+        "egm",
         (
             """SELECT id, diagram_id, app_id, app_name, id_is_standard,
                       standard_id, functions, application_status
@@ -138,6 +226,7 @@ SYNCS = [
     (
         "ref_diagram_interaction",
         ["id"],
+        "egm",
         (
             """SELECT id, diagram_id, source_app_id, target_app_id, interaction_type,
                       direction, source_function, target_function, interface_status, business_object
@@ -151,15 +240,15 @@ SYNCS = [
 ]
 
 
-def sync_table(src_conn, dst_conn, dest_table: str, pk_cols: list[str], src_select: str, dst_cols: list[str]) -> int:
+def sync_table(src_conn, dst_conn, source_name: str, dest_table: str, pk_cols: list[str], src_select: str, dst_cols: list[str]) -> int:
     """Read from source, UPSERT into dest. Returns rows copied."""
-    logger.info("Syncing %s ...", dest_table)
+    logger.info("Syncing %s (from %s) ...", dest_table, source_name)
 
     run_id = None
     with dst_conn.cursor() as cur:
         cur.execute(
             "INSERT INTO northstar.sync_run (source, table_name) VALUES (%s, %s) RETURNING id",
-            ("egm-postgres", dest_table),
+            (f"{source_name}-postgres", dest_table),
         )
         run_id = cur.fetchone()[0]
         dst_conn.commit()
@@ -240,11 +329,17 @@ def main() -> int:
         wanted = set(args.only)
         selected = [s for s in SYNCS if s[0] in wanted]
 
-    logger.info("EGM  DSN: host=%s port=%s db=%s",
+    logger.info("EGM DSN: %s@%s:%s/%s",
+                os.environ.get("EGM_PG_USER", "postgres"),
                 os.environ.get("EGM_PG_HOST", "localhost"),
                 os.environ.get("EGM_PG_PORT", "5433"),
                 os.environ.get("EGM_PG_DB", "egm_local"))
-    logger.info("NorthStar DSN: host=%s port=%s db=%s",
+    logger.info("EAM DSN: %s@%s:%s/%s",
+                os.environ.get("EAM_PG_USER", "postgres"),
+                os.environ.get("EAM_PG_HOST", "localhost"),
+                os.environ.get("EAM_PG_PORT", "5432"),
+                os.environ.get("EAM_PG_DB", "eam_local"))
+    logger.info("NorthStar DSN: %s:%s/%s",
                 os.environ.get("NORTHSTAR_PG_HOST", "localhost"),
                 os.environ.get("NORTHSTAR_PG_PORT", "5434"),
                 os.environ.get("NORTHSTAR_PG_DB", "northstar"))
@@ -252,17 +347,30 @@ def main() -> int:
     started = datetime.utcnow()
     totals: dict[str, int] = {}
 
-    src = psycopg.connect(egm_dsn(), row_factory=dict_row)
+    # Connect lazily — if a source isn't needed, we don't open it.
+    sources: dict[str, psycopg.Connection] = {}
+
+    def get_source(name: str) -> psycopg.Connection:
+        if name not in sources:
+            dsn = eam_dsn() if name == "eam" else egm_dsn()
+            sources[name] = psycopg.connect(dsn, row_factory=dict_row)
+        return sources[name]
+
     dst = psycopg.connect(northstar_dsn())
     try:
-        for dest_table, pk_cols, (src_select, dst_cols) in selected:
+        for dest_table, pk_cols, source_name, (src_select, dst_cols) in selected:
             try:
-                totals[dest_table] = sync_table(src, dst, dest_table, pk_cols, src_select, dst_cols)
+                src = get_source(source_name)
+                totals[dest_table] = sync_table(src, dst, source_name, dest_table, pk_cols, src_select, dst_cols)
             except Exception as exc:  # noqa: BLE001
                 logger.exception("FAILED %s: %s", dest_table, exc)
                 totals[dest_table] = -1
     finally:
-        src.close()
+        for conn in sources.values():
+            try:
+                conn.close()
+            except Exception:  # noqa: BLE001
+                pass
         dst.close()
 
     elapsed = (datetime.utcnow() - started).total_seconds()
