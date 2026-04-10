@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 interface ProjectRow {
@@ -120,9 +121,21 @@ export default function AdminProjects() {
             {data?.rows.map((r) => (
               <tr key={r.project_id}>
                 <td>
-                  <code>{r.project_id}</code>
+                  <Link
+                    href={`/admin/projects/${encodeURIComponent(r.project_id)}`}
+                    style={{ color: "var(--accent)" }}
+                  >
+                    <code>{r.project_id}</code>
+                  </Link>
                 </td>
-                <td style={{ color: "var(--text)" }}>{r.project_name || "—"}</td>
+                <td>
+                  <Link
+                    href={`/admin/projects/${encodeURIComponent(r.project_id)}`}
+                    style={{ color: "var(--text)" }}
+                  >
+                    {r.project_name || "—"}
+                  </Link>
+                </td>
                 <td style={{ color: "var(--text-muted)", fontSize: 12 }}>
                   {r.status || "—"}
                 </td>
