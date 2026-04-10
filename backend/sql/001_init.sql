@@ -126,6 +126,20 @@ CREATE TABLE IF NOT EXISTS ref_request (
 CREATE INDEX IF NOT EXISTS idx_ref_request_project ON ref_request (project_id);
 
 -- =============================================================================
+-- Project exclusions (blacklist applied after every sync)
+-- =============================================================================
+-- Rows in here are removed from ref_project / ref_project_team_member /
+-- ref_project_summary at the end of each sync_from_egm.py run, so test and
+-- template projects that keep reappearing in the source system don't
+-- pollute NorthStar.
+CREATE TABLE IF NOT EXISTS project_exclusions (
+    project_id   VARCHAR PRIMARY KEY,
+    reason       TEXT,
+    excluded_at  TIMESTAMP DEFAULT NOW(),
+    excluded_by  VARCHAR DEFAULT 'manual'
+);
+
+-- =============================================================================
 -- Sync audit
 -- =============================================================================
 CREATE TABLE IF NOT EXISTS sync_run (

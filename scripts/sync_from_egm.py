@@ -419,6 +419,41 @@ def main() -> int:
                 conn.close()
             except Exception:  # noqa: BLE001
                 pass
+
+        # Apply project_exclusions — strip any project rows that are on the
+        # exclusion blacklist (test / template / deleted rows that keep coming
+        # back from the source system). Idempotent and fast.
+        try:
+            with dst.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM northstar.ref_project
+                    WHERE project_id IN (SELECT project_id FROM northstar.project_exclusions)
+                    """
+                )
+                excluded = cur.rowcount
+                cur.execute(
+                    """
+                    DELETE FROM northstar.ref_project_team_member
+                    WHERE project_id IN (SELECT project_id FROM northstar.project_exclusions)
+                    """
+                )
+                cur.execute(
+                    """
+                    DELETE FROM northstar.ref_project_summary
+                    WHERE project_id IN (SELECT project_id FROM northstar.project_exclusions)
+                    """
+                )
+                dst.commit()
+                if excluded:
+                    logger.info("applied project_exclusions: removed %d project rows", excluded)
+        except psycopg.errors.UndefinedTable:
+            dst.rollback()
+            logger.info("project_exclusions table not present — skipping filter")
+        except Exception as exc:  # noqa: BLE001
+            dst.rollback()
+            logger.warning("project_exclusions cleanup failed: %s", exc)
+
         dst.close()
 
     elapsed = (datetime.utcnow() - started).total_seconds()
