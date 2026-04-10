@@ -41,7 +41,7 @@ logger = logging.getLogger("scan-confluence")
 
 DEFAULT_FYS = ["FY2122", "FY2223", "FY2324", "FY2425", "FY2526", "FY2627"]
 
-PROJECT_ID_RE = re.compile(r"(LI\d{6,7}|RD\d{6,11}|TECHLED-\d+)")
+PROJECT_ID_RE = re.compile(r"(LI\d{6,7}|RD\d{6,11}|TECHLED-\d+|FY\d{4}-\d+|EA\d{6})")
 # Application review pages use "A<5-7 digits>" + separator + name
 APP_TITLE_RE = re.compile(r"^(A\d{3,7})[\s_\-:]+(.+)$")
 

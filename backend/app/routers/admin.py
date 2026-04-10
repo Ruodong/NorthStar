@@ -202,8 +202,17 @@ async def get_page(page_id: str) -> ApiResponse:
 
 
 @router.get("/confluence/pages/{page_id}/body")
-async def get_page_body(page_id: str) -> ApiResponse:
-    """Return the raw Confluence HTML body for a page (for iframe preview)."""
+async def get_page_body(page_id: str, raw: bool = False) -> ApiResponse:
+    """Return the Confluence HTML body for a page (for iframe preview).
+
+    By default the body is sanitized — Confluence storage format uses custom
+    `<ac:*>` macro tags that browsers render as raw text (leaking JSON config
+    and parameter values). The sanitizer strips parameters, unwraps
+    rich-text-body, turns panel/info/note/expand macros into styled divs,
+    and drops non-renderable macros like drawio/toc/attachments.
+
+    Pass ?raw=1 to get the untouched storage format (for debugging).
+    """
     row = await pg_client.fetchrow(
         "SELECT body_html, body_size_chars FROM northstar.confluence_page WHERE page_id = $1",
         page_id,
@@ -215,7 +224,20 @@ async def get_page_body(page_id: str) -> ApiResponse:
             status_code=404,
             detail="body not scanned yet — re-run scripts/scan_confluence.py",
         )
-    return ApiResponse(data={"html": row["body_html"], "size_chars": row["body_size_chars"]})
+
+    html = row["body_html"]
+    if not raw:
+        try:
+            from app.services.confluence_body import sanitize_storage_html
+            html = sanitize_storage_html(html)
+        except Exception as exc:  # noqa: BLE001
+            # If sanitization blows up, fall back to raw. Log the error.
+            import logging
+            logging.getLogger(__name__).warning(
+                "sanitize_storage_html failed for page %s: %s", page_id, exc
+            )
+            html = row["body_html"]
+    return ApiResponse(data={"html": html, "size_chars": row["body_size_chars"]})
 
 
 @router.get("/applications/{app_id}/overview")
@@ -233,17 +255,43 @@ async def application_overview(app_id: str) -> ApiResponse:
     """
     import json as _json
 
-    # 1) CMDB master row
+    # 1) CMDB master row (full 22 cols from EAM) + resolved owner display names
     cmdb = await pg_client.fetchrow(
         """
-        SELECT app_id, name, short_description, status, synced_at
-        FROM northstar.ref_application
-        WHERE app_id = $1
+        SELECT
+            a.app_id, a.name, a.app_full_name, a.short_description, a.status,
+            a.u_service_area, a.app_classification, a.app_ownership,
+            a.app_solution_type, a.portfolio_mgt,
+            a.owned_by,          e_o.name  AS owned_by_name,
+            a.app_it_owner,      e_it.name AS app_it_owner_name,
+            a.app_dt_owner,      e_dt.name AS app_dt_owner_name,
+            a.app_operation_owner, e_op.name AS app_operation_owner_name,
+            a.app_owner_tower, a.app_owner_domain,
+            a.app_operation_owner_tower, a.app_operation_owner_domain,
+            a.patch_level, a.decommissioned_at, a.source_system, a.synced_at
+        FROM northstar.ref_application a
+        LEFT JOIN northstar.ref_employee e_o  ON e_o.itcode  = a.owned_by
+        LEFT JOIN northstar.ref_employee e_it ON e_it.itcode = a.app_it_owner
+        LEFT JOIN northstar.ref_employee e_dt ON e_dt.itcode = a.app_dt_owner
+        LEFT JOIN northstar.ref_employee e_op ON e_op.itcode = a.app_operation_owner
+        WHERE a.app_id = $1
         """,
         app_id,
     )
     if cmdb is None:
         raise HTTPException(status_code=404, detail=f"{app_id} not found in CMDB")
+
+    # 1b) TCO / financial data
+    tco = await pg_client.fetchrow(
+        """
+        SELECT app_id, application_classification,
+               stamp_k, budget_k, actual_k,
+               allocation_stamp_k, allocation_actual_k
+        FROM northstar.ref_application_tco
+        WHERE app_id = $1
+        """,
+        app_id,
+    )
 
     # 2) Confluence pages with this A-id in title
     pages = await pg_client.fetch(
@@ -346,10 +394,25 @@ async def application_overview(app_id: str) -> ApiResponse:
         app_id,
     )
 
+    # Convert Postgres Decimal to float for JSON serialization
+    from decimal import Decimal as _Decimal
+
+    def _clean(row: dict | None) -> dict | None:
+        if row is None:
+            return None
+        out: dict = {}
+        for k, v in row.items():
+            if isinstance(v, _Decimal):
+                out[k] = float(v)
+            else:
+                out[k] = v
+        return out
+
     return ApiResponse(
         data={
             "app_id": app_id,
             "cmdb": dict(cmdb),
+            "tco": _clean(dict(tco)) if tco else None,
             "confluence_pages": page_dicts,
             "attachments": attachments,
             "graph": {

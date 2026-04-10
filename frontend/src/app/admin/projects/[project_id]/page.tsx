@@ -421,13 +421,16 @@ export default function ProjectOverviewPage() {
                   {graph.applications.map((a) => (
                     <tr key={a.app_id}>
                       <td style={{ width: 110 }}>
-                        <code
-                          style={{
-                            color: a.cmdb_linked ? "var(--accent)" : "var(--text-dim)",
-                          }}
-                        >
-                          {a.app_id}
-                        </code>
+                        {a.cmdb_linked ? (
+                          <Link
+                            href={`/admin/applications/${encodeURIComponent(a.app_id)}`}
+                            style={{ color: "var(--accent)" }}
+                          >
+                            <code>{a.app_id}</code>
+                          </Link>
+                        ) : (
+                          <code style={{ color: "var(--text-dim)" }}>{a.app_id}</code>
+                        )}
                       </td>
                       <td>{a.name}</td>
                       <td style={{ width: 110 }}>

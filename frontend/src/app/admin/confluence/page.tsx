@@ -295,7 +295,7 @@ export default function ConfluenceIndex() {
                     id={r.app_id}
                     verified={r.app_in_cmdb}
                     href={r.app_in_cmdb && r.app_id
-                      ? `/admin/applications?q=${encodeURIComponent(r.app_id)}`
+                      ? `/admin/applications/${encodeURIComponent(r.app_id)}`
                       : undefined}
                     kind="app"
                   />

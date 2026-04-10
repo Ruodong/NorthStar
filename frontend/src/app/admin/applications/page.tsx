@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 interface AppRow {
@@ -143,9 +144,21 @@ export default function AdminApplications() {
             {data?.rows.map((r) => (
               <tr key={r.app_id}>
                 <td>
-                  <code>{r.app_id}</code>
+                  <Link
+                    href={`/admin/applications/${encodeURIComponent(r.app_id)}`}
+                    style={{ color: "var(--accent)" }}
+                  >
+                    <code>{r.app_id}</code>
+                  </Link>
                 </td>
-                <td style={{ color: "var(--text)" }}>{r.name}</td>
+                <td>
+                  <Link
+                    href={`/admin/applications/${encodeURIComponent(r.app_id)}`}
+                    style={{ color: "var(--text)" }}
+                  >
+                    {r.name}
+                  </Link>
+                </td>
                 <td>
                   <span
                     className="status-pill"
