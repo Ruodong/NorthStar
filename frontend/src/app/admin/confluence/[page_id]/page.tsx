@@ -38,8 +38,11 @@ interface Page {
   q_project_id: string | null;
   q_project_name: string | null;
   q_pm: string | null;
+  q_pm_name: string | null;
   q_it_lead: string | null;
+  q_it_lead_name: string | null;
   q_dt_lead: string | null;
+  q_dt_lead_name: string | null;
 }
 
 interface Attachment {
@@ -223,9 +226,21 @@ export default function ConfluencePageDetail() {
             {detail.page.q_project_name && (
               <KV label="Name">{detail.page.q_project_name}</KV>
             )}
-            {detail.page.q_pm && <KV label="PM">{detail.page.q_pm}</KV>}
-            {detail.page.q_it_lead && <KV label="IT Lead">{detail.page.q_it_lead}</KV>}
-            {detail.page.q_dt_lead && <KV label="DT Lead">{detail.page.q_dt_lead}</KV>}
+            {detail.page.q_pm && (
+              <KV label="PM">
+                <NameWithCode name={detail.page.q_pm_name} code={detail.page.q_pm} />
+              </KV>
+            )}
+            {detail.page.q_it_lead && (
+              <KV label="IT Lead">
+                <NameWithCode name={detail.page.q_it_lead_name} code={detail.page.q_it_lead} />
+              </KV>
+            )}
+            {detail.page.q_dt_lead && (
+              <KV label="DT Lead">
+                <NameWithCode name={detail.page.q_dt_lead_name} code={detail.page.q_dt_lead} />
+              </KV>
+            )}
           </div>
         </div>
       )}
@@ -387,6 +402,24 @@ function TabButton({
       {children}
     </button>
   );
+}
+
+function NameWithCode({
+  name,
+  code,
+}: {
+  name: string | null;
+  code: string;
+}) {
+  if (name) {
+    return (
+      <span>
+        {name}{" "}
+        <code style={{ color: "var(--text-dim)", fontSize: 11 }}>{code}</code>
+      </span>
+    );
+  }
+  return <code>{code}</code>;
 }
 
 function KV({

@@ -114,14 +114,20 @@ async def get_page(page_id: str) -> ApiResponse:
     # Use /confluence/pages/{id}/body to fetch raw HTML when needed.
     page = await pg_client.fetchrow(
         """
-        SELECT page_id, fiscal_year, title, project_id, page_url,
-               body_text IS NOT NULL AS has_body,
-               body_questionnaire,
-               body_size_chars,
-               q_project_id, q_project_name, q_pm, q_it_lead, q_dt_lead,
-               last_seen, synced_at
-        FROM northstar.confluence_page
-        WHERE page_id = $1
+        SELECT p.page_id, p.fiscal_year, p.title, p.project_id, p.page_url,
+               p.body_text IS NOT NULL AS has_body,
+               p.body_questionnaire,
+               p.body_size_chars,
+               p.q_project_id, p.q_project_name,
+               p.q_pm,      e_pm.name AS q_pm_name,
+               p.q_it_lead, e_it.name AS q_it_lead_name,
+               p.q_dt_lead, e_dt.name AS q_dt_lead_name,
+               p.last_seen, p.synced_at
+        FROM northstar.confluence_page p
+        LEFT JOIN northstar.ref_employee e_pm ON e_pm.itcode = p.q_pm
+        LEFT JOIN northstar.ref_employee e_it ON e_it.itcode = p.q_it_lead
+        LEFT JOIN northstar.ref_employee e_dt ON e_dt.itcode = p.q_dt_lead
+        WHERE p.page_id = $1
         """,
         page_id,
     )
@@ -202,15 +208,23 @@ async def project_overview(project_id: str) -> ApiResponse:
         project_id,
     )
 
-    # 2) Confluence pages (match either title-extracted or questionnaire-extracted id)
+    # 2) Confluence pages (match either title-extracted or questionnaire-extracted id).
+    # Left-join ref_employee to resolve q_pm / q_it_lead / q_dt_lead itcodes
+    # into display names so the UI can show "liujr2 (Wei Lin)" style labels.
     pages = await pg_client.fetch(
         """
-        SELECT page_id, fiscal_year, title, page_url, body_size_chars,
-               q_project_id, q_project_name, q_pm, q_it_lead, q_dt_lead,
-               body_questionnaire
-        FROM northstar.confluence_page
-        WHERE project_id = $1 OR q_project_id = $1
-        ORDER BY fiscal_year DESC, title
+        SELECT p.page_id, p.fiscal_year, p.title, p.page_url, p.body_size_chars,
+               p.q_project_id, p.q_project_name,
+               p.q_pm,      e_pm.name      AS q_pm_name,
+               p.q_it_lead, e_it.name      AS q_it_lead_name,
+               p.q_dt_lead, e_dt.name      AS q_dt_lead_name,
+               p.body_questionnaire
+        FROM northstar.confluence_page p
+        LEFT JOIN northstar.ref_employee e_pm ON e_pm.itcode = p.q_pm
+        LEFT JOIN northstar.ref_employee e_it ON e_it.itcode = p.q_it_lead
+        LEFT JOIN northstar.ref_employee e_dt ON e_dt.itcode = p.q_dt_lead
+        WHERE p.project_id = $1 OR p.q_project_id = $1
+        ORDER BY p.fiscal_year DESC, p.title
         """,
         project_id,
     )
