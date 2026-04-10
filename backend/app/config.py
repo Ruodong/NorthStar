@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     neo4j_user: str = "neo4j"
     neo4j_password: str = "northstar_dev"
 
+    # Postgres
+    postgres_dsn: str = "postgresql://northstar:northstar_dev@postgres:5432/northstar"
+
     # Confluence REST API
     confluence_base_url: str = ""
     confluence_token: str = ""

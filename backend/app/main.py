@@ -8,8 +8,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import analytics, graph, ingestion
-from app.services import neo4j_client
+from app.routers import analytics, graph, ingestion, masters
+from app.services import neo4j_client, pg_client
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -23,8 +23,14 @@ async def lifespan(app: FastAPI):
         logger.info("Neo4j ready; schema constraints/indexes ensured")
     except Exception as exc:  # noqa: BLE001
         logger.error("Neo4j bootstrap failed: %s", exc)
+    try:
+        await pg_client.connect()
+        logger.info("Postgres pool ready")
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Postgres bootstrap failed: %s", exc)
     yield
     await neo4j_client.close()
+    await pg_client.close()
 
 
 app = FastAPI(title="NorthStar API", version="0.1.0", lifespan=lifespan)
@@ -41,6 +47,7 @@ app.add_middleware(
 app.include_router(graph.router)
 app.include_router(analytics.router)
 app.include_router(ingestion.router)
+app.include_router(masters.router)
 
 
 @app.get("/")
