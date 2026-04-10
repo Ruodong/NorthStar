@@ -62,17 +62,19 @@ def main() -> int:
 
     client = make_client()
 
-    print("=== 1. connectivity ===")
+    print("=== 1. connectivity (head_bucket may be 403 if key is prefix-scoped) ===")
     try:
         _, _ = bench("head_bucket", client.head_bucket, Bucket=bucket)
     except Exception as exc:  # noqa: BLE001
-        print(f"  FAILED: {exc}")
-        return 2
+        print(f"  head_bucket: {exc} (skipping, trying object-level access)")
 
-    _, _ = bench(
-        "list_objects_v2 (max 5)",
-        lambda: client.list_objects_v2(Bucket=bucket, Prefix=prefix + "/", MaxKeys=5),
-    )
+    try:
+        _, _ = bench(
+            "list_objects_v2 (max 5)",
+            lambda: client.list_objects_v2(Bucket=bucket, Prefix=prefix + "/", MaxKeys=5),
+        )
+    except Exception as exc:  # noqa: BLE001
+        print(f"  list_objects: {exc} (skipping, trying direct put/get)")
 
     print()
     print("=== 2. put_object benchmarks ===")
