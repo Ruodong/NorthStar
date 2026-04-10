@@ -51,6 +51,7 @@ class GraphFull(BaseModel):
 
 class IngestionRunRequest(BaseModel):
     fiscal_years: list[str] = Field(default_factory=list)
+    limit: Optional[int] = None  # optional per-FY project cap (for testing)
 
 
 class IngestionProjectResult(BaseModel):

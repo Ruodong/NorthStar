@@ -37,12 +37,16 @@ def _derive_app_id(app: dict, project_id: str) -> str:
 
 async def _load_project(project: ProjectPage) -> tuple[int, int, dict]:
     """Parse one project and MERGE it into Neo4j. Returns (apps_loaded, interactions_loaded, quality)."""
-    if not project.drawio_xml:
+    if not project.drawio_xmls:
         return 0, 0, {"overall_score": 0.0, "completeness": {"findings": []}, "consistency": {"findings": []}}
 
-    parsed = parse_drawio_xml(project.drawio_xml, "App_Arch")
-    applications = parsed.get("applications", [])
-    interactions = parsed.get("interactions", [])
+    # Parse all diagrams on this project page and union the results.
+    applications: list[dict] = []
+    interactions: list[dict] = []
+    for xml in project.drawio_xmls:
+        parsed = parse_drawio_xml(xml, "App_Arch")
+        applications.extend(parsed.get("applications", []))
+        interactions.extend(parsed.get("interactions", []))
 
     # Build app_id mapping
     app_id_by_cell: dict[str, str] = {}
@@ -137,13 +141,13 @@ async def _load_project(project: ProjectPage) -> tuple[int, int, dict]:
     return len(applications), loaded_interactions, quality
 
 
-async def _run_ingestion(task_id: str, fiscal_years: list[str]) -> None:
+async def _run_ingestion(task_id: str, fiscal_years: list[str], limit: Optional[int] = None) -> None:
     task = _tasks[task_id]
     report = QualityReport(task_id=task_id)
     _quality_reports[task_id] = report
     try:
         for fy in fiscal_years:
-            projects = await fetch_projects(fy)
+            projects = await fetch_projects(fy, limit=limit)
             task.total_projects += len(projects)
             for project in projects:
                 result = IngestionProjectResult(
@@ -193,7 +197,7 @@ async def _run_ingestion(task_id: str, fiscal_years: list[str]) -> None:
         task.completed_at = datetime.utcnow()
 
 
-def create_task(fiscal_years: list[str]) -> IngestionTask:
+def create_task(fiscal_years: list[str], limit: Optional[int] = None) -> IngestionTask:
     task_id = uuid.uuid4().hex[:12]
     task = IngestionTask(
         task_id=task_id,
@@ -202,11 +206,14 @@ def create_task(fiscal_years: list[str]) -> IngestionTask:
         started_at=datetime.utcnow(),
     )
     _tasks[task_id] = task
+    # stash limit in task for replay/debug
+    setattr(task, "_limit", limit)
     return task
 
 
 async def start_task(task: IngestionTask) -> None:
-    asyncio.create_task(_run_ingestion(task.task_id, task.fiscal_years))
+    limit = getattr(task, "_limit", None)
+    asyncio.create_task(_run_ingestion(task.task_id, task.fiscal_years, limit))
 
 
 def list_tasks(status: Optional[str] = None, limit: int = 50, offset: int = 0) -> list[IngestionTask]:

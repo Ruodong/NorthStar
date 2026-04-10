@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/ingestion", tags=["ingestion"])
 async def run_ingestion(payload: IngestionRunRequest) -> ApiResponse:
     if not payload.fiscal_years:
         raise HTTPException(status_code=400, detail="fiscal_years required")
-    task = ingestion_svc.create_task(payload.fiscal_years)
+    task = ingestion_svc.create_task(payload.fiscal_years, payload.limit)
     await ingestion_svc.start_task(task)
     return ApiResponse(data=task)
 
