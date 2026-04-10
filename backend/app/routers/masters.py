@@ -42,9 +42,14 @@ async def project_statuses() -> ApiResponse:
 
 @router.get("/summary")
 async def summary() -> ApiResponse:
+    # 'applications' is the ACTIVE portfolio count (TCO-driven) so that all
+    # places that show "Applications: N" agree with the /admin/applications
+    # list (also TCO-driven). ref_application is the full 3169-row CMDB
+    # mirror which includes decommissioned/legacy entries.
     rows = await pg_client.fetch(
         """
-        SELECT 'applications' AS entity, count(*) AS count FROM northstar.ref_application
+        SELECT 'applications' AS entity, count(*) AS count FROM northstar.ref_application_tco
+        UNION ALL SELECT 'applications_total_cmdb', count(*) FROM northstar.ref_application
         UNION ALL SELECT 'employees', count(*) FROM northstar.ref_employee
         UNION ALL SELECT 'projects',  count(*) FROM northstar.ref_project
         UNION ALL SELECT 'diagram_apps', count(*) FROM northstar.ref_diagram_app

@@ -1,7 +1,32 @@
+"use client";
+
 import Link from "next/link";
-import { ReactNode } from "react";
+import { ReactNode, useEffect, useState } from "react";
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
+  const [counts, setCounts] = useState<{ apps: number | null; projects: number | null }>({
+    apps: null,
+    projects: null,
+  });
+
+  useEffect(() => {
+    (async () => {
+      try {
+        // Apps count: use the same source as /admin/applications (TCO-driven)
+        const [appsRes, projRes] = await Promise.all([
+          fetch("/api/masters/applications?limit=1", { cache: "no-store" }).then((r) => r.json()),
+          fetch("/api/masters/projects?limit=1", { cache: "no-store" }).then((r) => r.json()),
+        ]);
+        setCounts({
+          apps: appsRes?.data?.total ?? null,
+          projects: projRes?.data?.total ?? null,
+        });
+      } catch {
+        // non-blocking
+      }
+    })();
+  }, []);
+
   return (
     <div>
       <div
@@ -33,10 +58,10 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         >
           <AdminLink href="/admin">Overview</AdminLink>
           <AdminLink href="/admin/applications">
-            Applications <Tag>3,168</Tag>
+            Applications <Tag>{fmt(counts.apps)}</Tag>
           </AdminLink>
           <AdminLink href="/admin/projects">
-            Projects <Tag>2,356</Tag>
+            Projects <Tag>{fmt(counts.projects)}</Tag>
           </AdminLink>
           <AdminLink href="/admin/confluence">Confluence Raw</AdminLink>
         </nav>
@@ -44,6 +69,11 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
       {children}
     </div>
   );
+}
+
+function fmt(n: number | null): string {
+  if (n == null) return "…";
+  return n.toLocaleString();
 }
 
 function AdminLink({ href, children }: { href: string; children: ReactNode }) {
