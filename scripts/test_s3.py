@@ -77,33 +77,34 @@ def main() -> int:
         print(f"  list_objects: {exc} (skipping, trying direct put/get)")
 
     print()
-    print("=== 2. put_object benchmarks ===")
-    for mb in (0.1, 1, 5, 10):
+    print("=== 2. put/get benchmarks (first call includes TLS handshake) ===")
+    print("  size | put ms | put MB/s | get ms | get MB/s")
+    print("  -----+--------+----------+--------+---------")
+    for mb in (0.1, 1, 5, 10, 20):
         size = int(mb * 1024 * 1024)
         data = os.urandom(size)
         key = f"{prefix}/northstar-bench/{int(time.time())}-{mb}mb.bin"
-        _, up_ms = bench(
-            f"PUT  {mb:>5}MB",
-            client.put_object,
+
+        t0 = time.perf_counter()
+        client.put_object(
             Bucket=bucket,
             Key=key,
             Body=data,
             ContentType="application/octet-stream",
             ContentLength=size,
         )
-        _, get_ms = bench(f"  GET  {mb:>5}MB", client.get_object, Bucket=bucket, Key=key)
-        # Read response body to complete transfer
+        up_ms = (time.perf_counter() - t0) * 1000
+
         t0 = time.perf_counter()
-        body_bytes = _[1]  # unused; we already drained it inside bench via get_object
-        # Actually get_object returns metadata; body stream must be read separately
         resp = client.get_object(Bucket=bucket, Key=key)
         body = resp["Body"].read()
-        read_ms = (time.perf_counter() - t0) * 1000
+        dl_ms = (time.perf_counter() - t0) * 1000
         assert len(body) == size
-        up_mbps = (size / 1024 / 1024) / (up_ms / 1000) if up_ms > 0 else 0
-        dl_mbps = (size / 1024 / 1024) / (read_ms / 1000) if read_ms > 0 else 0
-        print(f"    → upload  ~{up_mbps:>6.1f} MB/s")
-        print(f"    → download (full body read) {read_ms:>6.1f} ms = {dl_mbps:>6.1f} MB/s")
+
+        up_mbps = mb / (up_ms / 1000) if up_ms > 0 else 0
+        dl_mbps = mb / (dl_ms / 1000) if dl_ms > 0 else 0
+        print(f"  {mb:>4}MB | {up_ms:>6.0f} | {up_mbps:>7.1f}  | {dl_ms:>6.0f} | {dl_mbps:>6.1f}")
+
         client.delete_object(Bucket=bucket, Key=key)
 
     print()
