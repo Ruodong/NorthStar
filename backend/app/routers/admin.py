@@ -446,9 +446,28 @@ async def project_overview(project_id: str) -> ApiResponse:
     """
     import json as _json
 
-    # 1) MSPO master
+    # 1) MSPO master — full EAM project row
     mspo = await pg_client.fetchrow(
         "SELECT * FROM northstar.ref_project WHERE project_id = $1",
+        project_id,
+    )
+
+    # 1b) Project summary (rich business context)
+    summary = await pg_client.fetchrow(
+        "SELECT * FROM northstar.ref_project_summary WHERE project_id = $1",
+        project_id,
+    )
+
+    # 1c) Team members (resolved via ref_employee for tier org)
+    team = await pg_client.fetch(
+        """
+        SELECT tm.itcode, tm.name, tm.worker_type, tm.manager_itcode,
+               e.tier_1_org, e.tier_2_org, e.job_role
+        FROM northstar.ref_project_team_member tm
+        LEFT JOIN northstar.ref_employee e ON e.itcode = tm.itcode
+        WHERE tm.project_id = $1
+        ORDER BY tm.itcode
+        """,
         project_id,
     )
 
@@ -539,10 +558,23 @@ async def project_overview(project_id: str) -> ApiResponse:
             d["questionnaire_sections"] = None
         page_dicts.append(d)
 
+    # Clean Decimal → float for JSON
+    from decimal import Decimal as _D2
+
+    def _clean2(row):
+        if row is None:
+            return None
+        out: dict = {}
+        for k, v in row.items():
+            out[k] = float(v) if isinstance(v, _D2) else v
+        return out
+
     return ApiResponse(
         data={
             "project_id": project_id,
-            "mspo": dict(mspo) if mspo else None,
+            "mspo": _clean2(dict(mspo)) if mspo else None,
+            "summary": _clean2(dict(summary)) if summary else None,
+            "team": [dict(t) for t in team],
             "confluence_pages": page_dicts,
             "attachments": attachments,
             "graph": {

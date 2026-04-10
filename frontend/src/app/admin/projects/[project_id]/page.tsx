@@ -9,6 +9,7 @@ interface MSPO {
   project_name: string | null;
   type: string | null;
   status: string | null;
+  overall_status: string | null;
   pm: string | null;
   pm_itcode: string | null;
   it_lead: string | null;
@@ -18,7 +19,49 @@ interface MSPO {
   start_date: string | null;
   go_live_date: string | null;
   end_date: string | null;
+  pps_exit_date: string | null;
+  duration: number | null;
+  objectives: string | null;
+  investment_cost: number | null;
+  yearly_ma_cost: number | null;
+  currency: string | null;
+  expected_man_days: number | null;
+  comment: string | null;
+  ea_review_type: string | null;
+  domain_ea_reviewer: string | null;
+  ea_approval_dt: string | null;
+  approved_time: string | null;
+  ai_related: string | null;
   source: string | null;
+}
+
+interface ProjectSummary {
+  business_owner1: string | null;
+  business_owner2: string | null;
+  cost: string | null;
+  schedule: string | null;
+  function_summary: string | null;
+  benefit: string | null;
+  paint_point: string | null;
+  application_list: string[] | null;
+  architect_summary: string | null;
+  ea_status: string | null;
+  status_remark: string | null;
+  attachments: string[] | null;
+  ea_review_submitter: string | null;
+  comments_app: string | null;
+  ea_review_type: string | null;
+  domain_ea_reviewer: string | null;
+}
+
+interface TeamMember {
+  itcode: string;
+  name: string | null;
+  worker_type: string | null;
+  manager_itcode: string | null;
+  tier_1_org: string | null;
+  tier_2_org: string | null;
+  job_role: string | null;
 }
 
 interface QRow {
@@ -76,6 +119,8 @@ interface GraphEdge {
 interface Overview {
   project_id: string;
   mspo: MSPO | null;
+  summary: ProjectSummary | null;
+  team: TeamMember[];
   confluence_pages: ConfluencePage[];
   attachments: Attachment[];
   graph: {
@@ -152,7 +197,7 @@ export default function ProjectOverviewPage() {
     );
   if (!data) return <div className="subtitle">Loading…</div>;
 
-  const { mspo, confluence_pages, attachments, graph } = data;
+  const { mspo, summary, team, confluence_pages, attachments, graph } = data;
   const primaryPage = confluence_pages[0] ?? null;
   const projectName = mspo?.project_name || primaryPage?.q_project_name || projectId;
 
@@ -186,6 +231,8 @@ export default function ProjectOverviewPage() {
       {/* Source badges */}
       <div style={{ display: "flex", gap: 8, marginBottom: 24, flexWrap: "wrap", fontSize: 11 }}>
         <SourceBadge label="MSPO" active={!!mspo} count={mspo ? 1 : 0} />
+        <SourceBadge label="Summary" active={!!summary} count={summary ? 1 : 0} />
+        <SourceBadge label="Team" active={team.length > 0} count={team.length} />
         <SourceBadge label="Confluence" active={confluence_pages.length > 0} count={confluence_pages.length} />
         <SourceBadge label="Attachments" active={attachments.length > 0} count={attachments.length} />
         <SourceBadge label="Graph" active={graph.applications.length > 0} count={graph.applications.length} />
@@ -194,13 +241,14 @@ export default function ProjectOverviewPage() {
       {/* MSPO + Confluence side-by-side */}
       <div className="panel-grid">
         <div className="panel">
-          <div className="panel-title">MSPO Master</div>
+          <div className="panel-title">MSPO Master (EAM)</div>
           {mspo ? (
             <table>
               <tbody>
                 <KVRow k="Project Name" v={mspo.project_name} />
                 <KVRow k="Type" v={mspo.type} />
                 <KVRow k="Status" v={mspo.status} />
+                <KVRow k="Overall Status" v={mspo.overall_status} />
                 <KVRow
                   k="PM"
                   v={mspo.pm_itcode ? `${mspo.pm || "—"} (${mspo.pm_itcode})` : mspo.pm}
@@ -215,7 +263,13 @@ export default function ProjectOverviewPage() {
                 />
                 <KVRow k="Start Date" v={mspo.start_date} />
                 <KVRow k="Go-live Date" v={mspo.go_live_date} />
+                <KVRow k="PPS Exit Date" v={mspo.pps_exit_date} />
                 <KVRow k="End Date" v={mspo.end_date} />
+                <KVRow k="EA Approval Date" v={mspo.ea_approval_dt} />
+                <KVRow k="Approved Time" v={mspo.approved_time} />
+                <KVRow k="EA Review Type" v={mspo.ea_review_type} />
+                <KVRow k="EA Reviewer" v={mspo.domain_ea_reviewer} />
+                <KVRow k="AI-related" v={mspo.ai_related} />
                 <KVRow k="Source" v={mspo.source} />
               </tbody>
             </table>
@@ -292,6 +346,181 @@ export default function ProjectOverviewPage() {
           )}
         </div>
       </div>
+
+      {/* Objectives (full text from MSPO) */}
+      {mspo?.objectives && (
+        <div className="panel" style={{ marginTop: 16 }}>
+          <div className="panel-title">Objectives</div>
+          <div
+            style={{
+              fontSize: 13,
+              lineHeight: 1.6,
+              color: "var(--text)",
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {mspo.objectives}
+          </div>
+        </div>
+      )}
+
+      {/* Financial */}
+      {(mspo?.investment_cost != null ||
+        mspo?.yearly_ma_cost != null ||
+        mspo?.expected_man_days != null) && (
+        <div className="panel" style={{ marginTop: 16 }}>
+          <div className="panel-title">Financial</div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(4, 1fr)",
+              gap: 24,
+            }}
+          >
+            <MoneyStat label="Investment Cost" k={mspo.investment_cost} />
+            <MoneyStat label="Yearly M&A Cost" k={mspo.yearly_ma_cost} />
+            <PlainStat
+              label="Expected Man-days"
+              v={mspo.expected_man_days}
+            />
+            <PlainStat label="Duration (months)" v={mspo.duration} />
+          </div>
+        </div>
+      )}
+
+      {/* Team members */}
+      {team.length > 0 && (
+        <div className="panel" style={{ marginTop: 16 }}>
+          <div className="panel-title">Team Members ({team.length})</div>
+          <table>
+            <thead>
+              <tr>
+                <th style={{ width: 140 }}>itcode</th>
+                <th>Name</th>
+                <th style={{ width: 100 }}>Type</th>
+                <th style={{ width: 120 }}>Manager</th>
+                <th>Org</th>
+              </tr>
+            </thead>
+            <tbody>
+              {team.map((m) => (
+                <tr key={m.itcode}>
+                  <td>
+                    <code>{m.itcode}</code>
+                  </td>
+                  <td>{m.name || "—"}</td>
+                  <td style={{ color: "var(--text-muted)", fontSize: 12 }}>
+                    {m.worker_type || "—"}
+                  </td>
+                  <td style={{ color: "var(--text-muted)", fontSize: 12 }}>
+                    <code>{m.manager_itcode || "—"}</code>
+                  </td>
+                  <td style={{ color: "var(--text-muted)", fontSize: 11 }}>
+                    {m.tier_2_org || m.tier_1_org || "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Business Summary (from eam_project_summary) */}
+      {summary && (
+        <div className="panel" style={{ marginTop: 16 }}>
+          <div className="panel-title">Business Summary</div>
+          <table>
+            <tbody>
+              <KVRow k="Business Owner 1" v={summary.business_owner1} />
+              <KVRow k="Business Owner 2" v={summary.business_owner2} />
+              <KVRow k="Schedule" v={summary.schedule} />
+              <KVRow k="Cost" v={summary.cost} />
+              <KVRow k="EA Status" v={summary.ea_status} />
+              <KVRow k="EA Review Submitter" v={summary.ea_review_submitter} />
+              {summary.function_summary && (
+                <tr>
+                  <th style={{ width: "30%", verticalAlign: "top" }}>Function Summary</th>
+                  <td
+                    style={{
+                      fontSize: 13,
+                      whiteSpace: "pre-wrap",
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    {summary.function_summary}
+                  </td>
+                </tr>
+              )}
+              {summary.benefit && (
+                <tr>
+                  <th style={{ width: "30%", verticalAlign: "top" }}>Benefit</th>
+                  <td
+                    style={{
+                      fontSize: 13,
+                      whiteSpace: "pre-wrap",
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    {summary.benefit}
+                  </td>
+                </tr>
+              )}
+              {summary.paint_point && (
+                <tr>
+                  <th style={{ width: "30%", verticalAlign: "top" }}>Pain Point</th>
+                  <td
+                    style={{
+                      fontSize: 13,
+                      whiteSpace: "pre-wrap",
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    {summary.paint_point}
+                  </td>
+                </tr>
+              )}
+              {summary.architect_summary && (
+                <tr>
+                  <th style={{ width: "30%", verticalAlign: "top" }}>Architect Summary</th>
+                  <td
+                    style={{
+                      fontSize: 13,
+                      whiteSpace: "pre-wrap",
+                      lineHeight: 1.6,
+                    }}
+                  >
+                    {summary.architect_summary}
+                  </td>
+                </tr>
+              )}
+              {summary.application_list && summary.application_list.length > 0 && (
+                <tr>
+                  <th style={{ width: "30%", verticalAlign: "top" }}>
+                    Applications ({summary.application_list.length})
+                  </th>
+                  <td>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {summary.application_list.map((app, i) => (
+                        <code
+                          key={i}
+                          style={{
+                            background: "var(--surface-hover)",
+                            padding: "3px 8px",
+                            borderRadius: 3,
+                            fontSize: 11,
+                          }}
+                        >
+                          {app}
+                        </code>
+                      ))}
+                    </div>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* Additional pages if any */}
       {confluence_pages.length > 1 && (
@@ -620,5 +849,69 @@ function KVRow({ k, v, mono }: { k: string; v: string | null; mono?: boolean }) 
         {v || "—"}
       </td>
     </tr>
+  );
+}
+
+function MoneyStat({ label, k }: { label: string; k: number | null }) {
+  const display =
+    k == null
+      ? "—"
+      : Math.abs(k) < 1000
+      ? `$${k.toFixed(2)}k`
+      : `$${(k / 1000).toFixed(2)}M`;
+  return (
+    <div>
+      <div
+        style={{
+          fontSize: 10,
+          fontWeight: 500,
+          textTransform: "uppercase",
+          letterSpacing: 0.6,
+          color: "var(--text-muted)",
+          marginBottom: 4,
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          fontFamily: "var(--font-mono)",
+          fontSize: 18,
+          color: k == null ? "var(--text-dim)" : "var(--text)",
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {display}
+      </div>
+    </div>
+  );
+}
+
+function PlainStat({ label, v }: { label: string; v: number | null }) {
+  return (
+    <div>
+      <div
+        style={{
+          fontSize: 10,
+          fontWeight: 500,
+          textTransform: "uppercase",
+          letterSpacing: 0.6,
+          color: "var(--text-muted)",
+          marginBottom: 4,
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          fontFamily: "var(--font-mono)",
+          fontSize: 18,
+          color: v == null ? "var(--text-dim)" : "var(--text)",
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {v == null ? "—" : v.toLocaleString()}
+      </div>
+    </div>
   );
 }
