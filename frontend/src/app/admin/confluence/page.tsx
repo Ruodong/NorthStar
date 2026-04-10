@@ -9,11 +9,16 @@ interface PageRow {
   title: string;
   project_id: string | null;
   project_name: string | null;
+  project_name_source: "mspo" | "questionnaire" | "none";
   app_id: string | null;
   app_name: string | null;
+  app_name_source: "cmdb" | "none";
   page_type: string | null; // 'project' | 'application' | 'other'
   project_in_mspo: boolean;
   app_in_cmdb: boolean;
+  q_pm: string | null;
+  q_it_lead: string | null;
+  q_dt_lead: string | null;
   page_url: string;
   attachment_count: number;
   drawio_count: number;
@@ -285,9 +290,9 @@ export default function ConfluenceIndex() {
                 <td>
                   <NameCell
                     primary={r.project_name}
+                    source={r.project_name_source}
                     fallback={r.page_type === "project" ? r.title : null}
                     pageId={r.page_id}
-                    muted={!r.project_name}
                   />
                 </td>
                 <td>
@@ -303,9 +308,9 @@ export default function ConfluenceIndex() {
                 <td>
                   <NameCell
                     primary={r.app_name}
+                    source={r.app_name_source === "cmdb" ? "mspo" : "none"}
                     fallback={r.page_type === "application" ? r.title : null}
                     pageId={r.page_id}
-                    muted={!r.app_name}
                   />
                 </td>
                 <td
@@ -453,26 +458,49 @@ function IdCell({
 
 function NameCell({
   primary,
+  source,
   fallback,
   pageId,
-  muted,
 }: {
   primary: string | null;
+  source: "mspo" | "questionnaire" | "none";
   fallback: string | null;
   pageId: string;
-  muted?: boolean;
 }) {
   const label = primary || fallback;
   if (!label) return <span style={{ color: "var(--text-dim)" }}>—</span>;
+
+  // Three display tiers:
+  //   mspo          → normal text, no italic   (authoritative master match)
+  //   questionnaire → italic, muted             (from page body Q&A)
+  //   none          → italic, dim               (fallback to page title)
+  const style: Record<string, { color: string; italic: boolean; title: string }> = {
+    mspo: {
+      color: "var(--text)",
+      italic: false,
+      title: "From MSPO / CMDB master",
+    },
+    questionnaire: {
+      color: "var(--text-muted)",
+      italic: true,
+      title: "From Confluence questionnaire body",
+    },
+    none: {
+      color: "var(--text-muted)",
+      italic: true,
+      title: "From Confluence page title (no master, no questionnaire match)",
+    },
+  };
+  const s = style[source];
   return (
     <Link
       href={`/admin/confluence/${pageId}`}
       style={{
-        color: muted ? "var(--text-muted)" : "var(--text)",
+        color: s.color,
         fontSize: 13,
-        fontStyle: primary ? "normal" : "italic",
+        fontStyle: s.italic ? "italic" : "normal",
       }}
-      title={primary ? "From MSPO / CMDB" : "From Confluence page title (no master match)"}
+      title={s.title}
     >
       {label}
     </Link>

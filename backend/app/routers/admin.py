@@ -105,11 +105,21 @@ async def list_pages(
         f"""
         SELECT p.page_id, p.fiscal_year, p.title, p.page_url, p.page_type,
                p.project_id,
-               rp.project_name AS project_name,
+               -- project name with three-tier fallback
+               COALESCE(rp.project_name, p.q_project_name) AS project_name,
+               CASE
+                 WHEN rp.project_name IS NOT NULL THEN 'mspo'
+                 WHEN p.q_project_name IS NOT NULL THEN 'questionnaire'
+                 ELSE 'none'
+               END AS project_name_source,
                p.q_app_id      AS app_id,
                ra.name         AS app_name,
+               CASE WHEN ra.name IS NOT NULL THEN 'cmdb' ELSE 'none' END AS app_name_source,
                (rp.project_id IS NOT NULL) AS project_in_mspo,
                (ra.app_id IS NOT NULL)     AS app_in_cmdb,
+               -- expose questionnaire owner fields so the UI can show them
+               -- even when they're free-text names instead of itcodes
+               p.q_pm, p.q_it_lead, p.q_dt_lead,
                (SELECT count(*) FROM northstar.confluence_attachment a WHERE a.page_id = p.page_id) AS attachment_count,
                (SELECT count(*) FROM northstar.confluence_attachment a
                   WHERE a.page_id = p.page_id AND a.file_kind = 'drawio'
