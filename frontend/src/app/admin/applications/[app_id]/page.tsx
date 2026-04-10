@@ -181,7 +181,7 @@ export default function ApplicationOverviewPage() {
             fontFamily: "var(--font-mono)",
           }}
         >
-          {cmdb.app_id} · {cmdb.source_system || "EAM"}
+          {cmdb.app_id}
         </div>
         <h1 style={{ margin: 0, display: "flex", alignItems: "baseline", gap: 16, flexWrap: "wrap" }}>
           {cmdb.name}
