@@ -19,11 +19,20 @@ import {
 import { api, HubApp, KpiSummary, StatusBucket, TrendPoint } from "@/lib/api";
 
 const STATUS_COLORS: Record<string, string> = {
-  Keep: "#6bb6ff",
-  Change: "#f4c571",
-  New: "#f4857c",
-  Sunset: "#808a9e",
-  "3rd Party": "#e6e9ef",
+  Keep: "#6ba6e8",
+  Change: "#e8b458",
+  New: "#e8716b",
+  Sunset: "#6b7488",
+  "3rd Party": "#a8b0c0",
+};
+const CHART_GRID = "#1c2230";
+const CHART_AXIS = "#5f6a80";
+const TOOLTIP_STYLE = {
+  background: "#0c1017",
+  border: "1px solid #2a3142",
+  borderRadius: 4,
+  fontFamily: "Geist, sans-serif",
+  fontSize: 12,
 };
 
 export default function DashboardPage() {
@@ -80,14 +89,16 @@ export default function DashboardPage() {
                   dataKey="count"
                   nameKey="status"
                   outerRadius={90}
-                  label
+                  stroke="#07090d"
+                  strokeWidth={2}
+                  label={{ fill: "#e7eaf0", fontSize: 11, fontFamily: "Geist" }}
                 >
                   {statusDist.map((s) => (
-                    <Cell key={s.status} fill={STATUS_COLORS[s.status] || "#6bb6ff"} />
+                    <Cell key={s.status} fill={STATUS_COLORS[s.status] || "#6ba6e8"} />
                   ))}
                 </Pie>
-                <Tooltip />
-                <Legend />
+                <Tooltip contentStyle={TOOLTIP_STYLE} />
+                <Legend wrapperStyle={{ fontSize: 11, fontFamily: "Geist" }} />
               </PieChart>
             </ResponsiveContainer>
           ) : (
@@ -99,14 +110,14 @@ export default function DashboardPage() {
           {trend.length > 0 ? (
             <ResponsiveContainer width="100%" height={260}>
               <LineChart data={trend}>
-                <CartesianGrid stroke="#1f2430" strokeDasharray="3 3" />
-                <XAxis dataKey="fiscal_year" stroke="#8892a6" />
-                <YAxis stroke="#8892a6" />
-                <Tooltip contentStyle={{ background: "#141923", border: "1px solid #2a3142" }} />
+                <CartesianGrid stroke={CHART_GRID} strokeDasharray="3 3" />
+                <XAxis dataKey="fiscal_year" stroke={CHART_AXIS} fontSize={11} />
+                <YAxis stroke={CHART_AXIS} fontSize={11} />
+                <Tooltip contentStyle={TOOLTIP_STYLE} />
                 <Legend />
-                <Line type="monotone" dataKey="new_count" stroke="#f4857c" />
-                <Line type="monotone" dataKey="change_count" stroke="#f4c571" />
-                <Line type="monotone" dataKey="sunset_count" stroke="#808a9e" />
+                <Line type="monotone" dataKey="new_count" stroke={STATUS_COLORS.New} strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="change_count" stroke={STATUS_COLORS.Change} strokeWidth={2} dot={false} />
+                <Line type="monotone" dataKey="sunset_count" stroke={STATUS_COLORS.Sunset} strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
           ) : (
@@ -118,11 +129,11 @@ export default function DashboardPage() {
           {hubs.length > 0 ? (
             <ResponsiveContainer width="100%" height={260}>
               <BarChart data={hubs} layout="vertical">
-                <CartesianGrid stroke="#1f2430" strokeDasharray="3 3" />
-                <XAxis type="number" stroke="#8892a6" />
-                <YAxis type="category" dataKey="name" stroke="#8892a6" width={140} />
-                <Tooltip contentStyle={{ background: "#141923", border: "1px solid #2a3142" }} />
-                <Bar dataKey="degree" fill="#6bb6ff" />
+                <CartesianGrid stroke={CHART_GRID} strokeDasharray="3 3" horizontal={false} />
+                <XAxis type="number" stroke={CHART_AXIS} fontSize={11} />
+                <YAxis type="category" dataKey="name" stroke={CHART_AXIS} fontSize={11} width={150} />
+                <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: "rgba(246,166,35,0.08)" }} />
+                <Bar dataKey="degree" fill="#f6a623" radius={[0, 2, 2, 0]} />
               </BarChart>
             </ResponsiveContainer>
           ) : (
@@ -134,11 +145,11 @@ export default function DashboardPage() {
           {quality.length > 0 ? (
             <ResponsiveContainer width="100%" height={260}>
               <BarChart data={quality}>
-                <CartesianGrid stroke="#1f2430" strokeDasharray="3 3" />
-                <XAxis dataKey="bucket" stroke="#8892a6" />
-                <YAxis stroke="#8892a6" />
-                <Tooltip contentStyle={{ background: "#141923", border: "1px solid #2a3142" }} />
-                <Bar dataKey="count" fill="#7cd99b" />
+                <CartesianGrid stroke={CHART_GRID} strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="bucket" stroke={CHART_AXIS} fontSize={11} />
+                <YAxis stroke={CHART_AXIS} fontSize={11} />
+                <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: "rgba(246,166,35,0.08)" }} />
+                <Bar dataKey="count" fill="#5fc58a" radius={[2, 2, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           ) : (

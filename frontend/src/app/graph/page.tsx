@@ -5,11 +5,11 @@ import cytoscape, { Core, ElementDefinition } from "cytoscape";
 import { api, ApplicationNode, IntegrationEdge } from "@/lib/api";
 
 const STATUS_COLORS: Record<string, string> = {
-  Keep: "#6bb6ff",
-  Change: "#f4c571",
-  New: "#f4857c",
-  Sunset: "#808a9e",
-  "3rd Party": "#e6e9ef",
+  Keep: "#6ba6e8",
+  Change: "#e8b458",
+  New: "#e8716b",
+  Sunset: "#6b7488",
+  "3rd Party": "#a8b0c0",
 };
 
 export default function GraphPage() {
@@ -65,16 +65,20 @@ export default function GraphPage() {
             selector: "node",
             style: {
               "background-color": (ele: cytoscape.NodeSingular) =>
-                STATUS_COLORS[ele.data("status")] || "#6bb6ff",
+                STATUS_COLORS[ele.data("status")] || "#6ba6e8",
+              "border-width": 2,
+              "border-color": "#07090d",
               label: "data(label)",
-              color: "#e6e9ef",
+              color: "#e7eaf0",
+              "font-family": "Geist, -apple-system, sans-serif",
               "font-size": 11,
-              "text-outline-color": "#0b0e14",
-              "text-outline-width": 2,
+              "font-weight": 500,
+              "text-outline-color": "#07090d",
+              "text-outline-width": 3,
               "text-valign": "bottom",
-              "text-margin-y": 4,
-              width: 30,
-              height: 30,
+              "text-margin-y": 6,
+              width: 28,
+              height: 28,
             },
           },
           {
@@ -82,25 +86,37 @@ export default function GraphPage() {
             style: {
               "curve-style": "bezier",
               "target-arrow-shape": "triangle",
-              "line-color": "#2f3a52",
-              "target-arrow-color": "#2f3a52",
-              width: 1.4,
+              "line-color": "#2a3142",
+              "target-arrow-color": "#2a3142",
+              width: 1.2,
               label: "data(label)",
+              "font-family": "Geist, -apple-system, sans-serif",
               "font-size": 9,
-              color: "#8892a6",
+              color: "#5f6a80",
               "text-rotation": "autorotate",
             },
           },
           {
             selector: ".faded",
-            style: { opacity: 0.15 },
+            style: { opacity: 0.12 },
           },
           {
             selector: ".highlighted",
-            style: { "border-width": 3, "border-color": "#fff" },
+            style: {
+              "border-width": 3,
+              "border-color": "#f6a623",
+              "border-opacity": 0.9,
+            },
+          },
+          {
+            selector: "node:selected",
+            style: {
+              "border-width": 3,
+              "border-color": "#f6a623",
+            },
           },
         ],
-        layout: { name: "cose", animate: false, nodeRepulsion: 8000, idealEdgeLength: 120 },
+        layout: { name: "cose", animate: false, nodeRepulsion: 9000, idealEdgeLength: 130 },
       });
 
       cy.on("tap", "node", (evt) => {
@@ -142,13 +158,13 @@ export default function GraphPage() {
       <h1>Asset Graph</h1>
       <p className="subtitle">Applications and their integrations, from draw.io ingestion</p>
 
-      <div style={{ display: "flex", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+      <div className="toolbar">
         <input
           placeholder="Search by name or app ID…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && focusSearch()}
-          style={{ minWidth: 260 }}
+          style={{ minWidth: 280 }}
         />
         <button onClick={focusSearch}>Focus</button>
         <select value={fy} onChange={(e) => setFy(e.target.value)}>
@@ -168,7 +184,9 @@ export default function GraphPage() {
           <option value="Sunset">Sunset</option>
           <option value="3rd Party">3rd Party</option>
         </select>
-        <button onClick={loadGraph}>Reload</button>
+        <button className="btn-secondary" onClick={loadGraph}>
+          Reload
+        </button>
       </div>
 
       {err && (
