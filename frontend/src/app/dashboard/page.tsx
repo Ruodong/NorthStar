@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
   Bar,
@@ -35,29 +36,47 @@ const TOOLTIP_STYLE = {
   fontSize: 12,
 };
 
+interface MastersSummary {
+  applications: number;
+  projects: number;
+  employees: number;
+  diagram_apps: number;
+  diagram_interactions: number;
+}
+
+interface ConfluenceSummary {
+  totals?: { total_pages?: number; total_attachments?: number; downloaded?: number };
+}
+
 export default function DashboardPage() {
   const [summary, setSummary] = useState<KpiSummary | null>(null);
   const [statusDist, setStatusDist] = useState<StatusBucket[]>([]);
   const [trend, setTrend] = useState<TrendPoint[]>([]);
   const [hubs, setHubs] = useState<HubApp[]>([]);
   const [quality, setQuality] = useState<{ bucket: string; count: number }[]>([]);
+  const [masters, setMasters] = useState<MastersSummary | null>(null);
+  const [cfl, setCfl] = useState<ConfluenceSummary | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
-        const [s, sd, t, h, q] = await Promise.all([
+        const [s, sd, t, h, q, mRes, cflRes] = await Promise.all([
           api.summary(),
           api.statusDistribution(),
           api.trend(),
           api.hubs(10),
           api.qualityScores(),
+          fetch("/api/masters/summary", { cache: "no-store" }).then((r) => r.json()),
+          fetch("/api/admin/confluence/summary", { cache: "no-store" }).then((r) => r.json()),
         ]);
         setSummary(s);
         setStatusDist(sd);
         setTrend(t);
         setHubs(h);
         setQuality(q.distribution);
+        if (mRes.success) setMasters(mRes.data);
+        if (cflRes.success) setCfl(cflRes.data);
       } catch (e) {
         setErr(String(e));
       }
@@ -71,11 +90,62 @@ export default function DashboardPage() {
 
       {err && <div className="panel" style={{ borderColor: "#5b1f1f" }}>Error: {err}</div>}
 
+      {/* Row 1: Architecture Graph — sourced from Neo4j (Confluence drawio → parsed) */}
+      <SectionLabel source="Architecture Graph · Neo4j · parsed from Confluence drawio" />
       <div className="kpi-grid">
-        <Kpi label="Total Apps" value={summary?.total_apps ?? 0} />
-        <Kpi label="Total Integrations" value={summary?.total_integrations ?? 0} />
-        <Kpi label="New Apps (current FY)" value={summary?.new_apps_current_fy ?? 0} />
-        <Kpi label="Sunset Apps" value={summary?.sunset_apps ?? 0} />
+        <Kpi
+          label="Apps in graph"
+          value={summary?.total_apps ?? 0}
+          href="/graph"
+          hint="Unique Application nodes"
+        />
+        <Kpi
+          label="Integrations"
+          value={summary?.total_integrations ?? 0}
+          href="/graph"
+          hint="INTEGRATES_WITH edges"
+        />
+        <Kpi
+          label="New apps (current FY)"
+          value={summary?.new_apps_current_fy ?? 0}
+          href="/graph?status=New"
+          hint="from drawio fillColor"
+        />
+        <Kpi
+          label="Sunset apps"
+          value={summary?.sunset_apps ?? 0}
+          href="/graph?status=Sunset"
+          hint="from drawio fillColor"
+        />
+      </div>
+
+      {/* Row 2: Master Data — sourced from PG ref_* (EGM sync) */}
+      <SectionLabel source="Master Data · Postgres · synced from EGM" />
+      <div className="kpi-grid">
+        <Kpi
+          label="CMDB applications"
+          value={masters?.applications ?? 0}
+          href="/admin/applications"
+          hint="ref_application"
+        />
+        <Kpi
+          label="MSPO projects"
+          value={masters?.projects ?? 0}
+          href="/admin/projects"
+          hint="ref_project"
+        />
+        <Kpi
+          label="Confluence pages"
+          value={cfl?.totals?.total_pages ?? 0}
+          href="/admin/confluence"
+          hint="scanned from ARD space"
+        />
+        <Kpi
+          label="Attachments downloaded"
+          value={cfl?.totals?.downloaded ?? 0}
+          href="/admin/confluence"
+          hint="drawio + image + pdf + office"
+        />
       </div>
 
       <div className="panel-grid">
@@ -161,11 +231,63 @@ export default function DashboardPage() {
   );
 }
 
-function Kpi({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="kpi-card">
+function Kpi({
+  label,
+  value,
+  href,
+  hint,
+}: {
+  label: string;
+  value: number;
+  href?: string;
+  hint?: string;
+}) {
+  const body = (
+    <>
       <div className="kpi-label">{label}</div>
-      <div className="kpi-value">{value}</div>
+      <div className="kpi-value">{value.toLocaleString()}</div>
+      {hint && (
+        <div
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: 10,
+            color: "var(--text-dim)",
+            marginTop: 6,
+          }}
+        >
+          {hint}
+        </div>
+      )}
+    </>
+  );
+  if (href) {
+    return (
+      <Link
+        href={href}
+        className="kpi-card"
+        style={{ textDecoration: "none", cursor: "pointer" }}
+      >
+        {body}
+      </Link>
+    );
+  }
+  return <div className="kpi-card">{body}</div>;
+}
+
+function SectionLabel({ source }: { source: string }) {
+  return (
+    <div
+      style={{
+        fontSize: 10,
+        fontWeight: 600,
+        textTransform: "uppercase",
+        letterSpacing: 0.7,
+        color: "var(--accent)",
+        marginBottom: 10,
+        marginTop: 8,
+      }}
+    >
+      {source}
     </div>
   );
 }

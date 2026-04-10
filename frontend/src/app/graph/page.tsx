@@ -4,6 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import cytoscape, { Core, ElementDefinition } from "cytoscape";
 import { api, ApplicationNode, IntegrationEdge } from "@/lib/api";
 
+// Read URL query params at module scope — only runs in the browser.
+function initialParam(key: string): string {
+  if (typeof window === "undefined") return "";
+  return new URLSearchParams(window.location.search).get(key) || "";
+}
+
 const STATUS_COLORS: Record<string, string> = {
   Keep: "#6ba6e8",
   Change: "#e8b458",
@@ -19,8 +25,9 @@ export default function GraphPage() {
     node?: ApplicationNode;
     edge?: IntegrationEdge;
   } | null>(null);
-  const [fy, setFy] = useState<string>("");
-  const [status, setStatus] = useState<string>("");
+  // Initialize from URL query params so dashboard deep links work.
+  const [fy, setFy] = useState<string>(() => initialParam("fiscal_year"));
+  const [status, setStatus] = useState<string>(() => initialParam("status"));
   const [search, setSearch] = useState<string>("");
   const [err, setErr] = useState<string | null>(null);
   const [empty, setEmpty] = useState<boolean>(false);
