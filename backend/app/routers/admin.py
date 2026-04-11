@@ -457,6 +457,7 @@ async def get_page(page_id: str) -> ApiResponse:
     page = await pg_client.fetchrow(
         """
         SELECT p.page_id, p.fiscal_year, p.title, p.project_id, p.page_url,
+               p.parent_id, p.depth,
                p.body_text IS NOT NULL AS has_body,
                p.body_questionnaire,
                p.body_size_chars,
@@ -490,28 +491,158 @@ async def get_page(page_id: str) -> ApiResponse:
     else:
         page_dict["questionnaire"] = None
 
-    attachments = await pg_client.fetch(
+    # Own attachments (physically on this page)
+    own_rows = await pg_client.fetch(
         """
         SELECT attachment_id, title, media_type, file_kind, file_size, version,
-               download_path, local_path
+               download_path, local_path,
+               'own' AS source_kind,
+               NULL::text AS source_page_id,
+               NULL::text AS source_page_title,
+               NULL::text AS diagram_name
         FROM northstar.confluence_attachment
         WHERE page_id = $1
-        ORDER BY
-          CASE file_kind
-            WHEN 'drawio' THEN 1
-            WHEN 'image' THEN 2
-            WHEN 'pdf' THEN 3
-            WHEN 'office' THEN 4
-            ELSE 5
-          END,
-          title
+          AND title NOT LIKE 'drawio-backup%'
+          AND title NOT LIKE '~%'
         """,
         page_id,
     )
+
+    # Descendant attachments — walk parent_id chain downward from this page
+    # (recursive) and gather attachments from every descendant page. Tagged
+    # with the descendant's title so the UI can show "From child <title>".
+    # Only includes non-backup/non-tmp attachments.
+    descendant_rows = await pg_client.fetch(
+        """
+        WITH RECURSIVE subtree AS (
+            SELECT page_id, title, 1 AS lvl
+            FROM northstar.confluence_page
+            WHERE parent_id = $1
+            UNION ALL
+            SELECT c.page_id, c.title, s.lvl + 1
+            FROM northstar.confluence_page c
+            JOIN subtree s ON c.parent_id = s.page_id
+            WHERE s.lvl < 5
+        )
+        SELECT a.attachment_id, a.title, a.media_type, a.file_kind, a.file_size, a.version,
+               a.download_path, a.local_path,
+               'descendant' AS source_kind,
+               s.page_id    AS source_page_id,
+               s.title      AS source_page_title,
+               NULL::text   AS diagram_name
+        FROM subtree s
+        JOIN northstar.confluence_attachment a ON a.page_id = s.page_id
+        WHERE a.title NOT LIKE 'drawio-backup%'
+          AND a.title NOT LIKE '~%'
+        """,
+        page_id,
+    )
+
+    # Referenced drawios — inc-drawio / templateUrl pointing to another page.
+    # Walk the refs owned by this page AND any direct-child page so a folder
+    # row reflects diagrams embedded on its architecture children.
+    referenced_rows = await pg_client.fetch(
+        """
+        WITH incl AS (
+            -- This page and its direct children (parent_id = this page)
+            SELECT page_id, title FROM northstar.confluence_page WHERE page_id = $1
+            UNION
+            SELECT page_id, title FROM northstar.confluence_page WHERE parent_id = $1
+        )
+        SELECT sa.attachment_id, sa.title, sa.media_type, sa.file_kind, sa.file_size, sa.version,
+               sa.download_path, sa.local_path,
+               'referenced' AS source_kind,
+               sp.page_id   AS source_page_id,
+               sp.title     AS source_page_title,
+               dr.diagram_name,
+               incl.page_id AS via_page_id,
+               incl.title   AS via_page_title,
+               dr.macro_kind
+        FROM incl
+        JOIN northstar.drawio_reference dr ON dr.inclusion_page_id = incl.page_id
+        JOIN northstar.confluence_page sp ON sp.page_id = dr.source_page_id
+        JOIN northstar.confluence_attachment sa
+          ON sa.page_id = dr.source_page_id
+         AND sa.file_kind = 'drawio'
+         AND sa.title NOT LIKE 'drawio-backup%'
+         AND sa.title NOT LIKE '~%'
+         AND (dr.diagram_name = '' OR sa.title = dr.diagram_name
+              OR sa.title = dr.diagram_name || '.drawio')
+        """,
+        page_id,
+    )
+
+    # De-dupe: same attachment can appear as descendant + referenced. Prefer
+    # 'referenced' source_kind since it carries diagram_name + macro_kind
+    # context, which is more informative on the UI.
+    seen: dict[str, dict] = {}
+    PRIORITY = {"referenced": 0, "descendant": 1, "own": 2}
+    for row in list(own_rows) + list(descendant_rows) + list(referenced_rows):
+        r = dict(row)
+        key = r["attachment_id"]
+        existing = seen.get(key)
+        if existing is None or PRIORITY[r["source_kind"]] < PRIORITY[existing["source_kind"]]:
+            seen[key] = r
+    unified = list(seen.values())
+    unified.sort(
+        key=lambda r: (
+            {"drawio": 1, "image": 2, "pdf": 3, "office": 4, "xml": 5, "other": 6}.get(
+                r.get("file_kind") or "other", 9
+            ),
+            r.get("title") or "",
+        )
+    )
+
+    # Build a child tree for the Hierarchy tab (direct children only — the
+    # client can follow the page_id link to go deeper). Include their own
+    # attachment/drawio counts (own + ref-direct) so the tree is scannable.
+    children = await pg_client.fetch(
+        """
+        SELECT c.page_id, c.title, c.depth, c.page_url, c.page_type,
+               (SELECT count(*) FROM northstar.confluence_attachment a
+                  WHERE a.page_id = c.page_id
+                    AND a.title NOT LIKE 'drawio-backup%'
+                    AND a.title NOT LIKE '~%') AS own_attachments,
+               (SELECT count(*) FROM northstar.confluence_attachment a
+                  WHERE a.page_id = c.page_id AND a.file_kind = 'drawio'
+                    AND a.title NOT LIKE 'drawio-backup%'
+                    AND a.title NOT LIKE '~%') AS own_drawio,
+               (SELECT count(*) FROM northstar.drawio_reference dr
+                  JOIN northstar.confluence_attachment sa
+                    ON sa.page_id = dr.source_page_id
+                   AND sa.file_kind = 'drawio'
+                   AND sa.title NOT LIKE 'drawio-backup%'
+                   AND sa.title NOT LIKE '~%'
+                   AND (dr.diagram_name = '' OR sa.title = dr.diagram_name
+                        OR sa.title = dr.diagram_name || '.drawio')
+                  WHERE dr.inclusion_page_id = c.page_id) AS ref_drawio
+        FROM northstar.confluence_page c
+        WHERE c.parent_id = $1
+        ORDER BY c.title
+        """,
+        page_id,
+    )
+
+    # Parent page (if any) for breadcrumb
+    parent = None
+    if page_dict.get("parent_id"):
+        parent = await pg_client.fetchrow(
+            """
+            SELECT page_id, title, depth
+            FROM northstar.confluence_page
+            WHERE page_id = $1
+            """,
+            page_dict["parent_id"],
+        )
+
     return ApiResponse(
         data={
             "page": page_dict,
-            "attachments": [dict(a) for a in attachments],
+            # Legacy field name kept for backward compat — points at all
+            # attachments (own + descendant + referenced) with source tags
+            "attachments": [dict(r) for r in unified],
+            "parent": dict(parent) if parent else None,
+            "children": [dict(c) for c in children],
         }
     )
 

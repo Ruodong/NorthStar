@@ -32,6 +32,8 @@ interface Page {
   title: string;
   project_id: string | null;
   page_url: string;
+  parent_id: string | null;
+  depth: number | null;
   has_body: boolean;
   body_size_chars: number | null;
   questionnaire: Questionnaire | null;
@@ -45,6 +47,13 @@ interface Page {
   q_dt_lead_name: string | null;
 }
 
+// source_kind identifies where this attachment actually lives:
+//   "own"        → physically on this page
+//   "descendant" → on a child/grandchild page (source_page_* set)
+//   "referenced" → on an external source page reached via a drawio macro
+//                  reference (inc-drawio or templateUrl). Carries
+//                  diagram_name + macro_kind + via_page_* (which of this
+//                  folder's children the macro actually lives on).
 interface Attachment {
   attachment_id: string;
   title: string;
@@ -54,11 +63,37 @@ interface Attachment {
   version: number | null;
   download_path: string;
   local_path: string | null;
+  source_kind: "own" | "descendant" | "referenced";
+  source_page_id: string | null;
+  source_page_title: string | null;
+  diagram_name: string | null;
+  via_page_id?: string | null;
+  via_page_title?: string | null;
+  macro_kind?: string | null;
+}
+
+interface ParentPage {
+  page_id: string;
+  title: string;
+  depth: number | null;
+}
+
+interface ChildPage {
+  page_id: string;
+  title: string;
+  depth: number | null;
+  page_url: string;
+  page_type: string | null;
+  own_attachments: number;
+  own_drawio: number;
+  ref_drawio: number;
 }
 
 interface Detail {
   page: Page;
   attachments: Attachment[];
+  parent: ParentPage | null;
+  children: ChildPage[];
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -86,7 +121,7 @@ function humanSize(bytes: number | null): string {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
-type Tab = "attachments" | "questionnaire" | "raw";
+type Tab = "attachments" | "hierarchy" | "questionnaire" | "raw";
 
 export default function ConfluencePageDetail() {
   const params = useParams();
@@ -257,6 +292,12 @@ export default function ConfluencePageDetail() {
         <TabButton active={tab === "attachments"} onClick={() => setTab("attachments")}>
           Attachments <Chip>{previewable.length}</Chip>
         </TabButton>
+        <TabButton active={tab === "hierarchy"} onClick={() => setTab("hierarchy")}>
+          Hierarchy{" "}
+          <Chip>
+            {detail.children.length + (detail.parent ? 1 : 0)}
+          </Chip>
+        </TabButton>
         <TabButton
           active={tab === "questionnaire"}
           onClick={() => setTab("questionnaire")}
@@ -330,6 +371,7 @@ export default function ConfluencePageDetail() {
                     </span>
                   </div>
                   <div style={{ marginTop: 4, wordBreak: "break-all" }}>{a.title}</div>
+                  <SourceBadge a={a} />
                   {!a.local_path && (
                     <div style={{ fontSize: 10, color: "#e8716b", marginTop: 3 }}>
                       not downloaded
@@ -360,6 +402,15 @@ export default function ConfluencePageDetail() {
             )}
           </div>
         </div>
+      )}
+
+      {tab === "hierarchy" && (
+        <HierarchyView
+          currentTitle={detail.page.title}
+          currentDepth={detail.page.depth}
+          parent={detail.parent}
+          children={detail.children}
+        />
       )}
 
       {tab === "questionnaire" && (
@@ -813,5 +864,288 @@ function XmlPreview({ src }: { src: string }) {
       {text.slice(0, 50000)}
       {text.length > 50000 && "\n... (truncated)"}
     </pre>
+  );
+}
+
+// ---- Source badge: tags each attachment in the list with its origin ----
+// "own"        : physically on this page (no badge, cleanest look)
+// "descendant" : on a child/grandchild → show "from <child title>"
+// "referenced" : reached via an inc-drawio/templateUrl macro → show
+//                source page + (if a direct-child page owns the macro)
+//                which child the macro is on
+function SourceBadge({ a }: { a: Attachment }) {
+  if (a.source_kind === "own") return null;
+  if (a.source_kind === "descendant") {
+    return (
+      <div
+        style={{
+          fontSize: 10,
+          marginTop: 4,
+          color: "var(--text-dim)",
+          fontFamily: "var(--font-mono)",
+          display: "flex",
+          gap: 6,
+          alignItems: "center",
+        }}
+      >
+        <span
+          style={{
+            padding: "1px 5px",
+            background: "rgba(107,166,232,0.12)",
+            color: "#6ba6e8",
+            borderRadius: "var(--radius-sm)",
+            border: "1px solid rgba(107,166,232,0.35)",
+            fontWeight: 600,
+          }}
+        >
+          CHILD
+        </span>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+          {a.source_page_title || a.source_page_id}
+        </span>
+      </div>
+    );
+  }
+  // referenced
+  return (
+    <div
+      style={{
+        fontSize: 10,
+        marginTop: 4,
+        color: "var(--text-dim)",
+        fontFamily: "var(--font-mono)",
+        lineHeight: 1.45,
+      }}
+    >
+      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <span
+          style={{
+            padding: "1px 5px",
+            background: "rgba(246,166,35,0.12)",
+            color: "var(--accent)",
+            borderRadius: "var(--radius-sm)",
+            border: "1px solid rgba(246,166,35,0.35)",
+            fontWeight: 600,
+          }}
+          title={`${a.macro_kind} macro`}
+        >
+          REF
+        </span>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
+          {a.source_page_title || a.source_page_id}
+        </span>
+      </div>
+      {a.via_page_title && a.via_page_id !== a.source_page_id && (
+        <div
+          style={{
+            marginTop: 2,
+            paddingLeft: 2,
+            color: "var(--text-dim)",
+            fontSize: 9,
+          }}
+        >
+          via {a.via_page_title.slice(0, 40)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Hierarchy tab: parent + current + children tree ----
+// Answers two questions at a glance:
+//   1. Where is this page in its project tree? (parent breadcrumb)
+//   2. What lives underneath it? (children with their drawio counts)
+function HierarchyView({
+  currentTitle,
+  currentDepth,
+  parent,
+  children,
+}: {
+  currentTitle: string;
+  currentDepth: number | null;
+  parent: ParentPage | null;
+  children: ChildPage[];
+}) {
+  return (
+    <div className="panel" style={{ padding: 24 }}>
+      <div className="panel-title" style={{ marginBottom: 16 }}>
+        Page Hierarchy
+      </div>
+
+      {/* Parent breadcrumb */}
+      {parent && (
+        <div style={{ marginBottom: 10, fontSize: 13 }}>
+          <div
+            style={{
+              fontSize: 10,
+              textTransform: "uppercase",
+              letterSpacing: 0.6,
+              color: "var(--text-dim)",
+              marginBottom: 4,
+            }}
+          >
+            Parent
+          </div>
+          <Link
+            href={`/admin/confluence/${parent.page_id}`}
+            style={{
+              color: "var(--accent)",
+              textDecoration: "none",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: 11 }}>
+              d={parent.depth}
+            </span>
+            {parent.title}
+            <span style={{ color: "var(--text-dim)" }}>↗</span>
+          </Link>
+        </div>
+      )}
+
+      {/* Current node */}
+      <div
+        style={{
+          padding: "10px 14px",
+          marginTop: parent ? 8 : 0,
+          marginBottom: 16,
+          background: "var(--surface-hover)",
+          borderLeft: "2px solid var(--accent)",
+          borderRadius: "var(--radius-md)",
+        }}
+      >
+        <div
+          style={{
+            fontSize: 10,
+            textTransform: "uppercase",
+            letterSpacing: 0.6,
+            color: "var(--accent)",
+            marginBottom: 4,
+          }}
+        >
+          This page
+        </div>
+        <div style={{ fontSize: 14, color: "var(--text)" }}>
+          <span
+            style={{
+              color: "var(--text-dim)",
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+              marginRight: 10,
+            }}
+          >
+            d={currentDepth ?? "?"}
+          </span>
+          {currentTitle}
+        </div>
+      </div>
+
+      {/* Children */}
+      <div
+        style={{
+          fontSize: 10,
+          textTransform: "uppercase",
+          letterSpacing: 0.6,
+          color: "var(--text-dim)",
+          marginBottom: 8,
+        }}
+      >
+        Children ({children.length})
+      </div>
+      {children.length === 0 ? (
+        <div className="empty" style={{ padding: "12px 0" }}>
+          No child pages under this node.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column" }}>
+          {children.map((c) => (
+            <Link
+              key={c.page_id}
+              href={`/admin/confluence/${c.page_id}`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                padding: "10px 14px",
+                borderBottom: "1px solid var(--border)",
+                color: "var(--text)",
+                textDecoration: "none",
+                fontSize: 13,
+                borderLeft: "2px solid transparent",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = "var(--surface-hover)";
+                e.currentTarget.style.borderLeftColor = "var(--border-strong)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = "transparent";
+                e.currentTarget.style.borderLeftColor = "transparent";
+              }}
+            >
+              <span
+                style={{
+                  color: "var(--text-dim)",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 11,
+                  width: 24,
+                  flexShrink: 0,
+                }}
+              >
+                d={c.depth}
+              </span>
+              <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+                {c.title}
+              </span>
+              <CountChip
+                label="att"
+                value={c.own_attachments}
+                color="var(--text-muted)"
+              />
+              <CountChip
+                label="drawio"
+                value={c.own_drawio + c.ref_drawio}
+                color={
+                  c.own_drawio + c.ref_drawio > 0 ? "var(--accent)" : "var(--text-dim)"
+                }
+              />
+            </Link>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CountChip({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: number;
+  color: string;
+}) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "baseline",
+        gap: 4,
+        padding: "2px 8px",
+        fontFamily: "var(--font-mono)",
+        fontSize: 11,
+        color,
+        background: "var(--bg-elevated)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-sm)",
+        minWidth: 60,
+        justifyContent: "flex-end",
+      }}
+    >
+      <span>{value}</span>
+      <span style={{ fontSize: 9, color: "var(--text-dim)" }}>{label}</span>
+    </span>
   );
 }
