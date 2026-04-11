@@ -1099,11 +1099,69 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
         page_id,
     )
 
+    # Python-side arch-bucket sort so the Extracted tab mirrors the same
+    # "App Arch first → Tech Arch second → other" ordering as the
+    # Attachments tab. The row_to_bucket helper reuses the exact same
+    # _APP_ARCH_RE / _TECH_ARCH_RE regexes, and falls back to the
+    # attachment_title when source_page_title doesn't match.
+    def _extracted_sort_key(row: dict) -> tuple:
+        haystack = " ".join(
+            s for s in (
+                row.get("attachment_title"),
+                row.get("source_page_title"),
+            ) if s
+        )
+        if _APP_ARCH_RE.search(haystack):
+            bucket = 0
+        elif _TECH_ARCH_RE.search(haystack):
+            bucket = 1
+        else:
+            bucket = 2
+        # Within a bucket, sort by source_page_title (stable) then
+        # attachment_title so sibling drawios on the same child page
+        # stay adjacent in the same order they appear in Attachments.
+        return (
+            bucket,
+            row.get("source_page_title") or "",
+            row.get("attachment_title") or "",
+        )
+
+    by_attachment_sorted = sorted(
+        [dict(r) for r in by_attachment],
+        key=_extracted_sort_key,
+    )
+    # Apps + interactions inherit the same ordering via a dict lookup on
+    # attachment_id → sorted index. The frontend groups them by
+    # attachment_id so this aligns the per-attachment cards with the
+    # by_attachment rollup order.
+    att_order = {
+        f["attachment_id"]: i for i, f in enumerate(by_attachment_sorted)
+    }
+    fallback_idx = len(by_attachment_sorted)
+
+    def _app_order(row: dict) -> tuple:
+        return (
+            att_order.get(row.get("attachment_id"), fallback_idx),
+            0 if row.get("standard_id") else 1,
+            row.get("app_name") or "",
+        )
+
+    def _interaction_order(row: dict) -> tuple:
+        return (
+            att_order.get(row.get("attachment_id"), fallback_idx),
+            row.get("edge_cell_id") or "",
+        )
+
+    apps_sorted = sorted([dict(r) for r in apps], key=_app_order)
+    interactions_sorted = sorted(
+        [dict(r) for r in interactions], key=_interaction_order
+    )
+
     return ApiResponse(
         data={
-            "apps": [dict(r) for r in apps],
-            "interactions": [dict(r) for r in interactions],
-            "by_attachment": [dict(r) for r in by_attachment],
+            "apps": apps_sorted,
+            "interactions": interactions_sorted,
+            "by_attachment": by_attachment_sorted,
             "major_apps": [dict(r) for r in major_apps],
         }
     )
