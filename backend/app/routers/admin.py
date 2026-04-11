@@ -174,7 +174,12 @@ async def list_pages(
             LEFT JOIN northstar.ref_project rp ON rp.project_id = p.project_id
             LEFT JOIN northstar.ref_application ra ON ra.app_id = p.q_app_id
             {where_clause}
-            ORDER BY p.fiscal_year DESC, p.title
+            -- Same adjacency rule as the grouped query so switching views
+            -- keeps ordering stable for the user.
+            ORDER BY p.fiscal_year DESC,
+                     p.project_id ASC NULLS LAST,
+                     p.title ASC,
+                     COALESCE(p.q_app_id, '') ASC
             LIMIT ${len(args) - 1} OFFSET ${len(args)}
             """,
             *args,
@@ -299,7 +304,20 @@ async def list_pages(
         LEFT JOIN northstar.ref_application ra
                ON ra.app_id = COALESCE(g.link_app_id, g.effective_app_id, g.q_app_id)
         WHERE g.rn = 1
-        ORDER BY g.fiscal_year DESC, g.title
+        -- Ontology fix (2026-04-10): sort so that all rows sharing the same
+        -- project_id are strictly adjacent, with orphan rows (no project_id)
+        -- sinking to the tail of each FY bucket. Secondary sorts by title,
+        -- then app_id so the order is stable and pagination-friendly. The
+        -- frontend relies on this adjacency for rowspan-style group folding.
+        ORDER BY g.fiscal_year DESC,
+                 g.project_id ASC NULLS LAST,
+                 g.title ASC,
+                 COALESCE(
+                     g.link_app_id,
+                     g.effective_app_id,
+                     g.q_app_id,
+                     ''
+                 ) ASC
         LIMIT ${len(args) - 1} OFFSET ${len(args)}
         """,
         *args,
