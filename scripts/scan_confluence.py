@@ -219,6 +219,255 @@ def list_attachments(client: httpx.Client, page_id: str) -> list[dict]:
     return data.get("results", [])
 
 
+# Recursion cap. FY parent (depth=0) → project page (depth=1) →
+# "* Application Architecture" / "* Technical Architecture" child (depth=2)
+# → (rare) deeper sub-pages (depth=3). Anything below 3 is cut off to prevent
+# runaway walks on pathological trees.
+MAX_DEPTH = 3
+
+
+def process_page(
+    client: httpx.Client,
+    pg: "psycopg.Connection",
+    page: dict,
+    fy: str,
+    parent_id: Optional[str],
+    depth: int,
+    ancestor_project_id: Optional[str],
+    args: argparse.Namespace,
+    base: str,
+    attach_root: Path,
+    root: Path,
+    totals: dict,
+) -> None:
+    """Upsert one Confluence page + its attachments, then recursively descend
+    into children up to MAX_DEPTH. Spec: confluence-child-pages FR-1..FR-8.
+    """
+    page_id = page["id"]
+    title = page["title"]
+    project_id_match = PROJECT_ID_RE.search(title)
+    project_id = project_id_match.group(1) if project_id_match else None
+
+    # Detect application review pages: "A000394 - LBP", "A002025 Survey Center", etc.
+    app_title_match = APP_TITLE_RE.match(title)
+    title_app_id = app_title_match.group(1) if app_title_match else None
+
+    # Classify page type
+    if title_app_id:
+        page_type = "application"
+    elif project_id:
+        page_type = "project"
+    else:
+        page_type = "other"
+
+    page_url = f"{base}/pages/viewpage.action?pageId={page_id}"
+
+    # Fetch + parse the page body (questionnaire lives here)
+    body_html = fetch_page_body(client, page_id) if not args.no_body else None
+    body_text = ""
+    body_q_json: Optional[str] = None
+    body_q_obj: Optional[dict] = None
+    body_size = 0
+    if body_html:
+        try:
+            parsed_body = parse_body(body_html)
+            body_q_obj = {
+                "sections": parsed_body.get("sections", []),
+                "expand_panels": parsed_body.get("expand_panels", []),
+                "stats": parsed_body.get("stats", {}),
+            }
+            body_text = parsed_body.get("text", "")
+            body_q_json = json.dumps(body_q_obj, ensure_ascii=False)
+            body_size = len(body_html)
+            totals["bodies_parsed"] = totals.get("bodies_parsed", 0) + 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("    body parse failed for %s: %s", page_id, exc)
+            totals["errors"] += 1
+
+    # Extract typed fields from the questionnaire for fast SQL join
+    typed = extract_typed_fields(body_q_obj) if body_q_obj else {}
+
+    # If title didn't yield a project_id but the questionnaire did
+    # and it matches a known pattern, use the questionnaire value.
+    final_project_id = project_id
+    if final_project_id is None and typed.get("q_project_id"):
+        m = _PROJECT_ID_PATTERN.search(typed["q_project_id"])
+        if m:
+            final_project_id = m.group(1)
+
+    # FR-8: inherit project_id from ancestor when title/questionnaire have none.
+    # Child "Application Architecture" / "Technical Architecture" pages
+    # typically have no project id in their own title, so we fall back to the
+    # project id of the nearest project ancestor.
+    if final_project_id is None:
+        final_project_id = ancestor_project_id
+
+    # Sometimes the questionnaire 'Project ID' field actually holds
+    # a CMDB application id (e.g. 'Tosca' page → A004164). Promote
+    # those to q_app_id so the page classifies as 'application'.
+    promoted_app_id = title_app_id
+    if promoted_app_id is None and typed.get("q_project_id"):
+        if _APP_ID_PATTERN.match(typed["q_project_id"].strip()):
+            promoted_app_id = typed["q_project_id"].strip()
+
+    # Re-classify after promotion
+    if promoted_app_id:
+        page_type = "application"
+    elif final_project_id and page_type != "application":
+        page_type = "project"
+    else:
+        page_type = page_type  # keep "other"
+
+    with pg.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO northstar.confluence_page
+                (page_id, fiscal_year, title, project_id, page_url,
+                 body_html, body_text, body_questionnaire, body_size_chars,
+                 q_project_id, q_project_name, q_pm, q_it_lead, q_dt_lead,
+                 q_app_id, page_type, parent_id, depth,
+                 last_seen, synced_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s,
+                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    NOW(), NOW())
+            ON CONFLICT (page_id) DO UPDATE SET
+                fiscal_year = EXCLUDED.fiscal_year,
+                title = EXCLUDED.title,
+                project_id = COALESCE(EXCLUDED.project_id, northstar.confluence_page.project_id),
+                page_url = EXCLUDED.page_url,
+                body_html = COALESCE(EXCLUDED.body_html, northstar.confluence_page.body_html),
+                body_text = COALESCE(EXCLUDED.body_text, northstar.confluence_page.body_text),
+                body_questionnaire = COALESCE(EXCLUDED.body_questionnaire, northstar.confluence_page.body_questionnaire),
+                body_size_chars = COALESCE(EXCLUDED.body_size_chars, northstar.confluence_page.body_size_chars),
+                q_project_id = COALESCE(EXCLUDED.q_project_id, northstar.confluence_page.q_project_id),
+                q_project_name = COALESCE(EXCLUDED.q_project_name, northstar.confluence_page.q_project_name),
+                q_pm = COALESCE(EXCLUDED.q_pm, northstar.confluence_page.q_pm),
+                q_it_lead = COALESCE(EXCLUDED.q_it_lead, northstar.confluence_page.q_it_lead),
+                q_dt_lead = COALESCE(EXCLUDED.q_dt_lead, northstar.confluence_page.q_dt_lead),
+                q_app_id = COALESCE(EXCLUDED.q_app_id, northstar.confluence_page.q_app_id),
+                page_type = EXCLUDED.page_type,
+                parent_id = EXCLUDED.parent_id,
+                depth = EXCLUDED.depth,
+                last_seen = NOW()
+            """,
+            (
+                page_id, fy, title, final_project_id, page_url,
+                body_html, body_text, body_q_json, body_size,
+                typed.get("q_project_id"),
+                typed.get("q_project_name"),
+                typed.get("q_pm"),
+                typed.get("q_it_lead"),
+                typed.get("q_dt_lead"),
+                promoted_app_id,
+                page_type,
+                parent_id,
+                depth,
+            ),
+        )
+    totals["pages"] += 1
+
+    # Attachments
+    try:
+        attachments = list_attachments(client, page_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("    attachments list failed for %s: %s", page_id, exc)
+        totals["errors"] += 1
+        attachments = []
+
+    for att in attachments:
+        att_id = att["id"]
+        a_title = att.get("title", "")
+        mt = att.get("metadata", {}).get("mediaType", "")
+        kind = classify(mt, a_title)
+        size = att.get("extensions", {}).get("fileSize") or att.get("metadata", {}).get(
+            "properties", {}
+        ).get("fileSize", {}).get("value", 0)
+        try:
+            size_int = int(size) if size is not None else 0
+        except (TypeError, ValueError):
+            size_int = 0
+        version = att.get("version", {}).get("number", 0)
+        download = att.get("_links", {}).get("download", "")
+        if not download:
+            continue
+
+        local_path: Optional[str] = None
+        should_download = (
+            not args.no_download
+            and not a_title.startswith("drawio-backup")
+            and not a_title.startswith("~")
+        )
+        if should_download and args.kinds and kind not in args.kinds:
+            should_download = False
+            totals["skipped_kind"] += 1
+
+        if should_download:
+            ext = extension(mt, a_title)
+            local_file = attach_root / f"{att_id}{ext}"
+            if not local_file.exists():
+                try:
+                    with client.stream("GET", download) as resp:
+                        resp.raise_for_status()
+                        with open(local_file, "wb") as f:
+                            for chunk in resp.iter_bytes(chunk_size=65536):
+                                f.write(chunk)
+                    totals["downloaded"] += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("    download failed %s: %s", a_title, exc)
+                    totals["errors"] += 1
+                    local_file = None
+            local_path = str(local_file.relative_to(root)) if local_file else None
+
+        with pg.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO northstar.confluence_attachment
+                    (attachment_id, page_id, title, media_type, file_kind,
+                     file_size, version, download_path, local_path, last_seen, synced_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                ON CONFLICT (attachment_id) DO UPDATE SET
+                    title = EXCLUDED.title,
+                    media_type = EXCLUDED.media_type,
+                    file_kind = EXCLUDED.file_kind,
+                    file_size = EXCLUDED.file_size,
+                    version = EXCLUDED.version,
+                    download_path = EXCLUDED.download_path,
+                    local_path = coalesce(EXCLUDED.local_path, northstar.confluence_attachment.local_path),
+                    last_seen = NOW()
+                """,
+                (
+                    att_id, page_id, a_title, mt, kind,
+                    size_int, version, download, local_path,
+                ),
+            )
+        totals["attachments"] += 1
+
+    pg.commit()
+
+    # Recurse into children — FR-1 depth-first walk up to MAX_DEPTH
+    if depth >= MAX_DEPTH:
+        return
+    try:
+        children = list_children(client, page_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("    child list failed for %s: %s", page_id, exc)
+        totals["errors"] += 1
+        return
+
+    if not children:
+        return
+
+    # Pass our own project_id down as the ancestor for children
+    child_ancestor_pid = final_project_id or ancestor_project_id
+    totals["descents"] = totals.get("descents", 0) + 1
+    for child in children:
+        process_page(
+            client, pg, child, fy, page_id, depth + 1,
+            child_ancestor_pid, args, base, attach_root, root, totals,
+        )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--fy", action="append", help="Fiscal year (repeat). Defaults to all 6.")
@@ -256,198 +505,21 @@ def main() -> int:
             logger.info("  %d project pages", len(pages))
 
             for i, page in enumerate(pages, 1):
-                page_id = page["id"]
-                title = page["title"]
-                project_id_match = PROJECT_ID_RE.search(title)
-                project_id = project_id_match.group(1) if project_id_match else None
-
-                # Detect application review pages: "A000394 - LBP", "A002025 Survey Center", etc.
-                app_title_match = APP_TITLE_RE.match(title)
-                title_app_id = app_title_match.group(1) if app_title_match else None
-
-                # Classify page type
-                if title_app_id:
-                    page_type = "application"
-                elif project_id:
-                    page_type = "project"
-                else:
-                    page_type = "other"
-
-                page_url = f"{base}/pages/viewpage.action?pageId={page_id}"
-
-                # Fetch + parse the page body (questionnaire lives here)
-                body_html = fetch_page_body(client, page_id) if not args.no_body else None
-                body_text = ""
-                body_q_json: Optional[str] = None
-                body_q_obj: Optional[dict] = None
-                body_size = 0
-                if body_html:
-                    try:
-                        parsed_body = parse_body(body_html)
-                        body_q_obj = {
-                            "sections": parsed_body.get("sections", []),
-                            "expand_panels": parsed_body.get("expand_panels", []),
-                            "stats": parsed_body.get("stats", {}),
-                        }
-                        body_text = parsed_body.get("text", "")
-                        body_q_json = json.dumps(body_q_obj, ensure_ascii=False)
-                        body_size = len(body_html)
-                        totals["bodies_parsed"] = totals.get("bodies_parsed", 0) + 1
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("    body parse failed for %s: %s", page_id, exc)
-                        totals["errors"] += 1
-
-                # Extract typed fields from the questionnaire for fast SQL join
-                typed = extract_typed_fields(body_q_obj) if body_q_obj else {}
-
-                # If title didn't yield a project_id but the questionnaire did
-                # and it matches a known pattern, use the questionnaire value.
-                final_project_id = project_id
-                if final_project_id is None and typed.get("q_project_id"):
-                    m = _PROJECT_ID_PATTERN.search(typed["q_project_id"])
-                    if m:
-                        final_project_id = m.group(1)
-
-                # Sometimes the questionnaire 'Project ID' field actually holds
-                # a CMDB application id (e.g. 'Tosca' page → A004164). Promote
-                # those to q_app_id so the page classifies as 'application'.
-                promoted_app_id = title_app_id
-                if promoted_app_id is None and typed.get("q_project_id"):
-                    if _APP_ID_PATTERN.match(typed["q_project_id"].strip()):
-                        promoted_app_id = typed["q_project_id"].strip()
-
-                # Re-classify after promotion
-                if promoted_app_id:
-                    page_type = "application"
-                elif final_project_id:
-                    page_type = "project"
-                else:
-                    page_type = "other"
-
-                with pg.cursor() as cur:
-                    cur.execute(
-                        """
-                        INSERT INTO northstar.confluence_page
-                            (page_id, fiscal_year, title, project_id, page_url,
-                             body_html, body_text, body_questionnaire, body_size_chars,
-                             q_project_id, q_project_name, q_pm, q_it_lead, q_dt_lead,
-                             q_app_id, page_type,
-                             last_seen, synced_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s,
-                                %s, %s, %s, %s, %s,
-                                %s, %s,
-                                NOW(), NOW())
-                        ON CONFLICT (page_id) DO UPDATE SET
-                            fiscal_year = EXCLUDED.fiscal_year,
-                            title = EXCLUDED.title,
-                            project_id = COALESCE(EXCLUDED.project_id, northstar.confluence_page.project_id),
-                            page_url = EXCLUDED.page_url,
-                            body_html = COALESCE(EXCLUDED.body_html, northstar.confluence_page.body_html),
-                            body_text = COALESCE(EXCLUDED.body_text, northstar.confluence_page.body_text),
-                            body_questionnaire = COALESCE(EXCLUDED.body_questionnaire, northstar.confluence_page.body_questionnaire),
-                            body_size_chars = COALESCE(EXCLUDED.body_size_chars, northstar.confluence_page.body_size_chars),
-                            q_project_id = COALESCE(EXCLUDED.q_project_id, northstar.confluence_page.q_project_id),
-                            q_project_name = COALESCE(EXCLUDED.q_project_name, northstar.confluence_page.q_project_name),
-                            q_pm = COALESCE(EXCLUDED.q_pm, northstar.confluence_page.q_pm),
-                            q_it_lead = COALESCE(EXCLUDED.q_it_lead, northstar.confluence_page.q_it_lead),
-                            q_dt_lead = COALESCE(EXCLUDED.q_dt_lead, northstar.confluence_page.q_dt_lead),
-                            q_app_id = COALESCE(EXCLUDED.q_app_id, northstar.confluence_page.q_app_id),
-                            page_type = EXCLUDED.page_type,
-                            last_seen = NOW()
-                        """,
-                        (
-                            page_id, fy, title, final_project_id, page_url,
-                            body_html, body_text, body_q_json, body_size,
-                            typed.get("q_project_id"),
-                            typed.get("q_project_name"),
-                            typed.get("q_pm"),
-                            typed.get("q_it_lead"),
-                            typed.get("q_dt_lead"),
-                            promoted_app_id,
-                            page_type,
-                        ),
-                    )
-                totals["pages"] += 1
-
-                try:
-                    attachments = list_attachments(client, page_id)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("    attachments list failed for %s: %s", page_id, exc)
-                    totals["errors"] += 1
-                    pg.commit()
-                    continue
-
-                for att in attachments:
-                    att_id = att["id"]
-                    a_title = att.get("title", "")
-                    mt = att.get("metadata", {}).get("mediaType", "")
-                    kind = classify(mt, a_title)
-                    size = att.get("extensions", {}).get("fileSize") or att.get("metadata", {}).get(
-                        "properties", {}
-                    ).get("fileSize", {}).get("value", 0)
-                    try:
-                        size_int = int(size) if size is not None else 0
-                    except (TypeError, ValueError):
-                        size_int = 0
-                    version = att.get("version", {}).get("number", 0)
-                    download = att.get("_links", {}).get("download", "")
-                    if not download:
-                        continue
-
-                    local_path: Optional[str] = None
-                    should_download = (
-                        not args.no_download
-                        and not a_title.startswith("drawio-backup")
-                        and not a_title.startswith("~")
-                    )
-                    if should_download and args.kinds and kind not in args.kinds:
-                        should_download = False
-                        totals["skipped_kind"] += 1
-
-                    if should_download:
-                        ext = extension(mt, a_title)
-                        local_file = attach_root / f"{att_id}{ext}"
-                        if not local_file.exists():
-                            try:
-                                with client.stream("GET", download) as resp:
-                                    resp.raise_for_status()
-                                    with open(local_file, "wb") as f:
-                                        for chunk in resp.iter_bytes(chunk_size=65536):
-                                            f.write(chunk)
-                                totals["downloaded"] += 1
-                            except Exception as exc:  # noqa: BLE001
-                                logger.warning("    download failed %s: %s", a_title, exc)
-                                totals["errors"] += 1
-                                local_file = None
-                        local_path = str(local_file.relative_to(root)) if local_file else None
-
-                    with pg.cursor() as cur:
-                        cur.execute(
-                            """
-                            INSERT INTO northstar.confluence_attachment
-                                (attachment_id, page_id, title, media_type, file_kind,
-                                 file_size, version, download_path, local_path, last_seen, synced_at)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
-                            ON CONFLICT (attachment_id) DO UPDATE SET
-                                title = EXCLUDED.title,
-                                media_type = EXCLUDED.media_type,
-                                file_kind = EXCLUDED.file_kind,
-                                file_size = EXCLUDED.file_size,
-                                version = EXCLUDED.version,
-                                download_path = EXCLUDED.download_path,
-                                local_path = coalesce(EXCLUDED.local_path, northstar.confluence_attachment.local_path),
-                                last_seen = NOW()
-                            """,
-                            (
-                                att_id, page_id, a_title, mt, kind,
-                                size_int, version, download, local_path,
-                            ),
-                        )
-                    totals["attachments"] += 1
-
-                pg.commit()
+                # Depth 1 = direct children of the FY parent; those are the
+                # "project pages" in the old model. process_page recurses from
+                # there up to MAX_DEPTH.
+                process_page(
+                    client, pg, page, fy,
+                    parent_id=parent_id, depth=1,
+                    ancestor_project_id=None,
+                    args=args, base=base,
+                    attach_root=attach_root, root=root, totals=totals,
+                )
                 if i % 20 == 0:
-                    logger.info("  [%s] %d/%d pages processed", fy, i, len(pages))
+                    logger.info(
+                        "  [%s] %d/%d project pages processed (pages_total=%d)",
+                        fy, i, len(pages), totals["pages"],
+                    )
     finally:
         client.close()
         pg.close()

@@ -59,6 +59,9 @@
     },
     "scripts/load_neo4j_from_confluence.py": {
       "api": ["api-tests/test_ontology.py"]
+    },
+    "scripts/scan_confluence.py": {
+      "api": ["api-tests/test_confluence_child_pages.py"]
     }
   },
   "wildcards": {
