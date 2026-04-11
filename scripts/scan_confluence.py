@@ -281,9 +281,12 @@ def _parse_drawio_refs(inclusion_page_id: str, body_html: str) -> list[dict]:
 
 # Recursion cap. FY parent (depth=0) → project page (depth=1) →
 # "* Application Architecture" / "* Technical Architecture" child (depth=2)
-# → (rare) deeper sub-pages (depth=3). Anything below 3 is cut off to prevent
-# runaway walks on pathological trees.
-MAX_DEPTH = 3
+# → sub-page (depth=3) → solution/tech-design detail (depth=4). The depth=4
+# pages under LI2400444 (FY2526) hold the real embedded drawios for each
+# sub-workstream, so the scanner must reach them. We keep one extra level
+# (depth=5) as headroom for the rare deeper tree without risking runaway
+# walks on pathological structures.
+MAX_DEPTH = 5
 
 
 def process_page(
