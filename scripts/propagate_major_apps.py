@@ -78,25 +78,39 @@ def main() -> int:
                 logger.info("  cleared existing major_app links for %s (%d rows)",
                             args.page_id, cur.rowcount)
 
+        # Load (page_id, parent_id, q_app_id) for all pages so we can walk
+        # the parent chain for the second-pass inheritance.
         with conn.cursor() as cur:
             if args.page_id:
                 cur.execute(
-                    "SELECT page_id FROM northstar.confluence_page WHERE page_id = %s",
+                    """
+                    SELECT page_id, parent_id, q_app_id
+                    FROM northstar.confluence_page
+                    WHERE page_id = %s
+                    """,
                     (args.page_id,),
                 )
             else:
-                cur.execute("SELECT page_id FROM northstar.confluence_page")
-            pages = [r["page_id"] for r in cur.fetchall()]
+                cur.execute(
+                    """
+                    SELECT page_id, parent_id, q_app_id
+                    FROM northstar.confluence_page
+                    """
+                )
+            page_rows = cur.fetchall()
+        parent_of = {r["page_id"]: r["parent_id"] for r in page_rows}
+        q_app_of  = {r["page_id"]: r["q_app_id"] for r in page_rows}
+        pages = [r["page_id"] for r in page_rows]
         logger.info("loaded %d confluence_page rows", len(pages))
 
-        # Use a single cursor for the per-page walk — the subquery below is
-        # cheap (indexed on parent_id + attachment_id + standard_id).
+        # ==== FIRST PASS ====
+        # Per-page subtree walk (unchanged semantics): each page collects
+        # every major app found in its own subtree up to MAX_DEPTH.
+        page_own_majors: dict[str, list[str]] = {}
+
         with conn.cursor() as query_cur, conn.cursor() as wcur:
             for i, page_id in enumerate(pages, 1):
                 stats["pages_seen"] += 1
-                # Find all unique major app ids in this page's subtree.
-                # We use the effective id (COALESCE resolved, standard) so
-                # reconciled apps collapse onto the corrected A-id.
                 query_cur.execute(
                     """
                     WITH RECURSIVE subtree AS (
@@ -127,6 +141,7 @@ def main() -> int:
                      "statuses": list(MAJOR_STATUSES)},
                 )
                 majors = [r["app_id"] for r in query_cur.fetchall()]
+                page_own_majors[page_id] = majors
                 if not majors:
                     continue
                 stats["pages_with_majors"] += 1
@@ -148,7 +163,6 @@ def main() -> int:
                         """,
                         (page_id, app_id),
                     )
-                    # psycopg rowcount is 1 on insert, 0 on conflict
                     if wcur.rowcount == 1:
                         stats["link_rows_inserted"] += 1
                     else:
@@ -158,6 +172,62 @@ def main() -> int:
                     conn.commit()
                     logger.info("  progress: %d/%d  inserted=%d", i, len(pages),
                                 stats["link_rows_inserted"])
+
+            # ==== SECOND PASS: ancestor inheritance ====
+            # For any page with NO own majors AND no q_app_id (meaning it's
+            # not a standalone app page), walk up the parent chain until
+            # we find a parent that has majors. Copy those links down so
+            # the empty leaf joins its parent's group instead of falling
+            # into the NA bucket as a ghost row. Stops at the first ancestor
+            # with a q_app_id (that ancestor owns its own identity — don't
+            # inherit across an app-identity boundary, which prevents
+            # LI2500120-style cross-contamination between sub-app folders).
+            stats.setdefault("pages_inherited_from_ancestor", 0)
+            stats.setdefault("inherited_link_rows_inserted", 0)
+            for page_id in pages:
+                if page_own_majors.get(page_id):
+                    continue
+                if q_app_of.get(page_id):
+                    # Page owns its own identity → do not inherit
+                    continue
+                # Walk up until we find majors or hit an identity boundary
+                current = parent_of.get(page_id)
+                inherited: list[str] = []
+                while current:
+                    if q_app_of.get(current):
+                        # Ancestor owns an identity; its own majors are
+                        # OK to inherit (they belong to the same logical
+                        # app group as this orphan leaf), so we take them
+                        # and then stop walking up.
+                        inherited = page_own_majors.get(current) or []
+                        break
+                    parent_majors = page_own_majors.get(current) or []
+                    if parent_majors:
+                        inherited = parent_majors
+                        break
+                    current = parent_of.get(current)
+                if not inherited:
+                    continue
+                stats["pages_inherited_from_ancestor"] += 1
+
+                if args.dry_run:
+                    if stats["pages_inherited_from_ancestor"] <= 10:
+                        logger.info("  dry inherit %s ← %s → %d majors",
+                                    page_id, current, len(inherited))
+                    continue
+
+                for app_id in inherited:
+                    wcur.execute(
+                        """
+                        INSERT INTO northstar.confluence_page_app_link
+                            (page_id, app_id, source)
+                        VALUES (%s, %s, 'major_app')
+                        ON CONFLICT (page_id, app_id) DO NOTHING
+                        """,
+                        (page_id, app_id),
+                    )
+                    if wcur.rowcount == 1:
+                        stats["inherited_link_rows_inserted"] += 1
 
         if not args.dry_run:
             conn.commit()
