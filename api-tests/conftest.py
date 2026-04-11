@@ -52,13 +52,15 @@ NEO4J_PASSWORD = os.environ.get("NEO4J_PASSWORD", "northstar_dev")
 # HTTP client
 # -----------------------------------------------------------------------------
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture
 async def api() -> AsyncIterator[httpx.AsyncClient]:
-    """Session-scoped async HTTP client pointed at the running backend."""
+    """Function-scoped async HTTP client pointed at the running backend.
+
+    Function scope keeps the httpx client bound to the current event loop,
+    avoiding the pytest-asyncio <0.24 "Event loop is closed" trap when a
+    session-scoped client is reused across tests that each spin their own loop.
+    """
     async with httpx.AsyncClient(base_url=API_URL, timeout=15.0) as client:
-        # Early health check — fail fast if backend is down
-        r = await client.get("/health")
-        assert r.status_code == 200, f"backend not reachable at {API_URL}"
         yield client
 
 

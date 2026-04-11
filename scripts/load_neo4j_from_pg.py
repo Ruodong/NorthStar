@@ -333,7 +333,11 @@ def main() -> int:
             "confluence_page_id": None,
             "download_path": None,
             "local_path": None,
-            "has_graph_data": bool(diag.get("drawio_xml")),
+            # Spec AC-5 / FR-8: only App_Arch diagrams contribute INTEGRATES_WITH
+            # edges. Tech_Arch diagrams are stored as :Diagram nodes but marked
+            # has_graph_data=false so the loader does not attempt to extract
+            # interaction data from them.
+            "has_graph_data": bool(diag.get("drawio_xml")) and diag.get("diagram_type") == "App_Arch",
         }
 
     # Second pass — merge in Confluence attachments
