@@ -84,6 +84,9 @@
     },
     "scripts/resolve_confluence_drawio_apps.py": {
       "api": ["api-tests/test_drawio_reconciliation.py"]
+    },
+    "scripts/propagate_major_apps.py": {
+      "api": ["api-tests/test_confluence_major_apps.py"]
     }
   },
   "wildcards": {

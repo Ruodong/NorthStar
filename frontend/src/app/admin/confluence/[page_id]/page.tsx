@@ -167,10 +167,20 @@ interface ExtractedByAttachment {
   interaction_count: number;
 }
 
+interface ExtractedMajorApp {
+  app_id: string;
+  drawio_name: string | null;
+  application_status: "New" | "Change" | "Sunset";
+  occurrence_count: number;
+  attachment_titles: string[] | null;
+  cmdb_name: string | null;
+}
+
 interface ExtractedData {
   apps: ExtractedApp[];
   interactions: ExtractedInteraction[];
   by_attachment: ExtractedByAttachment[];
+  major_apps: ExtractedMajorApp[];
 }
 
 const KIND_LABEL: Record<string, string> = {
@@ -1333,6 +1343,10 @@ function ExtractedView({ data }: { data: ExtractedData | null }) {
         </div>
       </div>
 
+      {data.major_apps && data.major_apps.length > 0 && (
+        <MajorAppsSection majors={data.major_apps} />
+      )}
+
       {data.by_attachment.map((f) => {
         const apps = appsByAttachment.get(f.attachment_id) || [];
         const inters = intersByAttachment.get(f.attachment_id) || [];
@@ -1345,6 +1359,158 @@ function ExtractedView({ data }: { data: ExtractedData | null }) {
           />
         );
       })}
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// MajorAppsSection — the "what apps is this project actually touching?"
+// rollup shown at the top of the Extracted tab. Deliberately simple table
+// so the reader's eye lands on it immediately: app_id, name, status pill,
+// occurrence count.
+// Spec: confluence-major-apps § 2 FR-7
+// ---------------------------------------------------------------------------
+function MajorAppsSection({ majors }: { majors: ExtractedMajorApp[] }) {
+  return (
+    <div
+      style={{
+        borderTop: "1px solid var(--border)",
+        padding: "14px 18px 18px",
+        // Amber top hairline to visually distinguish this as the "primary"
+        // readout vs the per-attachment raw breakdown below
+        background: "rgba(246, 166, 35, 0.03)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 10,
+          marginBottom: 10,
+        }}
+      >
+        <span
+          style={{
+            fontSize: 11,
+            fontFamily: "var(--font-mono)",
+            letterSpacing: 0.6,
+            textTransform: "uppercase",
+            color: "var(--accent)",
+            fontWeight: 600,
+          }}
+        >
+          Major Applications ({majors.length})
+        </span>
+        <span
+          style={{
+            fontSize: 10,
+            color: "var(--text-dim)",
+          }}
+          title="Apps whose drawio cells were marked Change / New / Sunset — i.e. actively in scope for this project."
+        >
+          (status in Change / New / Sunset)
+        </span>
+      </div>
+      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr
+            style={{
+              fontSize: 10,
+              color: "var(--text-dim)",
+              textTransform: "uppercase",
+              letterSpacing: 0.6,
+              fontFamily: "var(--font-mono)",
+              textAlign: "left",
+            }}
+          >
+            <th style={{ padding: "6px 8px", width: 100 }}>APP ID</th>
+            <th style={{ padding: "6px 8px" }}>Name</th>
+            <th style={{ padding: "6px 8px", width: 90 }}>Status</th>
+            <th
+              style={{ padding: "6px 8px", width: 80, textAlign: "right" }}
+              title="How many drawio cells across this page's subtree referenced this app as a major (Change/New/Sunset) app"
+            >
+              Refs
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {majors.map((m) => {
+            const name = m.cmdb_name || m.drawio_name || m.app_id;
+            return (
+              <tr
+                key={m.app_id}
+                style={{
+                  fontSize: 12,
+                  borderTop: "1px solid var(--border)",
+                }}
+              >
+                <td
+                  style={{
+                    padding: "6px 8px",
+                    fontFamily: "var(--font-mono)",
+                  }}
+                >
+                  <Link
+                    href={`/admin/applications/${encodeURIComponent(
+                      m.app_id
+                    )}`}
+                    style={{
+                      color: m.cmdb_name
+                        ? "var(--accent)"
+                        : "var(--text-muted)",
+                      textDecoration: "none",
+                    }}
+                  >
+                    {m.app_id}
+                  </Link>
+                </td>
+                <td
+                  style={{
+                    padding: "6px 8px",
+                    color: "var(--text)",
+                    wordBreak: "break-word",
+                  }}
+                >
+                  {name}
+                  {m.cmdb_name &&
+                    m.drawio_name &&
+                    m.cmdb_name.toLowerCase() !==
+                      m.drawio_name.toLowerCase() && (
+                      <span
+                        title="drawio label (pre-reconciliation)"
+                        style={{
+                          marginLeft: 8,
+                          fontSize: 10,
+                          color: "var(--text-dim)",
+                          fontFamily: "var(--font-mono)",
+                        }}
+                      >
+                        · drawio: {m.drawio_name}
+                      </span>
+                    )}
+                </td>
+                <td style={{ padding: "6px 8px" }}>
+                  <StatusPill status={m.application_status} />
+                </td>
+                <td
+                  style={{
+                    padding: "6px 8px",
+                    textAlign: "right",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 11,
+                    color: "var(--text-muted)",
+                  }}
+                  title={(m.attachment_titles || []).join("\n")}
+                >
+                  {m.occurrence_count}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

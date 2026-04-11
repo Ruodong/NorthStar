@@ -878,11 +878,96 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
         page_id,
     )
 
+    # Major applications rollup (spec: confluence-major-apps § 5).
+    # Aggregates across the whole subtree, dedupes by effective app_id,
+    # sorts by Change > New > Sunset > occurrence_count > cmdb name.
+    major_apps = await pg_client.fetch(
+        """
+        WITH RECURSIVE subtree AS (
+            SELECT page_id, title, 0 AS lvl
+            FROM northstar.confluence_page
+            WHERE page_id = $1
+            UNION ALL
+            SELECT c.page_id, c.title, s.lvl + 1
+            FROM northstar.confluence_page c
+            JOIN subtree s ON c.parent_id = s.page_id
+            WHERE s.lvl < 5
+        ),
+        raw_majors AS (
+            SELECT
+                COALESCE(cda.resolved_app_id, cda.standard_id) AS app_id,
+                cda.app_name AS drawio_name,
+                cda.application_status,
+                att.attachment_id,
+                att.title AS attachment_title,
+                s.title   AS source_page_title
+            FROM subtree s
+            JOIN northstar.confluence_attachment att ON att.page_id = s.page_id
+            JOIN northstar.confluence_diagram_app cda
+              ON cda.attachment_id = att.attachment_id
+            WHERE cda.application_status IN ('New', 'Change', 'Sunset')
+              AND COALESCE(cda.resolved_app_id, cda.standard_id) IS NOT NULL
+              AND att.file_kind = 'drawio'
+              AND att.title NOT LIKE 'drawio-backup%'
+              AND att.title NOT LIKE '~%'
+        ),
+        collapsed AS (
+            -- Collapse all rows for the same effective app_id into one,
+            -- keeping the strongest status (Change > New > Sunset) and
+            -- the drawio_name that came with that strongest status.
+            SELECT
+                app_id,
+                (ARRAY_AGG(application_status ORDER BY
+                    CASE application_status
+                        WHEN 'Change' THEN 0
+                        WHEN 'New'    THEN 1
+                        WHEN 'Sunset' THEN 2
+                        ELSE 3
+                    END
+                ))[1] AS application_status,
+                (ARRAY_AGG(drawio_name ORDER BY
+                    CASE application_status
+                        WHEN 'Change' THEN 0
+                        WHEN 'New'    THEN 1
+                        WHEN 'Sunset' THEN 2
+                        ELSE 3
+                    END
+                ))[1] AS drawio_name,
+                COUNT(*)::int AS occurrence_count,
+                ARRAY_AGG(DISTINCT attachment_title) AS attachment_titles
+            FROM raw_majors
+            GROUP BY app_id
+        )
+        SELECT
+            c.app_id,
+            c.drawio_name,
+            c.application_status,
+            c.occurrence_count,
+            c.attachment_titles,
+            ra.name AS cmdb_name
+        FROM collapsed c
+        LEFT JOIN northstar.ref_application ra ON ra.app_id = c.app_id
+        ORDER BY
+            CASE c.application_status
+                WHEN 'Change' THEN 0
+                WHEN 'New'    THEN 1
+                WHEN 'Sunset' THEN 2
+                ELSE 3
+            END,
+            c.occurrence_count DESC,
+            CASE WHEN ra.name IS NOT NULL THEN 0 ELSE 1 END,
+            ra.name,
+            c.app_id
+        """,
+        page_id,
+    )
+
     return ApiResponse(
         data={
             "apps": [dict(r) for r in apps],
             "interactions": [dict(r) for r in interactions],
             "by_attachment": [dict(r) for r in by_attachment],
+            "major_apps": [dict(r) for r in major_apps],
         }
     )
 
