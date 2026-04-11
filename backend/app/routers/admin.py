@@ -203,7 +203,8 @@ async def list_pages(
         f"""
         WITH base AS (
             SELECT p.page_id, p.fiscal_year, p.title, p.page_url, p.page_type,
-                   p.project_id, p.q_app_id, p.effective_app_id, p.app_hint,
+                   p.project_id, p.q_app_id,
+                   p.effective_app_id, p.app_hint, p.effective_app_hint,
                    p.depth, p.parent_id,
                    p.q_project_name, p.q_pm, p.q_it_lead, p.q_dt_lead,
                    (SELECT count(*) FROM northstar.confluence_attachment a
@@ -233,7 +234,7 @@ async def list_pages(
                    COALESCE(
                      e.link_app_id,
                      e.effective_app_id,
-                     'HINT:' || e.app_hint,
+                     'HINT:' || COALESCE(e.app_hint, e.effective_app_hint),
                      'NA'
                    ) AS g_app
             FROM exploded e
@@ -266,20 +267,24 @@ async def list_pages(
                  WHEN g.q_project_name IS NOT NULL THEN 'questionnaire'
                  ELSE 'none'
                END AS project_name_source,
-               -- app_id precedence: exploded link > effective > [hint] > NULL
+               -- app_id precedence: exploded link > effective > [hint] > NULL.
+               -- Use effective_app_hint (ancestor-inherited) as a fallback so
+               -- descendant pages whose own app_hint is NULL still render
+               -- under the parent's [hint] tag.
                CASE
                  WHEN g.link_app_id IS NOT NULL THEN g.link_app_id
                  WHEN COALESCE(g.effective_app_id, g.q_app_id) IS NOT NULL
                    THEN COALESCE(g.effective_app_id, g.q_app_id)
-                 WHEN g.app_hint IS NOT NULL
-                   THEN '[' || g.app_hint || ']'
+                 WHEN COALESCE(g.app_hint, g.effective_app_hint) IS NOT NULL
+                   THEN '[' || COALESCE(g.app_hint, g.effective_app_hint) || ']'
                  ELSE NULL
                END AS app_id,
-               g.app_hint                                AS app_hint,
-               ra.name                                   AS app_name,
+               COALESCE(g.app_hint, g.effective_app_hint) AS app_hint,
+               ra.name                                    AS app_name,
                CASE
                  WHEN ra.name IS NOT NULL THEN 'cmdb'
-                 WHEN g.app_hint IS NOT NULL AND g.link_app_id IS NULL THEN 'hint_unresolved'
+                 WHEN COALESCE(g.app_hint, g.effective_app_hint) IS NOT NULL
+                      AND g.link_app_id IS NULL THEN 'hint_unresolved'
                  ELSE 'none'
                END AS app_name_source,
                (rp.project_id IS NOT NULL) AS project_in_mspo,
@@ -307,7 +312,7 @@ async def list_pages(
                    COALESCE(
                      l.app_id,
                      p.effective_app_id,
-                     'HINT:' || p.app_hint,
+                     'HINT:' || COALESCE(p.app_hint, p.effective_app_hint),
                      'NA'
                    ) AS g_app
             FROM northstar.confluence_page p

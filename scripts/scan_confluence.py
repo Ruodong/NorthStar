@@ -240,6 +240,7 @@ def process_page(
     depth: int,
     ancestor_project_id: Optional[str],
     ancestor_app_id: Optional[str],
+    ancestor_app_hint: Optional[str],
     args: argparse.Namespace,
     base: str,
     attach_root: Path,
@@ -344,6 +345,13 @@ def process_page(
     #   3) inherited from ancestor (Pattern A)
     effective_app_id = promoted_app_id or hint_resolved or ancestor_app_id
 
+    # effective_app_hint precedence (Pattern E rollup — independent of A-id):
+    #   1) own app_hint (whatever it is, resolved or not)
+    #   2) inherited from ancestor
+    # Lets "[OF]" propagate from "KSA Application Architecture - OF" down to
+    # its "00 Order Fulfillment" leaf so they group together in the admin list.
+    effective_app_hint = app_hint or ancestor_app_hint
+
     with pg.cursor() as cur:
         cur.execute(
             """
@@ -352,12 +360,12 @@ def process_page(
                  body_html, body_text, body_questionnaire, body_size_chars,
                  q_project_id, q_project_name, q_pm, q_it_lead, q_dt_lead,
                  q_app_id, page_type, parent_id, depth,
-                 effective_app_id, app_hint,
+                 effective_app_id, app_hint, effective_app_hint,
                  last_seen, synced_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s,
                     %s, %s, %s, %s, %s,
                     %s, %s, %s, %s,
-                    %s, %s,
+                    %s, %s, %s,
                     NOW(), NOW())
             ON CONFLICT (page_id) DO UPDATE SET
                 fiscal_year = EXCLUDED.fiscal_year,
@@ -379,6 +387,7 @@ def process_page(
                 depth = EXCLUDED.depth,
                 effective_app_id = EXCLUDED.effective_app_id,
                 app_hint = EXCLUDED.app_hint,
+                effective_app_hint = EXCLUDED.effective_app_hint,
                 last_seen = NOW()
             """,
             (
@@ -395,6 +404,7 @@ def process_page(
                 depth,
                 effective_app_id,
                 app_hint,
+                effective_app_hint,
             ),
         )
     totals["pages"] += 1
@@ -526,16 +536,17 @@ def process_page(
     if not children:
         return
 
-    # Pass our own project_id + app_id down as the ancestor values for children.
-    # Use effective_app_id (which already includes hint resolution) so children
-    # inherit our fuzzy-matched A-id just as well as our title-extracted one.
-    child_ancestor_pid = final_project_id or ancestor_project_id
-    child_ancestor_aid = effective_app_id or ancestor_app_id
+    # Pass our own project_id + app_id + app_hint down as the ancestor values
+    # for children. Use effective_* values so children inherit fuzzy-matched
+    # A-ids AND inherit unresolved [hint] tags for grouping.
+    child_ancestor_pid  = final_project_id or ancestor_project_id
+    child_ancestor_aid  = effective_app_id or ancestor_app_id
+    child_ancestor_hint = effective_app_hint or ancestor_app_hint
     totals["descents"] = totals.get("descents", 0) + 1
     for child in children:
         process_page(
             client, pg, child, fy, page_id, depth + 1,
-            child_ancestor_pid, child_ancestor_aid,
+            child_ancestor_pid, child_ancestor_aid, child_ancestor_hint,
             args, base, attach_root, root, totals,
         )
 
@@ -598,6 +609,7 @@ def main() -> int:
                     parent_id=parent_id, depth=1,
                     ancestor_project_id=None,
                     ancestor_app_id=None,
+                    ancestor_app_hint=None,
                     args=args, base=base,
                     attach_root=attach_root, root=root, totals=totals,
                 )

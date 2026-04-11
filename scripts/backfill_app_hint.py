@@ -53,19 +53,21 @@ def main() -> int:
         "hint_cleared": 0,
         "effective_resolved": 0,
         "effective_cleared": 0,
+        "effective_hint_inherited": 0,
         "no_change": 0,
     }
 
     try:
         # Load every page ordered by depth (NULLs first — pre-migration rows,
         # then 1, 2, 3 — so we can do a single-pass ancestor walk in memory.
-        # We keep track of each page's resolved effective_app_id in a dict
-        # so depth=N rows can look up their parent's freshly-computed value.
+        # We keep track of each page's resolved effective_app_id AND its
+        # effective_app_hint so depth=N rows can inherit from their parent's
+        # freshly-computed values.
         with conn.cursor() as cur:
             cur.execute(
                 """
                 SELECT page_id, title, q_app_id, parent_id, depth,
-                       app_hint, effective_app_id
+                       app_hint, effective_app_id, effective_app_hint
                 FROM northstar.confluence_page
                 ORDER BY COALESCE(depth, 0), page_id
                 """
@@ -73,9 +75,9 @@ def main() -> int:
             rows = cur.fetchall()
         logger.info("loaded %d confluence_page rows", len(rows))
 
-        # parent_eff[page_id] = the effective_app_id we computed for this
-        # page, used when processing its children.
-        parent_eff: dict[str, str | None] = {}
+        # parent_state[page_id] = (effective_app_id, effective_app_hint)
+        # for descendants to inherit.
+        parent_state: dict[str, tuple[str | None, str | None]] = {}
 
         with conn.cursor() as resolve_cur:
             cache = ResolveCache(resolve_cur)
@@ -86,6 +88,7 @@ def main() -> int:
                     page_id = row["page_id"]
                     old_hint = row["app_hint"]
                     old_eff  = row["effective_app_id"]
+                    old_eff_hint = row["effective_app_hint"]
 
                     new_hint = extract_app_hint(row["title"])
 
@@ -99,15 +102,31 @@ def main() -> int:
                         hint_resolved = cache.get(new_hint) if new_hint else None
                         if hint_resolved:
                             new_eff = hint_resolved
-                        elif row["parent_id"] and row["parent_id"] in parent_eff:
-                            new_eff = parent_eff[row["parent_id"]]
+                        elif row["parent_id"] and row["parent_id"] in parent_state:
+                            new_eff = parent_state[row["parent_id"]][0]
                         else:
                             new_eff = None
 
-                    # Record for descendants
-                    parent_eff[page_id] = new_eff
+                    # effective_app_hint precedence:
+                    #   1) own app_hint (whatever it is, resolved or not)
+                    #   2) inherited from parent's effective_app_hint
+                    # This lets "[OF]" propagate from the depth-2 parent down
+                    # to its "00 Order Fulfillment" child so they group together.
+                    if new_hint:
+                        new_eff_hint = new_hint
+                    elif row["parent_id"] and row["parent_id"] in parent_state:
+                        new_eff_hint = parent_state[row["parent_id"]][1]
+                    else:
+                        new_eff_hint = None
 
-                    if new_hint == old_hint and new_eff == old_eff:
+                    # Record for descendants
+                    parent_state[page_id] = (new_eff, new_eff_hint)
+
+                    if (
+                        new_hint == old_hint
+                        and new_eff == old_eff
+                        and new_eff_hint == old_eff_hint
+                    ):
                         stats["no_change"] += 1
                         continue
 
@@ -117,19 +136,25 @@ def main() -> int:
                         elif old_hint and not new_hint:
                             stats["hint_cleared"] += 1
                         else:
-                            stats["hint_set"] += 1  # changed value
-
+                            stats["hint_set"] += 1
                     if new_eff != old_eff:
                         if new_eff and not old_eff:
                             stats["effective_resolved"] += 1
                         elif old_eff and not new_eff:
                             stats["effective_cleared"] += 1
+                    if (
+                        new_eff_hint and not old_eff_hint and not new_hint
+                    ):
+                        # Only count rows where the effective hint was
+                        # inherited from an ancestor (own hint is None).
+                        stats["effective_hint_inherited"] += 1
 
                     if args.dry_run:
                         if stats["scanned"] <= 30:
                             logger.info(
-                                "  dry %s  hint %r→%r  eff %r→%r  (%s)",
+                                "  dry %s  hint %r→%r  eff %r→%r  efh %r→%r  (%s)",
                                 page_id, old_hint, new_hint, old_eff, new_eff,
+                                old_eff_hint, new_eff_hint,
                                 row["title"][:60],
                             )
                         continue
@@ -138,10 +163,11 @@ def main() -> int:
                         """
                         UPDATE northstar.confluence_page
                         SET app_hint = %s,
-                            effective_app_id = %s
+                            effective_app_id = %s,
+                            effective_app_hint = %s
                         WHERE page_id = %s
                         """,
-                        (new_hint, new_eff, page_id),
+                        (new_hint, new_eff, new_eff_hint, page_id),
                     )
 
         if not args.dry_run:
