@@ -100,7 +100,10 @@ async def list_pages(
     if q:
         args.append(f"%{q}%")
         where.append(
-            f"(p.title ILIKE ${len(args)} OR p.project_id ILIKE ${len(args)} OR p.q_app_id ILIKE ${len(args)})"
+            f"(p.title ILIKE ${len(args)} "
+            f"OR p.project_id ILIKE ${len(args)} "
+            f"OR p.q_app_id ILIKE ${len(args)} "
+            f"OR p.effective_app_id ILIKE ${len(args)})"
         )
     if has_drawio:
         where.append(
