@@ -880,6 +880,28 @@ def _parse_app_arch(root: ET.Element) -> dict:
                 children_statuses & {"New", "Change", "Sunset"}
             )
 
+            # Container status rollup: when the container shape itself has no
+            # fill color (Unknown), derive its status from the children that
+            # DO have one. Priority rule: any "change" signal (New/Change/
+            # Sunset) in the children bubbles up because a container "is
+            # changing" as soon as any of its parts changes. 3rd-Party and
+            # Keep propagate only when all non-unknown children agree.
+            if parent_app.get("application_status") in ("", "Unknown", None):
+                real_statuses = {s for s in children_statuses if s and s != "Unknown"}
+                if real_statuses:
+                    # Priority bubble-up — strongest "change" signal wins
+                    for priority in ("New", "Change", "Sunset"):
+                        if priority in real_statuses:
+                            parent_app["application_status"] = priority
+                            break
+                    else:
+                        # No change signal — only 3rd Party and/or Keep left
+                        if "3rd Party" in real_statuses:
+                            parent_app["application_status"] = "3rd Party"
+                        elif real_statuses == {"Keep"}:
+                            parent_app["application_status"] = "Keep"
+                        # Otherwise leave as Unknown (shouldn't normally happen)
+
     # Remove merged children from applications list
     if merged_ids:
         skipped_cell_ids.update(merged_ids)
