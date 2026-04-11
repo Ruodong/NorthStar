@@ -118,6 +118,18 @@ async def list_pages(
             "summed across the group. Pass false for the old one-row-per-page view."
         ),
     ),
+    include_deep: bool = Query(
+        False,
+        description=(
+            "When false (default), only show pages that are direct children of "
+            "their project (depth <= 2 in our scan: depth 0 = FY parent, 1 = "
+            "project page, 2 = project child). This matches the Confluence "
+            "tree view a user sees. When true, also include depth 3+ "
+            "grandchild pages whose titles get promoted to independent app "
+            "rows via Pattern E (hint rollup) — useful for architects who "
+            "want full depth visibility."
+        ),
+    ),
 ) -> ApiResponse:
     where = []
     args: list = []
@@ -142,7 +154,22 @@ async def list_pages(
             "WHERE a.page_id = p.page_id AND a.file_kind = 'drawio' "
             "AND a.title NOT LIKE 'drawio-backup%' AND a.title NOT LIKE '~%')"
         )
+    if not include_deep:
+        # Default view aligns with the Confluence tree a user would see:
+        # keep depth 0-2 and rows where depth is unknown (legacy scans).
+        # Pattern E promoted grandchildren (depth 3+) are hidden unless the
+        # user explicitly flips the toggle. See diagnostic on LI2400444:
+        # 18 direct children in Confluence vs 32 rows in our admin list
+        # because 14 depth-3 Solution/Technical Design pages got rolled up.
+        where.append("(p.depth IS NULL OR p.depth <= 2)")
     where_clause = ("WHERE " + " AND ".join(where)) if where else ""
+
+    # When include_deep=false, direct children without any app signal must
+    # each be their own row (matching the Confluence tree), not collapsed
+    # into a single "NA" bucket. So we use page_id as the fallback group
+    # key instead of the literal 'NA'. When include_deep=true, old grouping
+    # is preserved so depth-3 hint-only rows behave as before.
+    na_fallback_sql = "'PAGE:' || e.page_id" if not include_deep else "'NA'"
 
     if not group_by_app:
         # Legacy flat view: one row per confluence_page.
@@ -240,7 +267,7 @@ async def list_pages(
                      e.link_app_id,
                      e.effective_app_id,
                      'HINT:' || COALESCE(e.app_hint, e.effective_app_hint),
-                     'NA'
+                     {na_fallback_sql}
                    ) AS g_app
             FROM exploded e
         ),
@@ -322,6 +349,9 @@ async def list_pages(
         """,
         *args,
     )
+    total_na_fallback_sql = (
+        "'PAGE:' || p.page_id" if not include_deep else "'NA'"
+    )
     total = await pg_client.fetchval(
         f"""
         SELECT count(*) FROM (
@@ -331,7 +361,7 @@ async def list_pages(
                      l.app_id,
                      p.effective_app_id,
                      'HINT:' || COALESCE(p.app_hint, p.effective_app_hint),
-                     'NA'
+                     {total_na_fallback_sql}
                    ) AS g_app
             FROM northstar.confluence_page p
             LEFT JOIN northstar.confluence_page_app_link l ON l.page_id = p.page_id

@@ -56,6 +56,10 @@ export default function ConfluenceIndex() {
   const [fy, setFy] = useState("");
   const [pageType, setPageType] = useState("");
   const [hasDrawio, setHasDrawio] = useState(false);
+  // Default: show only direct children of each project (depth <= 2), to
+  // match what the user sees in Confluence. Flip on to reveal depth-3
+  // grandchildren promoted as independent app rows by Pattern E.
+  const [includeDeep, setIncludeDeep] = useState(false);
   const [page, setPage] = useState(0);
   const [data, setData] = useState<ListResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -90,6 +94,7 @@ export default function ConfluenceIndex() {
         if (fy) params.set("fiscal_year", fy);
         if (pageType) params.set("page_type", pageType);
         if (hasDrawio) params.set("has_drawio", "true");
+        if (includeDeep) params.set("include_deep", "true");
         params.set("limit", String(PAGE_SIZE));
         params.set("offset", String(page * PAGE_SIZE));
         const r = await fetch(`/api/admin/confluence/pages?${params}`, { cache: "no-store" });
@@ -105,7 +110,7 @@ export default function ConfluenceIndex() {
     return () => {
       cancelled = true;
     };
-  }, [qDebounced, fy, pageType, hasDrawio, page]);
+  }, [qDebounced, fy, pageType, hasDrawio, includeDeep, page]);
 
   const total = data?.total ?? 0;
   const maxPage = Math.max(0, Math.ceil(total / PAGE_SIZE) - 1);
@@ -312,6 +317,20 @@ export default function ConfluenceIndex() {
             onChange={(e) => setHasDrawio(e.target.checked)}
           />
           Has drawio
+        </label>
+        <label
+          style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13 }}
+          title="Default: show only direct children of each project (matches Confluence tree). Turn on to include depth-3 grandchild pages whose titles got promoted to independent app rows."
+        >
+          <input
+            type="checkbox"
+            checked={includeDeep}
+            onChange={(e) => {
+              setIncludeDeep(e.target.checked);
+              setPage(0);
+            }}
+          />
+          Include sub-applications
         </label>
         <div style={{ flex: 1 }} />
         <div
