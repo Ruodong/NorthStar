@@ -637,6 +637,13 @@ def main() -> int:
                         """
                         SELECT cda.attachment_id, cda.cell_id, cda.app_name,
                                cda.id_is_standard, cda.standard_id,
+                               -- Prefer the reconciled A-id when the
+                               -- resolver could confirm a better match
+                               -- (spec: drawio-name-id-reconciliation).
+                               -- Fall back to the drawio-typed id otherwise.
+                               COALESCE(cda.resolved_app_id, cda.standard_id) AS effective_std_id,
+                               cda.resolved_app_id,
+                               cda.match_type,
                                cda.application_status, cda.functions,
                                p.page_id,
                                COALESCE(p.root_project_id, p.project_id, p.q_project_id) AS project_id,
@@ -679,7 +686,12 @@ def main() -> int:
             for r in cda_rows:
                 att_id = r["attachment_id"]
                 cell_id = r["cell_id"] or ""
-                raw_std = (r["standard_id"] or "").strip()
+                # Post-reconciliation: the resolver may have corrected the
+                # drawio's A-id to a different CMDB entry when the architect
+                # mistyped. Use the effective_std_id (COALESCE(resolved,
+                # standard_id)) so "AI Verse" merges to A000426 AI-Verse
+                # instead of fragmenting across A000001 ECC + A000426.
+                raw_std = (r.get("effective_std_id") or "").strip()
                 cmdb_hit = bool(raw_std and raw_std in cmdb)
                 if cmdb_hit:
                     stats["cmdb_hits"] += 1
@@ -692,6 +704,8 @@ def main() -> int:
                 app_id = derive_app_id(raw_std, app_name, scope, cmdb_hit, alias_map)
                 if app_id != pre_alias_id and not cmdb_hit:
                     stats["alias_applied"] += 1
+                if r.get("match_type") == "auto_corrected":
+                    stats["confluence_auto_corrected_apps"] = stats.get("confluence_auto_corrected_apps", 0) + 1
 
                 conf_app_id_by_attachment_cell[(att_id, cell_id)] = app_id
 

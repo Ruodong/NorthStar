@@ -81,6 +81,9 @@
     },
     "scripts/parse_confluence_drawios.py": {
       "api": ["api-tests/test_confluence_drawio_extract.py"]
+    },
+    "scripts/resolve_confluence_drawio_apps.py": {
+      "api": ["api-tests/test_drawio_reconciliation.py"]
     }
   },
   "wildcards": {

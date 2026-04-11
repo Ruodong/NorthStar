@@ -735,11 +735,28 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
             cda.application_status,
             cda.functions,
             cda.fill_color,
-            ra.name AS cmdb_name
+            -- Name-id reconciliation fields (spec: drawio-name-id-reconciliation)
+            cda.resolved_app_id,
+            cda.match_type,
+            cda.name_similarity,
+            -- CMDB name looked up by the DRAWIO's original std_id — used by the
+            -- UI to render "CMDB: ECC" context when the drawio mis-IDed a cell
+            ra_by_id.name AS cmdb_name_for_drawio_id,
+            -- CMDB name looked up by the RESOLVED id (could be same as
+            -- cmdb_name_for_drawio_id if match_type=direct, or different if
+            -- auto_corrected / fuzzy_by_name)
+            ra_by_resolved.name AS cmdb_name_for_resolved,
+            -- Back-compat: cmdb_name = the resolved cmdb_name if we have one,
+            -- otherwise the drawio-id lookup. Existing UI code that only
+            -- reads this field still works.
+            COALESCE(ra_by_resolved.name, ra_by_id.name) AS cmdb_name
         FROM subtree s
         JOIN northstar.confluence_attachment att ON att.page_id = s.page_id
         JOIN northstar.confluence_diagram_app cda ON cda.attachment_id = att.attachment_id
-        LEFT JOIN northstar.ref_application ra ON ra.app_id = cda.standard_id
+        LEFT JOIN northstar.ref_application ra_by_id
+               ON ra_by_id.app_id = cda.standard_id
+        LEFT JOIN northstar.ref_application ra_by_resolved
+               ON ra_by_resolved.app_id = cda.resolved_app_id
         WHERE att.file_kind = 'drawio'
           AND att.title NOT LIKE 'drawio-backup%'
           AND att.title NOT LIKE '~%'
@@ -778,11 +795,25 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
             cdi.direction,
             cdi.interaction_status,
             cdi.business_object,
-            -- Resolve endpoint app_name + standard_id via the app table
-            src_app.app_name    AS source_app_name,
-            src_app.standard_id AS source_standard_id,
-            tgt_app.app_name    AS target_app_name,
-            tgt_app.standard_id AS target_standard_id
+            -- Resolve endpoint app_name + standard_id via the app table.
+            -- Also surface the CMDB canonical name for the resolved app
+            -- (post-reconciliation) so the UI can render names — not raw
+            -- A-ids — in the From/To columns. Priority:
+            --   1) CMDB name of the resolved app (auto-corrected id)
+            --   2) CMDB name of the drawio's own std_id
+            --   3) The raw drawio label (app_name)
+            src_app.app_name        AS source_app_name,
+            src_app.standard_id     AS source_standard_id,
+            src_app.resolved_app_id AS source_resolved_id,
+            src_app.match_type      AS source_match_type,
+            src_cmdb_res.name       AS source_cmdb_name_resolved,
+            src_cmdb_orig.name      AS source_cmdb_name_orig,
+            tgt_app.app_name        AS target_app_name,
+            tgt_app.standard_id     AS target_standard_id,
+            tgt_app.resolved_app_id AS target_resolved_id,
+            tgt_app.match_type      AS target_match_type,
+            tgt_cmdb_res.name       AS target_cmdb_name_resolved,
+            tgt_cmdb_orig.name      AS target_cmdb_name_orig
         FROM subtree s
         JOIN northstar.confluence_attachment att ON att.page_id = s.page_id
         JOIN northstar.confluence_diagram_interaction cdi
@@ -793,6 +824,14 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
         LEFT JOIN northstar.confluence_diagram_app tgt_app
           ON tgt_app.attachment_id = cdi.attachment_id
          AND tgt_app.cell_id = cdi.target_cell_id
+        LEFT JOIN northstar.ref_application src_cmdb_res
+          ON src_cmdb_res.app_id = src_app.resolved_app_id
+        LEFT JOIN northstar.ref_application src_cmdb_orig
+          ON src_cmdb_orig.app_id = src_app.standard_id
+        LEFT JOIN northstar.ref_application tgt_cmdb_res
+          ON tgt_cmdb_res.app_id = tgt_app.resolved_app_id
+        LEFT JOIN northstar.ref_application tgt_cmdb_orig
+          ON tgt_cmdb_orig.app_id = tgt_app.standard_id
         WHERE att.file_kind = 'drawio'
           AND att.title NOT LIKE 'drawio-backup%'
           AND att.title NOT LIKE '~%'

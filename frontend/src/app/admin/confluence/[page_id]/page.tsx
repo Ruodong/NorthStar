@@ -114,6 +114,20 @@ interface ExtractedApp {
   functions: string | null;
   fill_color: string | null;
   cmdb_name: string | null;
+  // Name-id reconciliation fields (spec: drawio-name-id-reconciliation)
+  resolved_app_id: string | null;
+  match_type:
+    | "direct"
+    | "typo_tolerated"
+    | "auto_corrected"
+    | "auto_corrected_missing_id"
+    | "fuzzy_by_name"
+    | "mismatch_unresolved"
+    | "no_cmdb"
+    | null;
+  name_similarity: number | null;
+  cmdb_name_for_drawio_id: string | null;
+  cmdb_name_for_resolved: string | null;
 }
 
 interface ExtractedInteraction {
@@ -131,8 +145,16 @@ interface ExtractedInteraction {
   business_object: string | null;
   source_app_name: string | null;
   source_standard_id: string | null;
+  source_resolved_id: string | null;
+  source_match_type: string | null;
+  source_cmdb_name_resolved: string | null;
+  source_cmdb_name_orig: string | null;
   target_app_name: string | null;
   target_standard_id: string | null;
+  target_resolved_id: string | null;
+  target_match_type: string | null;
+  target_cmdb_name_resolved: string | null;
+  target_cmdb_name_orig: string | null;
 }
 
 interface ExtractedByAttachment {
@@ -1483,14 +1505,25 @@ function ExtractedFileCard({
                   textAlign: "left",
                 }}
               >
-                <th style={{ padding: "6px 8px", width: 80 }}>APP ID</th>
+                <th style={{ padding: "6px 8px", width: 100 }}>APP ID</th>
+                <th style={{ padding: "6px 8px", width: 110 }}>Match</th>
                 <th style={{ padding: "6px 8px" }}>Name</th>
                 <th style={{ padding: "6px 8px", width: 90 }}>Status</th>
                 <th style={{ padding: "6px 8px" }}>Functions</th>
               </tr>
             </thead>
             <tbody>
-              {apps.map((a) => (
+              {apps.map((a) => {
+                // Display id = the resolved id (post-reconciliation) if
+                // present, falling back to the drawio-typed standard_id.
+                const displayId = a.resolved_app_id || a.standard_id;
+                const wasCorrected =
+                  a.match_type === "auto_corrected" ||
+                  a.match_type === "auto_corrected_missing_id";
+                const linkTargetId = displayId;
+                const resolvedName =
+                  a.cmdb_name_for_resolved || a.cmdb_name;
+                return (
                 <tr
                   key={`${a.attachment_id}:${a.cell_id}`}
                   style={{
@@ -1498,50 +1531,73 @@ function ExtractedFileCard({
                     borderTop: "1px solid var(--border)",
                   }}
                 >
+                  {/* APP ID column: resolved id + optional "was <old>" */}
                   <td
                     style={{
                       padding: "6px 8px",
                       fontFamily: "var(--font-mono)",
+                      verticalAlign: "top",
                     }}
                   >
-                    {a.standard_id ? (
+                    {displayId ? (
                       <Link
                         href={`/admin/applications/${encodeURIComponent(
-                          a.standard_id
+                          linkTargetId || ""
                         )}`}
                         style={{
-                          color: a.cmdb_name
+                          color: resolvedName
                             ? "var(--accent)"
                             : "var(--text-muted)",
                           textDecoration: "none",
                         }}
                       >
-                        {a.standard_id}
+                        {displayId}
                       </Link>
                     ) : (
                       <span style={{ color: "var(--text-dim)" }}>—</span>
                     )}
+                    {wasCorrected && a.standard_id && (
+                      <div
+                        style={{
+                          fontSize: 10,
+                          color: "var(--text-dim)",
+                          marginTop: 2,
+                        }}
+                        title={`drawio wrote ${a.standard_id}${
+                          a.cmdb_name_for_drawio_id
+                            ? ` (${a.cmdb_name_for_drawio_id})`
+                            : ""
+                        }`}
+                      >
+                        was {a.standard_id}
+                      </div>
+                    )}
+                  </td>
+                  {/* Match type pill */}
+                  <td
+                    style={{ padding: "6px 8px", verticalAlign: "top" }}
+                  >
+                    <MatchPill app={a} />
                   </td>
                   <td
                     style={{
                       padding: "6px 8px",
                       color: "var(--text)",
                       wordBreak: "break-word",
+                      verticalAlign: "top",
                     }}
                   >
-                    {/* Drawio label is always primary — it's what the */}
-                    {/* architect actually wrote on the diagram. CMDB name */}
-                    {/* is secondary context, shown only when it disagrees */}
-                    {/* so mis-IDed cells (e.g. "AI Verse" labelled A000001 */}
-                    {/* but A000001 is ECC in CMDB) stay visible to the */}
-                    {/* reviewer instead of being silently overwritten. */}
-                    {a.app_name || a.cmdb_name || "—"}
-                    {a.cmdb_name &&
+                    {/* Drawio label stays primary. When the resolved id */}
+                    {/* disagrees with the drawio id, append the CMDB */}
+                    {/* canonical name of the *resolved* target so the */}
+                    {/* reviewer can see which app we routed this cell to. */}
+                    {a.app_name || resolvedName || "—"}
+                    {resolvedName &&
                       a.app_name &&
-                      a.cmdb_name.toLowerCase() !==
+                      resolvedName.toLowerCase() !==
                         a.app_name.toLowerCase() && (
                         <span
-                          title={`CMDB ref_application.name for ${a.standard_id}`}
+                          title={`CMDB name for ${displayId}`}
                           style={{
                             marginLeft: 8,
                             fontSize: 10,
@@ -1549,7 +1605,21 @@ function ExtractedFileCard({
                             fontFamily: "var(--font-mono)",
                           }}
                         >
-                          · CMDB: {a.cmdb_name}
+                          · CMDB: {resolvedName}
+                        </span>
+                      )}
+                    {a.match_type === "mismatch_unresolved" &&
+                      a.cmdb_name_for_drawio_id && (
+                        <span
+                          title={`drawio said ${a.standard_id} but that's "${a.cmdb_name_for_drawio_id}" in CMDB — no fuzzy match found`}
+                          style={{
+                            marginLeft: 8,
+                            fontSize: 10,
+                            color: "#e8716b",
+                            fontFamily: "var(--font-mono)",
+                          }}
+                        >
+                          ⚠ drawio id → CMDB: {a.cmdb_name_for_drawio_id}
                         </span>
                       )}
                   </td>
@@ -1567,7 +1637,8 @@ function ExtractedFileCard({
                     {a.functions || ""}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -1608,10 +1679,37 @@ function ExtractedFileCard({
             </thead>
             <tbody>
               {interactions.map((i) => {
+                // Prefer the CMDB canonical name of the resolved app, fall
+                // back to the drawio label, then to the raw A-id as a last
+                // resort. Show names in the From/To cells, not raw IDs.
                 const fromLabel =
-                  i.source_standard_id || i.source_app_name || "—";
+                  i.source_cmdb_name_resolved ||
+                  i.source_app_name ||
+                  i.source_cmdb_name_orig ||
+                  i.source_resolved_id ||
+                  i.source_standard_id ||
+                  "—";
                 const toLabel =
-                  i.target_standard_id || i.target_app_name || "—";
+                  i.target_cmdb_name_resolved ||
+                  i.target_app_name ||
+                  i.target_cmdb_name_orig ||
+                  i.target_resolved_id ||
+                  i.target_standard_id ||
+                  "—";
+                const fromId =
+                  i.source_resolved_id || i.source_standard_id || null;
+                const toId =
+                  i.target_resolved_id || i.target_standard_id || null;
+                const fromHasCmdb =
+                  !!(
+                    i.source_cmdb_name_resolved ||
+                    i.source_cmdb_name_orig
+                  );
+                const toHasCmdb =
+                  !!(
+                    i.target_cmdb_name_resolved ||
+                    i.target_cmdb_name_orig
+                  );
                 const bo =
                   i.business_object || i.interaction_type || "";
                 return (
@@ -1625,14 +1723,40 @@ function ExtractedFileCard({
                     <td
                       style={{
                         padding: "6px 8px",
-                        fontFamily: "var(--font-mono)",
-                        color: i.source_standard_id
-                          ? "var(--accent)"
+                        color: fromHasCmdb
+                          ? "var(--text)"
                           : "var(--text-muted)",
                         wordBreak: "break-word",
                       }}
+                      title={fromId || ""}
                     >
-                      {fromLabel}
+                      {fromId && fromHasCmdb ? (
+                        <Link
+                          href={`/admin/applications/${encodeURIComponent(
+                            fromId
+                          )}`}
+                          style={{
+                            color: "var(--text)",
+                            textDecoration: "none",
+                          }}
+                        >
+                          {fromLabel}
+                        </Link>
+                      ) : (
+                        fromLabel
+                      )}
+                      {fromId && (
+                        <span
+                          style={{
+                            marginLeft: 6,
+                            fontSize: 10,
+                            color: "var(--text-dim)",
+                            fontFamily: "var(--font-mono)",
+                          }}
+                        >
+                          {fromId}
+                        </span>
+                      )}
                     </td>
                     <td
                       style={{
@@ -1646,14 +1770,40 @@ function ExtractedFileCard({
                     <td
                       style={{
                         padding: "6px 8px",
-                        fontFamily: "var(--font-mono)",
-                        color: i.target_standard_id
-                          ? "var(--accent)"
+                        color: toHasCmdb
+                          ? "var(--text)"
                           : "var(--text-muted)",
                         wordBreak: "break-word",
                       }}
+                      title={toId || ""}
                     >
-                      {toLabel}
+                      {toId && toHasCmdb ? (
+                        <Link
+                          href={`/admin/applications/${encodeURIComponent(
+                            toId
+                          )}`}
+                          style={{
+                            color: "var(--text)",
+                            textDecoration: "none",
+                          }}
+                        >
+                          {toLabel}
+                        </Link>
+                      ) : (
+                        toLabel
+                      )}
+                      {toId && (
+                        <span
+                          style={{
+                            marginLeft: 6,
+                            fontSize: 10,
+                            color: "var(--text-dim)",
+                            fontFamily: "var(--font-mono)",
+                          }}
+                        >
+                          {toId}
+                        </span>
+                      )}
                     </td>
                     <td
                       style={{
@@ -1676,5 +1826,122 @@ function ExtractedFileCard({
         </div>
       )}
     </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// MatchPill — visual tag for the name-id reconciliation result
+// Spec: drawio-name-id-reconciliation § FR-5
+// ---------------------------------------------------------------------------
+const MATCH_STYLES: Record<
+  string,
+  { label: string; icon: string; color: string; tooltipBase: string }
+> = {
+  direct: {
+    label: "direct",
+    icon: "✓",
+    color: "#5fc58a",
+    tooltipBase: "drawio id and name both agree with CMDB",
+  },
+  typo_tolerated: {
+    label: "typo",
+    icon: "≈",
+    color: "var(--accent)",
+    tooltipBase: "drawio id matches CMDB; name has a small typo but same app",
+  },
+  auto_corrected: {
+    label: "auto-fixed",
+    icon: "↻",
+    color: "var(--accent)",
+    tooltipBase:
+      "drawio id pointed to a different CMDB app; the drawio name matched a better candidate — auto-corrected",
+  },
+  auto_corrected_missing_id: {
+    label: "auto-fixed",
+    icon: "↻",
+    color: "var(--accent)",
+    tooltipBase:
+      "drawio id was not in CMDB; the drawio name matched a real CMDB app — resolved via name",
+  },
+  fuzzy_by_name: {
+    label: "fuzzy",
+    icon: "?",
+    color: "var(--accent)",
+    tooltipBase:
+      "drawio had no A-id at all; resolved via fuzzy match on the name",
+  },
+  mismatch_unresolved: {
+    label: "mismatch",
+    icon: "✗",
+    color: "#e8716b",
+    tooltipBase:
+      "drawio id does not match its name in CMDB and no alternate CMDB app matched — needs human review",
+  },
+  no_cmdb: {
+    label: "no cmdb",
+    icon: "—",
+    color: "var(--text-dim)",
+    tooltipBase: "drawio has no A-id and name could not be matched in CMDB",
+  },
+};
+
+function MatchPill({ app }: { app: ExtractedApp }) {
+  const type = app.match_type || "no_cmdb";
+  const spec = MATCH_STYLES[type] || MATCH_STYLES["no_cmdb"];
+  // Compose a richer tooltip with the similarity number and both ids
+  const sim =
+    app.name_similarity != null
+      ? ` (sim=${app.name_similarity.toFixed(2)})`
+      : "";
+  const drawioId = app.standard_id || "—";
+  const resolvedId = app.resolved_app_id || drawioId;
+  const extraContext =
+    type === "auto_corrected" || type === "auto_corrected_missing_id"
+      ? `\n  drawio wrote: ${drawioId}${
+          app.cmdb_name_for_drawio_id
+            ? ` (${app.cmdb_name_for_drawio_id})`
+            : ""
+        }\n  resolved to: ${resolvedId}${
+          app.cmdb_name_for_resolved
+            ? ` (${app.cmdb_name_for_resolved})`
+            : ""
+        }`
+      : type === "mismatch_unresolved"
+      ? `\n  drawio wrote: ${drawioId}${
+          app.cmdb_name_for_drawio_id
+            ? ` → CMDB: ${app.cmdb_name_for_drawio_id}`
+            : ""
+        }\n  name "${app.app_name}" did not match anything`
+      : "";
+  const title = `${spec.tooltipBase}${sim}${extraContext}`;
+  const isAutoCorrected =
+    type === "auto_corrected" || type === "auto_corrected_missing_id";
+  return (
+    <span
+      title={title}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        padding: "2px 8px",
+        fontSize: 10,
+        fontFamily: "var(--font-mono)",
+        fontWeight: 600,
+        textTransform: "uppercase",
+        letterSpacing: 0.5,
+        color: spec.color,
+        background: "rgba(255, 255, 255, 0.03)",
+        border: `1px solid ${spec.color}55`,
+        borderLeft: isAutoCorrected
+          ? `2px solid ${spec.color}`
+          : `1px solid ${spec.color}55`,
+        borderRadius: "var(--radius-sm)",
+        whiteSpace: "nowrap",
+      }}
+    >
+      <span>{spec.icon}</span>
+      <span>{spec.label}</span>
+    </span>
   );
 }
