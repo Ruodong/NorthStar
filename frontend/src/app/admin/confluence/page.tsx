@@ -110,27 +110,22 @@ export default function ConfluenceIndex() {
   const total = data?.total ?? 0;
   const maxPage = Math.max(0, Math.ceil(total / PAGE_SIZE) - 1);
 
-  // Row-group metadata for rowspan-style folding. The backend now returns
+  // Row-group metadata for rowspan-style folding. The backend returns
   // rows strictly sorted by (fiscal_year, project_id, title, app_id), so
   // every sibling of a group is adjacent to its primary within the current
-  // page. We walk the rows once and compute:
-  //   position      : "solo" | "first" | "sibling"
-  //   groupSize     : total row count of the group the row belongs to
-  //                   (only meaningful on "first"; used by the "+N more" pill)
-  //   isPageContinuation : true iff the row at index 0 is a "sibling" —
-  //                        meaning the group's primary is on the previous
-  //                        page. We render a small caption to hint at that.
+  // page. We walk the rows once and compute each row's `position` ("solo",
+  // "first", or "sibling") so sibling rows can hide their project id/name
+  // cells and paint an amber binding border to visually tie them to their
+  // primary above.
   const groupInfo = useMemo(() => {
     const rows = data?.rows ?? [];
     if (rows.length === 0) {
       return {
         positions: [] as Array<"solo" | "first" | "sibling">,
-        groupSizes: [] as number[],
         isPageContinuation: false,
       };
     }
     const positions: Array<"solo" | "first" | "sibling"> = new Array(rows.length);
-    const groupSizes: number[] = new Array(rows.length).fill(1);
 
     // Two rows belong to the same group iff both have a non-null project_id
     // AND project_id + fiscal_year match. Orphan rows (no project_id) are
@@ -147,19 +142,10 @@ export default function ConfluenceIndex() {
       if (i === rows.length || (i > groupStart && !sameGroup(rows[i - 1], rows[i]))) {
         const runLength = i - groupStart;
         if (runLength === 1 || rows[groupStart].project_id == null) {
-          // Single row or orphan → solo
-          for (let j = groupStart; j < i; j++) {
-            positions[j] = "solo";
-            groupSizes[j] = 1;
-          }
+          for (let j = groupStart; j < i; j++) positions[j] = "solo";
         } else {
-          // Multi-row group
           positions[groupStart] = "first";
-          groupSizes[groupStart] = runLength;
-          for (let j = groupStart + 1; j < i; j++) {
-            positions[j] = "sibling";
-            groupSizes[j] = runLength;
-          }
+          for (let j = groupStart + 1; j < i; j++) positions[j] = "sibling";
         }
         groupStart = i;
       }
@@ -167,7 +153,6 @@ export default function ConfluenceIndex() {
 
     return {
       positions,
-      groupSizes,
       // Page-continuation heuristic: the first row of the page is a sibling,
       // which means its primary lives on the previous page. Only relevant
       // when page > 0.
@@ -385,9 +370,7 @@ export default function ConfluenceIndex() {
             )}
             {data?.rows.map((r, idx) => {
               const position = groupInfo.positions[idx] ?? "solo";
-              const groupSize = groupInfo.groupSizes[idx] ?? 1;
               const isSibling = position === "sibling";
-              const isFirst = position === "first";
 
               // Sibling rows: the FY / Project ID / Project Name cells are
               // empty because they're visually "merged" with the primary row
@@ -419,27 +402,23 @@ export default function ConfluenceIndex() {
                       />
                     )}
                   </td>
-                  {/* Project name + optional "+N more" pill on primary rows */}
-                  <td>
+                  {/* Project name — truncated to fit; full name on hover. */}
+                  <td style={{ maxWidth: 280, width: 280 }}>
                     {isSibling ? null : (
                       <div
                         style={{
-                          display: "flex",
-                          alignItems: "flex-start",
-                          gap: 8,
+                          maxWidth: "100%",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
                         }}
                       >
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <NameCell
-                            primary={r.project_name}
-                            source={r.project_name_source}
-                            fallback={r.page_type === "project" ? r.title : null}
-                            pageId={r.page_id}
-                          />
-                        </div>
-                        {isFirst && groupSize > 1 && (
-                          <GroupSizePill count={groupSize - 1} />
-                        )}
+                        <NameCell
+                          primary={r.project_name}
+                          source={r.project_name_source}
+                          fallback={r.page_type === "project" ? r.title : null}
+                          pageId={r.page_id}
+                        />
                       </div>
                     )}
                   </td>
@@ -542,39 +521,7 @@ export default function ConfluenceIndex() {
   );
 }
 
-/**
- * GroupSizePill — rendered next to the project name on the "first" row of a
- * multi-row group. Communicates "+N more apps in this project" without the
- * reader having to count the sibling rows below.
- *
- * Reuses the existing Status pill shape from DESIGN.md (2px radius, 11px
- * caption, amber at ~14% opacity bg + full-strength text). Not a new token.
- */
-function GroupSizePill({ count }: { count: number }) {
-  if (count <= 0) return null;
-  return (
-    <span
-      title={`${count} more application${count === 1 ? "" : "s"} in this project — shown below, tied by the amber left border.`}
-      style={{
-        display: "inline-block",
-        padding: "1px 6px",
-        fontSize: 10,
-        fontFamily: "var(--font-mono)",
-        fontWeight: 600,
-        letterSpacing: 0.4,
-        color: "var(--accent)",
-        background: "rgba(246, 166, 35, 0.14)",
-        border: "1px solid rgba(246, 166, 35, 0.35)",
-        borderRadius: "var(--radius-sm)",
-        whiteSpace: "nowrap",
-        flexShrink: 0,
-        marginTop: 2,
-      }}
-    >
-      +{count} more
-    </span>
-  );
-}
+const STRICT_APP_ID_RE = /^A\d{5,7}$/;
 
 function IdCell({
   id,
@@ -588,6 +535,15 @@ function IdCell({
   kind: "project" | "app";
 }) {
   if (!id) return <span style={{ color: "var(--text-dim)" }}>—</span>;
+  // For the app column we ONLY render ids that are (a) strictly AXXXXX-shaped
+  // and (b) verified against CMDB ref_application. Unresolved hint tags
+  // like "[Robbie IT Service Agent]" and "[PISA]", false-positive substrings
+  // like "A250197" extracted from project id "EA250197", and any other
+  // non-canonical value collapse to an em-dash. Project ids keep their full
+  // rendering because their format is more varied (LI.../FY.../RD.../EA...).
+  if (kind === "app" && (!verified || !STRICT_APP_ID_RE.test(id))) {
+    return <span style={{ color: "var(--text-dim)" }}>—</span>;
+  }
   const color = verified
     ? kind === "app"
       ? "var(--accent)"
