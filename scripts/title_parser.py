@@ -75,7 +75,7 @@ def resolve_app_id_via_cmdb(
 
     Returns the matched app_id if the best hit scores >= min_similarity,
     else None. Uses the given psycopg cursor (caller manages the connection).
-    Queries `northstar.ref_application` across name + short_name.
+    Queries `northstar.ref_application` across name + app_full_name.
 
     The caller is expected to wrap bulk calls via the `ResolveCache` below
     to avoid one round-trip per duplicate hint.
@@ -87,10 +87,10 @@ def resolve_app_id_via_cmdb(
         SELECT app_id,
                GREATEST(
                  COALESCE(similarity(name, %(h)s), 0),
-                 COALESCE(similarity(short_name, %(h)s), 0)
+                 COALESCE(similarity(app_full_name, %(h)s), 0)
                ) AS sim
         FROM northstar.ref_application
-        WHERE name %% %(h)s OR short_name %% %(h)s
+        WHERE name %% %(h)s OR app_full_name %% %(h)s
         ORDER BY sim DESC
         LIMIT 1
         """,

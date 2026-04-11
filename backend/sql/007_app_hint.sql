@@ -22,5 +22,6 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX IF NOT EXISTS idx_ref_app_name_trgm
     ON northstar.ref_application USING gin (name gin_trgm_ops);
 
-CREATE INDEX IF NOT EXISTS idx_ref_app_short_name_trgm
-    ON northstar.ref_application USING gin (short_name gin_trgm_ops);
+-- ref_application has no short_name column; it has app_full_name instead.
+CREATE INDEX IF NOT EXISTS idx_ref_app_full_name_trgm
+    ON northstar.ref_application USING gin (app_full_name gin_trgm_ops);
