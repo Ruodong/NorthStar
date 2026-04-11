@@ -16,12 +16,19 @@ class ApiResponse(BaseModel, Generic[T]):
 
 
 class ApplicationNode(BaseModel):
+    """An application in the IT architecture graph.
+
+    Note: source_project_id and source_fiscal_year are intentionally absent.
+    Applications are long-lived entities; the relationship to a project (and
+    the fiscal year in which that project invested in the app) is expressed
+    via (:Project)-[:INVESTS_IN]->(:Application) edges.
+    """
+
     app_id: str
     name: str
     status: str = "Keep"
     description: str = ""
-    source_project_id: str = ""
-    source_fiscal_year: str = ""
+    cmdb_linked: bool = False
     last_updated: Optional[datetime] = None
 
 
@@ -31,6 +38,7 @@ class IntegrationEdge(BaseModel):
     interaction_type: str = ""
     business_object: str = ""
     status: str = "Keep"
+    direction: str = "outbound"
     protocol: str = ""
 
 
@@ -39,9 +47,52 @@ class ProjectNode(BaseModel):
     name: str
     fiscal_year: str = ""
     pm: str = ""
+    pm_itcode: str = ""
     it_lead: str = ""
+    it_lead_itcode: str = ""
     dt_lead: str = ""
+    dt_lead_itcode: str = ""
     review_status: str = ""
+
+
+class ProjectAppInvestment(BaseModel):
+    """A single (Project)-[:INVESTS_IN]->(Application) relationship."""
+
+    project_id: str
+    project_name: str = ""
+    app_id: str
+    fiscal_year: str = ""
+    review_status: str = ""
+    source_diagram_id: Optional[str] = None
+    last_seen_at: Optional[datetime] = None
+
+
+class DiagramNode(BaseModel):
+    """A unified :Diagram node, sourced from EGM and/or Confluence."""
+
+    diagram_id: str
+    diagram_type: str = "Unknown"  # App_Arch | Tech_Arch | Unknown
+    file_kind: str = "drawio"  # drawio | image | pdf
+    file_name: str = ""
+    source_systems: list[str] = Field(default_factory=list)  # ['egm','confluence']
+    egm_diagram_id: Optional[str] = None
+    confluence_attachment_id: Optional[str] = None
+    confluence_page_id: Optional[str] = None
+    download_path: Optional[str] = None
+    local_path: Optional[str] = None
+    has_graph_data: bool = False
+    last_updated: Optional[datetime] = None
+
+
+class ConfluencePageNode(BaseModel):
+    """A :ConfluencePage node (application page or project review page)."""
+
+    page_id: str
+    title: str = ""
+    page_type: str = "other"  # application | project | other
+    page_url: str = ""
+    fiscal_year: str = ""
+    last_updated: Optional[datetime] = None
 
 
 class GraphFull(BaseModel):
@@ -115,3 +166,32 @@ class HubApp(BaseModel):
     app_id: str
     name: str
     degree: int
+
+
+class PendingMergeCandidate(BaseModel):
+    id: int
+    norm_key: str
+    candidate_ids: list[str]
+    raw_names: list[str]
+    projects: list[str]
+    created_at: datetime
+    reviewed_at: Optional[datetime] = None
+    decision: Optional[str] = None  # "merge" | "keep_separate" | None
+    decided_by: Optional[str] = None
+    canonical_id: Optional[str] = None
+    note: Optional[str] = None
+
+
+class MergeDecisionRequest(BaseModel):
+    decision: str  # "merge" | "keep_separate"
+    canonical_id: Optional[str] = None  # required when decision == "merge"
+    decided_by: str = "unknown"
+    note: Optional[str] = None
+
+
+class ManualAppAlias(BaseModel):
+    alias_id: str
+    canonical_id: str
+    decided_at: Optional[datetime] = None
+    decided_by: Optional[str] = None
+    note: Optional[str] = None

@@ -1,0 +1,70 @@
+{
+  "_comment": "Maps source files to their test files. PostToolUse hook reads this and runs only affected tests after each Edit/Write. Keep entries stable — when a new source file appears, add it here BEFORE writing tests for it.",
+  "_version": 1,
+  "backend": {
+    "backend/app/routers/graph.py": {
+      "api": ["api-tests/test_graph.py", "api-tests/test_ontology.py"]
+    },
+    "backend/app/routers/analytics.py": {
+      "api": ["api-tests/test_analytics.py"]
+    },
+    "backend/app/routers/ingestion.py": {
+      "api": ["api-tests/test_ingestion.py"]
+    },
+    "backend/app/routers/masters.py": {
+      "api": ["api-tests/test_masters.py"]
+    },
+    "backend/app/routers/admin.py": {
+      "api": ["api-tests/test_admin_confluence.py", "api-tests/test_admin_applications.py", "api-tests/test_admin_projects.py"]
+    },
+    "backend/app/routers/aliases.py": {
+      "api": ["api-tests/test_aliases.py"]
+    },
+    "backend/app/services/graph_query.py": {
+      "api": ["api-tests/test_ontology.py", "api-tests/test_graph.py"]
+    },
+    "backend/app/services/neo4j_client.py": {
+      "api": ["api-tests/test_ontology.py"]
+    },
+    "backend/app/services/pg_client.py": {
+      "api": ["api-tests/test_masters.py", "api-tests/test_admin_confluence.py"]
+    },
+    "backend/app/services/confluence_body.py": {
+      "api": ["api-tests/test_admin_confluence.py"]
+    },
+    "backend/app/services/drawio_parser.py": {
+      "api": ["api-tests/test_ingestion.py"]
+    },
+    "backend/app/services/ingestion.py": {
+      "api": ["api-tests/test_ingestion.py"]
+    }
+  },
+  "frontend": {
+    "frontend/src/app/admin/confluence/": {
+      "e2e": ["e2e-tests/confluence.spec.ts"]
+    },
+    "frontend/src/app/admin/applications/[app_id]/": {
+      "e2e": ["e2e-tests/application-detail.spec.ts"]
+    },
+    "frontend/src/app/admin/projects/[project_id]/": {
+      "e2e": ["e2e-tests/project-detail.spec.ts"]
+    }
+  },
+  "scripts": {
+    "scripts/sync_from_egm.py": {
+      "api": ["api-tests/test_masters.py"]
+    },
+    "scripts/load_neo4j_from_pg.py": {
+      "api": ["api-tests/test_ontology.py"]
+    },
+    "scripts/load_neo4j_from_confluence.py": {
+      "api": ["api-tests/test_ontology.py"]
+    }
+  },
+  "wildcards": {
+    "backend/sql/*.sql": ["api-tests/test_masters.py"],
+    "frontend/src/app/layout.tsx": [],
+    "frontend/src/app/globals.css": [],
+    "frontend/src/lib/api.ts": ["e2e-tests/smoke.spec.ts"]
+  }
+}

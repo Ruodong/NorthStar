@@ -14,10 +14,18 @@ _driver: Optional[AsyncDriver] = None
 
 
 SCHEMA_STATEMENTS: list[str] = [
+    # Unique keys
     "CREATE CONSTRAINT app_id_unique IF NOT EXISTS FOR (a:Application) REQUIRE a.app_id IS UNIQUE",
     "CREATE CONSTRAINT project_id_unique IF NOT EXISTS FOR (p:Project) REQUIRE p.project_id IS UNIQUE",
+    "CREATE CONSTRAINT diagram_id_unique IF NOT EXISTS FOR (d:Diagram) REQUIRE d.diagram_id IS UNIQUE",
+    "CREATE CONSTRAINT confluence_page_unique IF NOT EXISTS FOR (c:ConfluencePage) REQUIRE c.page_id IS UNIQUE",
+    # Indexes for common filters
     "CREATE INDEX app_status_idx IF NOT EXISTS FOR (a:Application) ON (a.status)",
-    "CREATE INDEX app_fy_idx IF NOT EXISTS FOR (a:Application) ON (a.source_fiscal_year)",
+    "CREATE INDEX app_cmdb_linked_idx IF NOT EXISTS FOR (a:Application) ON (a.cmdb_linked)",
+    "CREATE INDEX project_fy_idx IF NOT EXISTS FOR (p:Project) ON (p.fiscal_year)",
+    "CREATE INDEX diagram_type_idx IF NOT EXISTS FOR (d:Diagram) ON (d.diagram_type)",
+    # Indexes for the INVESTS_IN edge fiscal_year — Neo4j 5 supports relationship indexes
+    "CREATE INDEX invests_in_fy_idx IF NOT EXISTS FOR ()-[r:INVESTS_IN]-() ON (r.fiscal_year)",
 ]
 
 

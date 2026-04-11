@@ -67,6 +67,30 @@ If Confluence credentials are configured in `.env`, the pipeline fetches project
 
 See the [design spec](docs/superpowers/specs/2026-04-09-northstar-mvp-design.md#api-design) for endpoint details. Full OpenAPI is served at `/docs` on the backend.
 
+## Weekly sync (cron)
+
+`scripts/weekly_sync.sh` runs the full cycle: EGM/EAM master data sync → Neo4j rebuild → fuzzy merge candidate refresh. It writes diffs to `ingestion_diffs`, so the `/whats-new` page picks up weekly changes automatically.
+
+Install on server 71:
+
+```bash
+# one-time: make sure the host venv exists
+cd ~/NorthStar
+python3 -m venv .venv-ingest
+.venv-ingest/bin/pip install psycopg[binary] neo4j
+
+# add to crontab (crontab -e):
+0 8 * * 1 /home/lenovo/NorthStar/scripts/weekly_sync.sh >> /var/log/northstar-sync.log 2>&1
+```
+
+This runs every Monday at 08:00 local time. Logs go to `/var/log/northstar-sync.log` (make sure the cron user can write to it, or change the path).
+
+Run manually for the first time to populate `ingestion_diffs`:
+
+```bash
+./scripts/weekly_sync.sh
+```
+
 ## Reused from EGM
 
 | Component | EGM source |

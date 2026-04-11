@@ -339,6 +339,7 @@ def main() -> int:
                     )
                     description = app.get("functions") or ""
 
+                    # Ontology-fix: fiscal_year lives on the INVESTS_IN edge.
                     ns.run(
                         """
                         MERGE (a:Application {app_id: $app_id})
@@ -346,8 +347,6 @@ def main() -> int:
                             a.name = $name,
                             a.status = $status,
                             a.description = $description,
-                            a.source_project_id = $project_id,
-                            a.source_fiscal_year = $fiscal_year,
                             a.cmdb_linked = $cmdb_hit,
                             a.last_updated = $now
                         ON MATCH SET
@@ -358,7 +357,9 @@ def main() -> int:
                             a.last_updated = $now
                         WITH a
                         MATCH (p:Project {project_id: $project_id})
-                        MERGE (p)-[:INCLUDES]->(a)
+                        MERGE (p)-[inv:INVESTS_IN]->(a)
+                        SET inv.fiscal_year = coalesce($fiscal_year, inv.fiscal_year, ''),
+                            inv.last_seen_at = $now
                         """,
                         app_id=app_id,
                         name=(canonical_name or app_id)[:200],

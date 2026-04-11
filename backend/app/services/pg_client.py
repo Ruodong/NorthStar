@@ -49,3 +49,10 @@ async def fetchval(sql: str, *args: Any) -> Any:
     pool = await connect()
     async with pool.acquire() as conn:
         return await conn.fetchval(sql, *args)
+
+
+async def execute_script(sql_script: str) -> None:
+    """Execute a raw multi-statement SQL script (for migrations)."""
+    pool = await connect()
+    async with pool.acquire() as conn:
+        await conn.execute(sql_script)

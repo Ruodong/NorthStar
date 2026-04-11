@@ -232,12 +232,8 @@ export default function GraphPage() {
                 <td>{selected.node.status}</td>
               </tr>
               <tr>
-                <th>Source Project</th>
-                <td>{selected.node.source_project_id}</td>
-              </tr>
-              <tr>
-                <th>Fiscal Year</th>
-                <td>{selected.node.source_fiscal_year}</td>
+                <th>CMDB linked</th>
+                <td>{selected.node.cmdb_linked ? "yes" : "no"}</td>
               </tr>
               {selected.node.description && (
                 <tr>
@@ -245,6 +241,19 @@ export default function GraphPage() {
                   <td>{selected.node.description}</td>
                 </tr>
               )}
+              <tr>
+                <th>Investments</th>
+                <td>
+                  <a
+                    href={`/api/graph/nodes/${encodeURIComponent(selected.node.app_id)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ color: "var(--accent)" }}
+                  >
+                    View full detail ↗
+                  </a>
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>

@@ -64,6 +64,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
             Projects <Tag>{fmt(counts.projects)}</Tag>
           </AdminLink>
           <AdminLink href="/admin/confluence">Confluence Raw</AdminLink>
+          <AdminLink href="/admin/aliases">App Aliases</AdminLink>
         </nav>
       </div>
       {children}

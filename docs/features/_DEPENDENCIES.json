@@ -1,0 +1,243 @@
+{
+  "_comment": "NorthStar cross-feature dependency graph. Used by Claude during closed-loop Phase 1 impact assessment. Keep in sync with .specify/features/*/spec.md.",
+  "_globalFiles": [
+    "backend/app/main.py",
+    "backend/app/config.py",
+    "backend/app/services/neo4j_client.py",
+    "backend/app/services/pg_client.py",
+    "backend/app/services/drawio_parser.py",
+    "backend/app/services/confluence_body.py",
+    "frontend/src/app/layout.tsx",
+    "frontend/src/app/globals.css",
+    "frontend/src/components/StarMark.tsx",
+    "frontend/src/lib/api.ts",
+    "docker-compose.yml",
+    "backend/sql/001_init.sql",
+    "backend/sql/002_confluence.sql",
+    "backend/sql/003_ontology_fix.sql"
+  ],
+  "_sharedTables": {
+    "ref_application": {
+      "written_by": ["sync-egm-eam"],
+      "read_by": ["core-graph", "masters", "admin-applications", "ingestion", "load-neo4j"]
+    },
+    "ref_application_tco": {
+      "written_by": ["sync-egm-eam"],
+      "read_by": ["masters", "admin-applications", "dashboard"]
+    },
+    "ref_project": {
+      "written_by": ["sync-egm-eam"],
+      "read_by": ["masters", "admin-projects", "ingestion", "load-neo4j"]
+    },
+    "ref_project_team_member": {
+      "written_by": ["sync-egm-eam"],
+      "read_by": ["admin-projects"]
+    },
+    "ref_project_summary": {
+      "written_by": ["sync-egm-eam"],
+      "read_by": ["admin-projects"]
+    },
+    "ref_request": {
+      "written_by": ["sync-egm-eam"],
+      "read_by": ["admin-projects", "load-neo4j"]
+    },
+    "ref_employee": {
+      "written_by": ["sync-egm-eam"],
+      "read_by": ["masters", "admin-projects", "admin-applications", "admin-confluence", "resolve-owners"]
+    },
+    "ref_diagram": {
+      "written_by": ["sync-egm-eam"],
+      "read_by": ["load-neo4j"]
+    },
+    "ref_diagram_app": {
+      "written_by": ["sync-egm-eam"],
+      "read_by": ["admin-applications"]
+    },
+    "ref_diagram_interaction": {
+      "written_by": ["sync-egm-eam"],
+      "read_by": ["load-neo4j"]
+    },
+    "ref_business_capability": {
+      "written_by": ["sync-egm-eam"],
+      "read_by": []
+    },
+    "confluence_page": {
+      "written_by": ["scan-confluence", "resolve-owners"],
+      "read_by": ["admin-confluence", "admin-applications", "admin-projects", "load-neo4j"]
+    },
+    "confluence_attachment": {
+      "written_by": ["scan-confluence"],
+      "read_by": ["admin-confluence", "admin-applications", "admin-projects", "load-neo4j"]
+    },
+    "manual_app_aliases": {
+      "written_by": ["aliases"],
+      "read_by": ["load-neo4j", "ingestion"]
+    },
+    "pending_app_merge": {
+      "written_by": ["aliases", "generate-merge-candidates"],
+      "read_by": ["aliases"]
+    },
+    "app_normalized_name": {
+      "written_by": ["generate-merge-candidates"],
+      "read_by": ["aliases"]
+    },
+    "project_exclusions": {
+      "written_by": ["manual"],
+      "read_by": ["sync-egm-eam"]
+    },
+    "sync_run": {
+      "written_by": ["sync-egm-eam"],
+      "read_by": []
+    }
+  },
+  "features": {
+    "core-graph": {
+      "description": "Neo4j graph read APIs. Applications + Projects + INVESTS_IN + INTEGRATES_WITH + Diagrams + ConfluencePages.",
+      "routers": ["backend/app/routers/graph.py"],
+      "services": ["backend/app/services/graph_query.py", "backend/app/services/neo4j_client.py"],
+      "tables": ["(Neo4j only)"],
+      "frontendPaths": ["frontend/src/app/graph/", "frontend/src/app/dashboard/"],
+      "specs": [".specify/features/core-graph/"]
+    },
+    "dashboard": {
+      "description": "Management Dashboard KPIs (Architecture Graph + Master Data).",
+      "routers": ["backend/app/routers/analytics.py"],
+      "services": ["backend/app/services/graph_query.py"],
+      "tables": [],
+      "frontendPaths": ["frontend/src/app/dashboard/"],
+      "specs": []
+    },
+    "ingestion": {
+      "description": "Ingestion pipeline: Confluence REST → drawio_parser → AI evaluator → Neo4j.",
+      "routers": ["backend/app/routers/ingestion.py"],
+      "services": [
+        "backend/app/services/ingestion.py",
+        "backend/app/services/confluence.py",
+        "backend/app/services/ai_evaluator.py",
+        "backend/app/services/drawio_parser.py"
+      ],
+      "tables": ["ref_application", "ref_project", "manual_app_aliases"],
+      "frontendPaths": ["frontend/src/app/ingestion/"],
+      "specs": []
+    },
+    "masters": {
+      "description": "Master data APIs (CMDB apps, MSPO projects, employees) sourced from ref_* tables.",
+      "routers": ["backend/app/routers/masters.py"],
+      "services": ["backend/app/services/pg_client.py"],
+      "tables": [
+        "ref_application", "ref_application_tco", "ref_business_capability",
+        "ref_employee", "ref_project"
+      ],
+      "frontendPaths": ["frontend/src/app/admin/applications/", "frontend/src/app/admin/projects/"],
+      "specs": []
+    },
+    "admin-confluence": {
+      "description": "Confluence raw data browser + page detail with attachment preview and sanitized HTML body.",
+      "routers": ["backend/app/routers/admin.py"],
+      "services": ["backend/app/services/confluence_body.py"],
+      "tables": ["confluence_page", "confluence_attachment"],
+      "frontendPaths": [
+        "frontend/src/app/admin/confluence/",
+        "frontend/src/app/admin/confluence/[page_id]/"
+      ],
+      "specs": []
+    },
+    "admin-applications": {
+      "description": "Application catalog list (TCO-driven) + per-app unified detail page joining CMDB, TCO, Confluence, Neo4j.",
+      "routers": ["backend/app/routers/admin.py", "backend/app/routers/masters.py"],
+      "services": ["backend/app/services/pg_client.py", "backend/app/services/neo4j_client.py"],
+      "tables": [
+        "ref_application", "ref_application_tco", "ref_employee",
+        "confluence_page", "confluence_attachment", "ref_diagram_app"
+      ],
+      "frontendPaths": [
+        "frontend/src/app/admin/applications/",
+        "frontend/src/app/admin/applications/[app_id]/"
+      ],
+      "specs": []
+    },
+    "admin-projects": {
+      "description": "Project catalog list (MSPO-driven) + per-project unified detail page joining MSPO, team, summary, Confluence, Neo4j.",
+      "routers": ["backend/app/routers/admin.py", "backend/app/routers/masters.py"],
+      "services": ["backend/app/services/pg_client.py", "backend/app/services/neo4j_client.py"],
+      "tables": [
+        "ref_project", "ref_project_team_member", "ref_project_summary",
+        "ref_request", "ref_employee",
+        "confluence_page", "confluence_attachment", "project_exclusions"
+      ],
+      "frontendPaths": [
+        "frontend/src/app/admin/projects/",
+        "frontend/src/app/admin/projects/[project_id]/"
+      ],
+      "specs": []
+    },
+    "aliases": {
+      "description": "Pending-merge review UI for non-CMDB applications. Human decides whether to merge or keep separate.",
+      "routers": ["backend/app/routers/aliases.py"],
+      "services": ["backend/app/services/pg_client.py"],
+      "tables": ["pending_app_merge", "manual_app_aliases", "app_normalized_name"],
+      "frontendPaths": ["frontend/src/app/admin/aliases/"],
+      "specs": []
+    },
+    "sync-egm-eam": {
+      "description": "One-off sync job that pulls master data from egm-postgres and eam-postgres into northstar-postgres ref_* tables. Runs on host, not in container.",
+      "routers": [],
+      "services": [],
+      "tables": [
+        "ref_application", "ref_application_tco", "ref_business_capability",
+        "ref_employee", "ref_project", "ref_project_team_member",
+        "ref_project_summary", "ref_request", "ref_diagram",
+        "ref_diagram_app", "ref_diagram_interaction", "sync_run"
+      ],
+      "scripts": ["scripts/sync_from_egm.py"],
+      "specs": []
+    },
+    "scan-confluence": {
+      "description": "Scanner that walks FY<N> Projects parent pages, captures page body + all attachments, parses questionnaire, downloads files to data/attachments. Runs on host via VPN.",
+      "routers": [],
+      "services": ["backend/app/services/confluence_body.py"],
+      "tables": ["confluence_page", "confluence_attachment"],
+      "scripts": ["scripts/scan_confluence.py", "scripts/confluence_body.py"],
+      "specs": []
+    },
+    "load-neo4j": {
+      "description": "Neo4j loader that reads ref_diagram drawio_xml + ref_request + ref_application + confluence_attachment to build the graph. Applies manual_app_aliases.",
+      "routers": [],
+      "services": ["backend/app/services/drawio_parser.py"],
+      "tables": [
+        "ref_diagram", "ref_request", "ref_project", "ref_application",
+        "ref_diagram_app", "ref_diagram_interaction",
+        "confluence_page", "confluence_attachment", "manual_app_aliases"
+      ],
+      "scripts": [
+        "scripts/load_neo4j_from_pg.py",
+        "scripts/load_neo4j_from_confluence.py",
+        "scripts/ingest.py"
+      ],
+      "specs": [".specify/features/ontology-fix/"]
+    },
+    "resolve-owners": {
+      "description": "Batch job that resolves free-text q_pm / q_it_lead / q_dt_lead in confluence_page to itcodes via cascade matching (exact, email, parens, fuzzy trgm).",
+      "routers": [],
+      "services": [],
+      "tables": ["confluence_page", "ref_employee"],
+      "scripts": ["scripts/resolve_owners.py"],
+      "specs": []
+    }
+  },
+  "edges": [
+    {"from": "core-graph", "to": "ingestion", "type": "writes-graph", "detail": "ingestion writes :Project :Application :INVESTS_IN which core-graph reads"},
+    {"from": "core-graph", "to": "load-neo4j", "type": "writes-graph", "detail": "load-neo4j writes the same graph types that core-graph queries"},
+    {"from": "core-graph", "to": "aliases", "type": "indirect", "detail": "manual_app_aliases decisions affect what load-neo4j writes; core-graph sees the result"},
+    {"from": "dashboard", "to": "core-graph", "type": "read", "detail": "dashboard calls /api/analytics/summary which runs Cypher"},
+    {"from": "admin-applications", "to": "core-graph", "type": "read", "detail": "app detail queries Neo4j for projects+integrations"},
+    {"from": "admin-projects", "to": "core-graph", "type": "read", "detail": "project detail queries Neo4j for INCLUDES edges"},
+    {"from": "admin-applications", "to": "masters", "type": "read", "detail": "app list driven by ref_application_tco JOIN ref_application"},
+    {"from": "admin-projects", "to": "masters", "type": "read", "detail": "project list driven by ref_project"},
+    {"from": "admin-confluence", "to": "scan-confluence", "type": "consumes", "detail": "admin-confluence reads tables scan-confluence writes"},
+    {"from": "masters", "to": "sync-egm-eam", "type": "consumes", "detail": "masters reads ref_* tables that sync-egm-eam writes"},
+    {"from": "load-neo4j", "to": "sync-egm-eam", "type": "consumes", "detail": "load-neo4j reads ref_* tables and rebuilds Neo4j"},
+    {"from": "load-neo4j", "to": "scan-confluence", "type": "consumes", "detail": "load-neo4j reads confluence_attachment + drawio files"},
+    {"from": "ingestion", "to": "scan-confluence", "type": "consumes", "detail": "ingestion pipeline reads Confluence attachments via services/confluence.py"}
+  ]
+}

@@ -51,13 +51,24 @@ export interface HubApp {
   degree: number;
 }
 
+// Ontology-fix: Application no longer carries source_project_id /
+// source_fiscal_year. Project→App ownership is expressed via
+// (:Project)-[:INVESTS_IN]->(:Application) edges with fiscal_year on the edge.
+// Query /api/graph/nodes/{app_id} for the full investments[] list.
 export interface ApplicationNode {
   app_id: string;
   name: string;
   status: string;
   description?: string;
-  source_project_id?: string;
-  source_fiscal_year?: string;
+  cmdb_linked?: boolean;
+  last_updated?: string;
+}
+
+export interface ProjectAppInvestment {
+  project_id: string;
+  name?: string;
+  fiscal_year?: string;
+  review_status?: string;
 }
 
 export interface IntegrationEdge {
@@ -66,6 +77,7 @@ export interface IntegrationEdge {
   interaction_type: string;
   business_object: string;
   status: string;
+  direction?: string;
   protocol: string;
 }
 

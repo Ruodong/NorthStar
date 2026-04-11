@@ -73,18 +73,22 @@ def upsert_project(session, project) -> None:
 
 
 def upsert_application(session, app_id: str, app: dict, project) -> None:
+    # Ontology-fix: fiscal_year + review_status live on the INVESTS_IN edge,
+    # not on the Application node.
     session.run(
         """
         MERGE (a:Application {app_id: $app_id})
+        ON CREATE SET a.cmdb_linked = false
         SET a.name = $name,
             a.status = $status,
             a.description = $description,
-            a.source_project_id = coalesce(a.source_project_id, $project_id),
-            a.source_fiscal_year = coalesce(a.source_fiscal_year, $fiscal_year),
             a.last_updated = $now
         WITH a
         MATCH (p:Project {project_id: $project_id})
-        MERGE (p)-[:INCLUDES]->(a)
+        MERGE (p)-[r:INVESTS_IN]->(a)
+        SET r.fiscal_year = coalesce($fiscal_year, r.fiscal_year, ''),
+            r.review_status = coalesce($review_status, r.review_status, ''),
+            r.last_seen_at = $now
         """,
         app_id=app_id,
         name=app.get("app_name") or app_id,
@@ -92,6 +96,7 @@ def upsert_application(session, app_id: str, app: dict, project) -> None:
         description=app.get("functions") or "",
         project_id=project.project_id,
         fiscal_year=project.fiscal_year,
+        review_status=getattr(project, "review_status", "") or "",
         now=datetime.utcnow().isoformat(),
     )
 

@@ -80,7 +80,8 @@ async def _load_project(project: ProjectPage) -> tuple[int, int, dict]:
         },
     )
 
-    # Merge applications + INCLUDES
+    # Merge applications + INVESTS_IN edge (ontology-fix: Project invests in App,
+    # fiscal_year lives on the edge, not on the Application node)
     for app in applications:
         cell_id = app.get("cell_id", "")
         app_id = app_id_by_cell.get(cell_id)
@@ -89,15 +90,17 @@ async def _load_project(project: ProjectPage) -> tuple[int, int, dict]:
         await neo4j_client.run_write(
             """
             MERGE (a:Application {app_id: $app_id})
+            ON CREATE SET a.cmdb_linked = false
             SET a.name = $name,
                 a.status = $status,
                 a.description = $description,
-                a.source_project_id = coalesce(a.source_project_id, $project_id),
-                a.source_fiscal_year = coalesce(a.source_fiscal_year, $fiscal_year),
                 a.last_updated = $now
             WITH a
             MATCH (p:Project {project_id: $project_id})
-            MERGE (p)-[:INCLUDES]->(a)
+            MERGE (p)-[r:INVESTS_IN]->(a)
+            SET r.fiscal_year = coalesce($fiscal_year, r.fiscal_year, ''),
+                r.review_status = coalesce($review_status, r.review_status, ''),
+                r.last_seen_at = $now
             """,
             {
                 "app_id": app_id,
@@ -106,6 +109,7 @@ async def _load_project(project: ProjectPage) -> tuple[int, int, dict]:
                 "description": app.get("functions", ""),
                 "project_id": project.project_id,
                 "fiscal_year": project.fiscal_year,
+                "review_status": project.review_status,
                 "now": now,
             },
         )
