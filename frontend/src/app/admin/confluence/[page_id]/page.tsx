@@ -96,6 +96,61 @@ interface Detail {
   children: ChildPage[];
 }
 
+// ---------------------------------------------------------------------------
+// Extracted Apps / Interactions — populated by scripts/parse_confluence_drawios.py
+// See backend route GET /api/admin/confluence/pages/{id}/extracted
+// ---------------------------------------------------------------------------
+interface ExtractedApp {
+  attachment_id: string;
+  attachment_title: string;
+  source_page_id: string;
+  source_page_title: string;
+  source_kind: "own" | "descendant";
+  cell_id: string;
+  app_name: string;
+  standard_id: string | null;
+  id_is_standard: boolean;
+  application_status: string | null;
+  functions: string | null;
+  fill_color: string | null;
+  cmdb_name: string | null;
+}
+
+interface ExtractedInteraction {
+  attachment_id: string;
+  attachment_title: string;
+  source_page_id: string;
+  source_page_title: string;
+  source_kind: "own" | "descendant";
+  edge_cell_id: string;
+  source_cell_id: string | null;
+  target_cell_id: string | null;
+  interaction_type: string | null;
+  direction: string | null;
+  interaction_status: string | null;
+  business_object: string | null;
+  source_app_name: string | null;
+  source_standard_id: string | null;
+  target_app_name: string | null;
+  target_standard_id: string | null;
+}
+
+interface ExtractedByAttachment {
+  attachment_id: string;
+  attachment_title: string;
+  source_page_title: string;
+  source_kind: "own" | "descendant";
+  app_count: number;
+  app_with_std_id_count: number;
+  interaction_count: number;
+}
+
+interface ExtractedData {
+  apps: ExtractedApp[];
+  interactions: ExtractedInteraction[];
+  by_attachment: ExtractedByAttachment[];
+}
+
 const KIND_LABEL: Record<string, string> = {
   drawio: "draw.io",
   image: "Image",
@@ -121,12 +176,13 @@ function humanSize(bytes: number | null): string {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
 
-type Tab = "attachments" | "hierarchy" | "questionnaire" | "raw";
+type Tab = "attachments" | "extracted" | "hierarchy" | "questionnaire" | "raw";
 
 export default function ConfluencePageDetail() {
   const params = useParams();
   const pageId = params.page_id as string;
   const [detail, setDetail] = useState<Detail | null>(null);
+  const [extracted, setExtracted] = useState<ExtractedData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<Attachment | null>(null);
   const [tab, setTab] = useState<Tab>("attachments");
@@ -134,16 +190,28 @@ export default function ConfluencePageDetail() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch(`/api/admin/confluence/pages/${pageId}`, { cache: "no-store" });
-        const j = await r.json();
-        if (!j.success) throw new Error(j.error);
-        setDetail(j.data);
+        const [rDetail, rExtracted] = await Promise.all([
+          fetch(`/api/admin/confluence/pages/${pageId}`, { cache: "no-store" }),
+          fetch(`/api/admin/confluence/pages/${pageId}/extracted`, {
+            cache: "no-store",
+          }),
+        ]);
+        const jDetail = await rDetail.json();
+        if (!jDetail.success) throw new Error(jDetail.error);
+        setDetail(jDetail.data);
         // auto-select first previewable
-        const first = j.data.attachments.find(
+        const first = jDetail.data.attachments.find(
           (a: Attachment) =>
             a.local_path && ["drawio", "image", "pdf"].includes(a.file_kind)
         );
         if (first) setSelected(first);
+
+        // Extraction is best-effort: if the endpoint errors (e.g. migration
+        // 011 not applied on this host), the tab is hidden silently.
+        if (rExtracted.ok) {
+          const jExtracted = await rExtracted.json();
+          if (jExtracted.success) setExtracted(jExtracted.data);
+        }
       } catch (e) {
         setErr(String(e));
       }
@@ -292,6 +360,13 @@ export default function ConfluencePageDetail() {
         <TabButton active={tab === "attachments"} onClick={() => setTab("attachments")}>
           Attachments <Chip>{previewable.length}</Chip>
         </TabButton>
+        <TabButton
+          active={tab === "extracted"}
+          onClick={() => setTab("extracted")}
+          disabled={!extracted || extracted.apps.length === 0}
+        >
+          Extracted <Chip>{extracted?.apps.length ?? 0}</Chip>
+        </TabButton>
         <TabButton active={tab === "hierarchy"} onClick={() => setTab("hierarchy")}>
           Hierarchy{" "}
           <Chip>
@@ -403,6 +478,8 @@ export default function ConfluencePageDetail() {
           </div>
         </div>
       )}
+
+      {tab === "extracted" && <ExtractedView data={extracted} />}
 
       {tab === "hierarchy" && (
         <HierarchyView
@@ -1147,5 +1224,435 @@ function CountChip({
       <span>{value}</span>
       <span style={{ fontSize: 9, color: "var(--text-dim)" }}>{label}</span>
     </span>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// ExtractedView — drawio parser output
+//
+// Lists every application + interaction that scripts/parse_confluence_drawios.py
+// extracted from every drawio attached to this page or any descendant, grouped
+// by source drawio file. Apps with A-ids link into the CMDB application detail
+// page when available.
+// ---------------------------------------------------------------------------
+function ExtractedView({ data }: { data: ExtractedData | null }) {
+  if (!data) {
+    return (
+      <div className="empty" style={{ padding: 40 }}>
+        Loading extracted apps…
+      </div>
+    );
+  }
+  if (data.apps.length === 0 && data.by_attachment.length === 0) {
+    return (
+      <div className="empty" style={{ padding: 40 }}>
+        No apps extracted yet from drawios on this page.
+        <br />
+        <small style={{ color: "var(--text-dim)" }}>
+          Run <code>scripts/parse_confluence_drawios.py</code> on 71 and
+          reload.
+        </small>
+      </div>
+    );
+  }
+
+  // Bucket apps + interactions by source attachment so the UI can show
+  // "this file → 20 apps (8 with A-id), 23 interactions".
+  const appsByAttachment = new Map<string, ExtractedApp[]>();
+  for (const a of data.apps) {
+    const list = appsByAttachment.get(a.attachment_id) || [];
+    list.push(a);
+    appsByAttachment.set(a.attachment_id, list);
+  }
+  const intersByAttachment = new Map<string, ExtractedInteraction[]>();
+  for (const i of data.interactions) {
+    const list = intersByAttachment.get(i.attachment_id) || [];
+    list.push(i);
+    intersByAttachment.set(i.attachment_id, list);
+  }
+
+  // Summary totals across all files
+  const totalApps = data.apps.length;
+  const totalStd = data.apps.filter((a) => a.standard_id).length;
+  const totalInters = data.interactions.length;
+
+  return (
+    <div className="panel" style={{ padding: 0 }}>
+      <div
+        className="panel-title"
+        style={{
+          padding: "18px 18px 12px",
+          display: "flex",
+          gap: 16,
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+        }}
+      >
+        <span>Extracted from drawio diagrams</span>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <SummaryChip
+            label="apps"
+            value={totalApps}
+            color="var(--text-muted)"
+          />
+          <SummaryChip label="A-id" value={totalStd} color="var(--accent)" />
+          <SummaryChip
+            label="edges"
+            value={totalInters}
+            color="var(--text-muted)"
+          />
+          <SummaryChip
+            label="files"
+            value={data.by_attachment.length}
+            color="var(--text-muted)"
+          />
+        </div>
+      </div>
+
+      {data.by_attachment.map((f) => {
+        const apps = appsByAttachment.get(f.attachment_id) || [];
+        const inters = intersByAttachment.get(f.attachment_id) || [];
+        return (
+          <ExtractedFileCard
+            key={f.attachment_id}
+            file={f}
+            apps={apps}
+            interactions={inters}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function SummaryChip({
+  label,
+  value,
+  color,
+}: {
+  label: string;
+  value: number;
+  color: string;
+}) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "baseline",
+        gap: 4,
+        padding: "3px 10px",
+        fontFamily: "var(--font-mono)",
+        fontSize: 11,
+        color,
+        background: "var(--bg-elevated)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-sm)",
+      }}
+    >
+      <span style={{ fontWeight: 600 }}>{value}</span>
+      <span style={{ fontSize: 9, color: "var(--text-dim)" }}>{label}</span>
+    </span>
+  );
+}
+
+const STATUS_COLOR: Record<string, string> = {
+  Keep: "#5fc58a",
+  Change: "var(--accent)",
+  New: "#e8716b",
+  Sunset: "#808080",
+  "3rd Party": "#6ba6e8",
+  Unknown: "var(--text-dim)",
+};
+
+function StatusPill({ status }: { status: string | null }) {
+  if (!status) return null;
+  const color = STATUS_COLOR[status] || "var(--text-dim)";
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        padding: "1px 6px",
+        fontSize: 9,
+        fontFamily: "var(--font-mono)",
+        fontWeight: 600,
+        textTransform: "uppercase",
+        letterSpacing: 0.4,
+        color,
+        background: "rgba(255, 255, 255, 0.03)",
+        border: `1px solid ${color}44`,
+        borderRadius: "var(--radius-sm)",
+      }}
+    >
+      {status}
+    </span>
+  );
+}
+
+function ExtractedFileCard({
+  file,
+  apps,
+  interactions,
+}: {
+  file: ExtractedByAttachment;
+  apps: ExtractedApp[];
+  interactions: ExtractedInteraction[];
+}) {
+  return (
+    <div
+      style={{
+        borderTop: "1px solid var(--border)",
+        padding: "14px 18px 18px",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          gap: 12,
+          marginBottom: 8,
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              fontSize: 13,
+              color: "var(--text)",
+              wordBreak: "break-word",
+            }}
+          >
+            {file.attachment_title}
+          </div>
+          <div
+            style={{
+              fontSize: 10,
+              color: "var(--text-dim)",
+              fontFamily: "var(--font-mono)",
+              marginTop: 2,
+            }}
+          >
+            {file.source_kind === "descendant"
+              ? `from child: ${file.source_page_title}`
+              : "this page"}
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          <SummaryChip
+            label="apps"
+            value={file.app_count}
+            color="var(--text-muted)"
+          />
+          <SummaryChip
+            label="A-id"
+            value={file.app_with_std_id_count}
+            color="var(--accent)"
+          />
+          <SummaryChip
+            label="edges"
+            value={file.interaction_count}
+            color="var(--text-muted)"
+          />
+        </div>
+      </div>
+
+      {apps.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <div
+            style={{
+              fontSize: 10,
+              color: "var(--text-dim)",
+              letterSpacing: 0.6,
+              textTransform: "uppercase",
+              fontFamily: "var(--font-mono)",
+              marginBottom: 6,
+            }}
+          >
+            Applications ({apps.length})
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr
+                style={{
+                  fontSize: 10,
+                  color: "var(--text-dim)",
+                  textTransform: "uppercase",
+                  letterSpacing: 0.6,
+                  fontFamily: "var(--font-mono)",
+                  textAlign: "left",
+                }}
+              >
+                <th style={{ padding: "6px 8px", width: 80 }}>APP ID</th>
+                <th style={{ padding: "6px 8px" }}>Name</th>
+                <th style={{ padding: "6px 8px", width: 90 }}>Status</th>
+                <th style={{ padding: "6px 8px" }}>Functions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {apps.map((a) => (
+                <tr
+                  key={`${a.attachment_id}:${a.cell_id}`}
+                  style={{
+                    fontSize: 12,
+                    borderTop: "1px solid var(--border)",
+                  }}
+                >
+                  <td
+                    style={{
+                      padding: "6px 8px",
+                      fontFamily: "var(--font-mono)",
+                    }}
+                  >
+                    {a.standard_id ? (
+                      <Link
+                        href={`/admin/applications/${encodeURIComponent(
+                          a.standard_id
+                        )}`}
+                        style={{
+                          color: a.cmdb_name
+                            ? "var(--accent)"
+                            : "var(--text-muted)",
+                          textDecoration: "none",
+                        }}
+                      >
+                        {a.standard_id}
+                      </Link>
+                    ) : (
+                      <span style={{ color: "var(--text-dim)" }}>—</span>
+                    )}
+                  </td>
+                  <td
+                    style={{
+                      padding: "6px 8px",
+                      color: "var(--text)",
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    {a.cmdb_name || a.app_name || "—"}
+                  </td>
+                  <td style={{ padding: "6px 8px" }}>
+                    <StatusPill status={a.application_status} />
+                  </td>
+                  <td
+                    style={{
+                      padding: "6px 8px",
+                      color: "var(--text-dim)",
+                      fontSize: 11,
+                      wordBreak: "break-word",
+                    }}
+                  >
+                    {a.functions || ""}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {interactions.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <div
+            style={{
+              fontSize: 10,
+              color: "var(--text-dim)",
+              letterSpacing: 0.6,
+              textTransform: "uppercase",
+              fontFamily: "var(--font-mono)",
+              marginBottom: 6,
+            }}
+          >
+            Interactions ({interactions.length})
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr
+                style={{
+                  fontSize: 10,
+                  color: "var(--text-dim)",
+                  textTransform: "uppercase",
+                  letterSpacing: 0.6,
+                  fontFamily: "var(--font-mono)",
+                  textAlign: "left",
+                }}
+              >
+                <th style={{ padding: "6px 8px" }}>From</th>
+                <th style={{ padding: "6px 8px", width: 30 }}></th>
+                <th style={{ padding: "6px 8px" }}>To</th>
+                <th style={{ padding: "6px 8px" }}>Business object / type</th>
+                <th style={{ padding: "6px 8px", width: 80 }}>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {interactions.map((i) => {
+                const fromLabel =
+                  i.source_standard_id || i.source_app_name || "—";
+                const toLabel =
+                  i.target_standard_id || i.target_app_name || "—";
+                const bo =
+                  i.business_object || i.interaction_type || "";
+                return (
+                  <tr
+                    key={`${i.attachment_id}:${i.edge_cell_id}`}
+                    style={{
+                      fontSize: 12,
+                      borderTop: "1px solid var(--border)",
+                    }}
+                  >
+                    <td
+                      style={{
+                        padding: "6px 8px",
+                        fontFamily: "var(--font-mono)",
+                        color: i.source_standard_id
+                          ? "var(--accent)"
+                          : "var(--text-muted)",
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {fromLabel}
+                    </td>
+                    <td
+                      style={{
+                        padding: "6px 8px",
+                        color: "var(--text-dim)",
+                        textAlign: "center",
+                      }}
+                    >
+                      →
+                    </td>
+                    <td
+                      style={{
+                        padding: "6px 8px",
+                        fontFamily: "var(--font-mono)",
+                        color: i.target_standard_id
+                          ? "var(--accent)"
+                          : "var(--text-muted)",
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {toLabel}
+                    </td>
+                    <td
+                      style={{
+                        padding: "6px 8px",
+                        color: "var(--text-dim)",
+                        fontSize: 11,
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      {bo}
+                    </td>
+                    <td style={{ padding: "6px 8px" }}>
+                      <StatusPill status={i.interaction_status} />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }

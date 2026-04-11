@@ -673,6 +673,181 @@ async def get_page(page_id: str) -> ApiResponse:
     )
 
 
+@router.get("/confluence/pages/{page_id}/extracted")
+async def get_page_extracted(page_id: str) -> ApiResponse:
+    """Return drawio parser output for every drawio attachment on this page
+    and its descendant pages.
+
+    Spec: confluence-drawio-extract § 7. Reads from the confluence_diagram_app
+    + confluence_diagram_interaction tables populated by
+    scripts/parse_confluence_drawios.py.
+
+    Response shape:
+        {
+            "apps": [{
+                attachment_id, attachment_title, source_page_id,
+                source_page_title, source_kind ('own'|'descendant'),
+                cell_id, app_name, standard_id, id_is_standard,
+                application_status, functions, cmdb_name (or null if not in
+                CMDB — the frontend will fall back to app_name)
+            }],
+            "interactions": [{
+                attachment_id, attachment_title, source_page_id,
+                source_page_title, edge_cell_id, source_cell_id, target_cell_id,
+                interaction_type, direction, interaction_status, business_object
+            }],
+            "by_attachment": [{
+                attachment_id, attachment_title, source_page_title,
+                source_kind, app_count, app_with_std_id_count, interaction_count
+            }]
+        }
+    """
+    # Verify the page exists before we go hunting for extractions.
+    exists = await pg_client.fetchval(
+        "SELECT 1 FROM northstar.confluence_page WHERE page_id = $1",
+        page_id,
+    )
+    if exists is None:
+        raise HTTPException(status_code=404, detail=f"Page {page_id} not found")
+
+    apps = await pg_client.fetch(
+        """
+        WITH RECURSIVE subtree AS (
+            SELECT page_id, title, 0 AS lvl
+            FROM northstar.confluence_page
+            WHERE page_id = $1
+            UNION ALL
+            SELECT c.page_id, c.title, s.lvl + 1
+            FROM northstar.confluence_page c
+            JOIN subtree s ON c.parent_id = s.page_id
+            WHERE s.lvl < 5
+        )
+        SELECT
+            cda.attachment_id,
+            att.title AS attachment_title,
+            s.page_id AS source_page_id,
+            s.title   AS source_page_title,
+            CASE WHEN s.lvl = 0 THEN 'own' ELSE 'descendant' END AS source_kind,
+            cda.cell_id,
+            cda.app_name,
+            cda.standard_id,
+            cda.id_is_standard,
+            cda.application_status,
+            cda.functions,
+            cda.fill_color,
+            ra.name AS cmdb_name
+        FROM subtree s
+        JOIN northstar.confluence_attachment att ON att.page_id = s.page_id
+        JOIN northstar.confluence_diagram_app cda ON cda.attachment_id = att.attachment_id
+        LEFT JOIN northstar.ref_application ra ON ra.app_id = cda.standard_id
+        WHERE att.file_kind = 'drawio'
+          AND att.title NOT LIKE 'drawio-backup%'
+          AND att.title NOT LIKE '~%'
+        ORDER BY
+            s.lvl,
+            att.title,
+            -- Standard-id apps first, then alphabetic by app_name
+            CASE WHEN cda.standard_id IS NOT NULL THEN 0 ELSE 1 END,
+            cda.app_name
+        """,
+        page_id,
+    )
+
+    interactions = await pg_client.fetch(
+        """
+        WITH RECURSIVE subtree AS (
+            SELECT page_id, title, 0 AS lvl
+            FROM northstar.confluence_page
+            WHERE page_id = $1
+            UNION ALL
+            SELECT c.page_id, c.title, s.lvl + 1
+            FROM northstar.confluence_page c
+            JOIN subtree s ON c.parent_id = s.page_id
+            WHERE s.lvl < 5
+        )
+        SELECT
+            cdi.attachment_id,
+            att.title AS attachment_title,
+            s.page_id AS source_page_id,
+            s.title   AS source_page_title,
+            CASE WHEN s.lvl = 0 THEN 'own' ELSE 'descendant' END AS source_kind,
+            cdi.edge_cell_id,
+            cdi.source_cell_id,
+            cdi.target_cell_id,
+            cdi.interaction_type,
+            cdi.direction,
+            cdi.interaction_status,
+            cdi.business_object,
+            -- Resolve endpoint app_name + standard_id via the app table
+            src_app.app_name    AS source_app_name,
+            src_app.standard_id AS source_standard_id,
+            tgt_app.app_name    AS target_app_name,
+            tgt_app.standard_id AS target_standard_id
+        FROM subtree s
+        JOIN northstar.confluence_attachment att ON att.page_id = s.page_id
+        JOIN northstar.confluence_diagram_interaction cdi
+          ON cdi.attachment_id = att.attachment_id
+        LEFT JOIN northstar.confluence_diagram_app src_app
+          ON src_app.attachment_id = cdi.attachment_id
+         AND src_app.cell_id = cdi.source_cell_id
+        LEFT JOIN northstar.confluence_diagram_app tgt_app
+          ON tgt_app.attachment_id = cdi.attachment_id
+         AND tgt_app.cell_id = cdi.target_cell_id
+        WHERE att.file_kind = 'drawio'
+          AND att.title NOT LIKE 'drawio-backup%'
+          AND att.title NOT LIKE '~%'
+        ORDER BY s.lvl, att.title, cdi.edge_cell_id
+        """,
+        page_id,
+    )
+
+    by_attachment = await pg_client.fetch(
+        """
+        WITH RECURSIVE subtree AS (
+            SELECT page_id, title, 0 AS lvl
+            FROM northstar.confluence_page
+            WHERE page_id = $1
+            UNION ALL
+            SELECT c.page_id, c.title, s.lvl + 1
+            FROM northstar.confluence_page c
+            JOIN subtree s ON c.parent_id = s.page_id
+            WHERE s.lvl < 5
+        )
+        SELECT
+            att.attachment_id,
+            att.title AS attachment_title,
+            s.title   AS source_page_title,
+            CASE WHEN s.lvl = 0 THEN 'own' ELSE 'descendant' END AS source_kind,
+            (SELECT count(*) FROM northstar.confluence_diagram_app cda
+               WHERE cda.attachment_id = att.attachment_id) AS app_count,
+            (SELECT count(*) FROM northstar.confluence_diagram_app cda
+               WHERE cda.attachment_id = att.attachment_id
+                 AND cda.standard_id IS NOT NULL) AS app_with_std_id_count,
+            (SELECT count(*) FROM northstar.confluence_diagram_interaction cdi
+               WHERE cdi.attachment_id = att.attachment_id) AS interaction_count
+        FROM subtree s
+        JOIN northstar.confluence_attachment att ON att.page_id = s.page_id
+        WHERE att.file_kind = 'drawio'
+          AND att.title NOT LIKE 'drawio-backup%'
+          AND att.title NOT LIKE '~%'
+          AND EXISTS (
+              SELECT 1 FROM northstar.confluence_diagram_app cda
+              WHERE cda.attachment_id = att.attachment_id
+          )
+        ORDER BY s.lvl, att.title
+        """,
+        page_id,
+    )
+
+    return ApiResponse(
+        data={
+            "apps": [dict(r) for r in apps],
+            "interactions": [dict(r) for r in interactions],
+            "by_attachment": [dict(r) for r in by_attachment],
+        }
+    )
+
+
 @router.get("/confluence/pages/{page_id}/body")
 async def get_page_body(page_id: str, raw: bool = False) -> ApiResponse:
     """Return the Confluence HTML body for a page (for iframe preview).
