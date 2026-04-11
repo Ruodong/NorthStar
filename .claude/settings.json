@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "_comment": "NorthStar Claude Code settings — closed-loop v2 gate check + affected-tests runner.",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/scripts/check-closed-loop-gate.sh",
+            "timeout": 5000
+          },
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/scripts/run-affected-tests.sh \"$CLAUDE_FILE_PATHS\"",
+            "timeout": 30000
+          }
+        ]
+      }
+    ]
+  }
+}

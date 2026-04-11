@@ -81,15 +81,49 @@ TEST_VENV="${NORTHSTAR_TEST_VENV:-.venv-tests}"
 
 TEST_ARGS="$(echo "$MAPPED" | tr '\n' ' ')"
 
+# Run the tests over SSH, capture exit code and output independently so we
+# can make failures LOUD. Anything that hits stderr + a non-zero exit gets
+# surfaced by Claude Code into the tool-result the agent sees.
+TMP_OUT="$(mktemp)"
+trap 'rm -f "$TMP_OUT"' EXIT
+
+set +e
 ssh -o ConnectTimeout=5 "$REMOTE_HOST" "
   cd $REMOTE_REPO
   if [ ! -x $TEST_VENV/bin/python ]; then
     echo '[hook] test venv not found at $TEST_VENV — skipping'
-    exit 0
+    exit 99
   fi
   set -a && source .env && set +a
-  $TEST_VENV/bin/python -m pytest $TEST_ARGS -x --tb=short 2>&1 | tail -40
-" || {
-  echo "[hook] remote test execution failed (not necessarily a test failure)"
+  $TEST_VENV/bin/python -m pytest $TEST_ARGS -x --tb=short 2>&1 | tail -60
+" >"$TMP_OUT" 2>&1
+RC=$?
+set -e
+
+if [ "$RC" = "99" ]; then
+  # Venv not present — non-blocking skip.
+  cat "$TMP_OUT"
   exit 0
-}
+fi
+
+if [ "$RC" != "0" ]; then
+  # RED — print to stderr so Claude Code folds it into the tool-result
+  # as a visible failure block, then exit non-zero so the gate is enforced.
+  {
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "🔴 [CLOSED-LOOP GATE] RED — affected tests failed for $CHANGED_FILE"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    cat "$TMP_OUT"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Fix the failing tests before continuing. If the failure looks"
+    echo "like infrastructure (SSH timeout, venv missing), set"
+    echo "NORTHSTAR_SKIP_REMOTE_TESTS=1 to bypass for one edit."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  } >&2
+  exit 2
+fi
+
+# GREEN — print a short confirmation so the agent sees the gate ran.
+echo "✅ [CLOSED-LOOP GATE] GREEN — $TEST_ARGS"
+tail -5 "$TMP_OUT"
+exit 0
