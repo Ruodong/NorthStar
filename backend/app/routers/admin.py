@@ -112,20 +112,37 @@ _BACKUP_TITLE_WHERE = (
 
 @router.get("/confluence/summary")
 async def confluence_summary() -> ApiResponse:
-    # Exclude synthetic drawio_source pages — those were pulled by
+    # "by_fy" powers the FY filter dropdown — architects want the number
+    # next to each FY to mean "how many distinct projects / initiatives live
+    # in this fiscal year", NOT "how many pages (incl. every sub-arch child)"
+    # were scanned. Straight COUNT(*) previously returned 1167/1582 for
+    # FY2425/FY2526 which conflated depth=1 project roots with all their
+    # Solution/Technical Architecture children (depth 2–4).
+    #
+    # The hybrid count below is:
+    #   COUNT(DISTINCT COALESCE(project_id, page_id))  over depth=1 rows
+    #
+    # - Projects with a MSPO project_id collapse to one row even if the
+    #   architect created multiple depth=1 sub-pages under the same LI code
+    #   (e.g. LI2500260 → 4 depth=1 pages for Brand Governance / Deep
+    #   Research / Smart BPM / ... but still ONE project).
+    # - Initiatives that don't have a MSPO project_id yet but ARE real
+    #   projects (A000188-LMC, "ReVolt POC", "CFC 研发智能体", etc.)
+    #   still count once each via the page_id fallback, instead of being
+    #   silently dropped by a naive COUNT(DISTINCT project_id).
+    #
+    # We also exclude synthetic drawio_source pages — those were pulled by
     # scripts/backfill_drawio_sources.py from Confluence spaces OUTSIDE the
-    # FY-rooted tree, and `backfill_drawio_sources.py` currently stuffs the
-    # Confluence space key (e.g. "EA", "GAMS", "LSC20") into the fiscal_year
-    # slot as a placeholder because the column is NOT NULL. Those values must
-    # never reach the FY dropdown, otherwise architects see "EA (8)" /
-    # "GAMS (1)" / ... entries that aren't real fiscal years. The main
-    # list_pages endpoint applies the same filter (see `_drawio_source`
-    # suppression there) so this keeps the summary KPI and the grid in sync.
+    # FY-rooted tree and stuff the space key (e.g. "EA", "GAMS") into the
+    # fiscal_year slot as a placeholder (column is NOT NULL). Those must
+    # never reach the FY dropdown.
     pages = await pg_client.fetch(
         """
-        SELECT fiscal_year, count(*) AS pages
+        SELECT fiscal_year,
+               COUNT(DISTINCT COALESCE(project_id, page_id)) AS pages
         FROM northstar.confluence_page
-        WHERE page_type IS NULL OR page_type != 'drawio_source'
+        WHERE depth = 1
+          AND (page_type IS NULL OR page_type != 'drawio_source')
         GROUP BY fiscal_year
         ORDER BY fiscal_year
         """
