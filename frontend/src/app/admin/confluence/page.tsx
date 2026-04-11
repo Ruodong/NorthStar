@@ -349,7 +349,7 @@ export default function ConfluenceIndex() {
               <th style={{ width: 70 }}>FY</th>
               <th style={{ width: 110 }}>Project ID</th>
               <th>Project Name</th>
-              <th style={{ width: 110 }}>App ID</th>
+              <th style={{ width: 100 }}>App ID</th>
               <th>App Name</th>
               <th style={{ width: 80, textAlign: "right" }}>Attach.</th>
               <th style={{ width: 80, textAlign: "right" }}>Drawio</th>
@@ -443,18 +443,31 @@ export default function ConfluenceIndex() {
                       </div>
                     )}
                   </td>
-                  {/* App ID */}
-                  <td>
-                    <IdCell
-                      id={r.app_id}
-                      verified={r.app_in_cmdb}
-                      href={
-                        r.app_in_cmdb && r.app_id
-                          ? `/admin/applications/${encodeURIComponent(r.app_id)}`
-                          : undefined
-                      }
-                      kind="app"
-                    />
+                  {/* App ID — narrow fixed width. Unresolved hint brackets
+                      (e.g. "[Robbie IT Service Agent]") get ellipsis truncation
+                      via the nested overflow container; clean CMDB ids like
+                      "A250197" fit comfortably in 100px. The tooltip on
+                      IdCell still shows the full id/hint on hover. */}
+                  <td style={{ maxWidth: 100, width: 100 }}>
+                    <div
+                      style={{
+                        maxWidth: "100%",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      <IdCell
+                        id={r.app_id}
+                        verified={r.app_in_cmdb}
+                        href={
+                          r.app_in_cmdb && r.app_id
+                            ? `/admin/applications/${encodeURIComponent(r.app_id)}`
+                            : undefined
+                        }
+                        kind="app"
+                      />
+                    </div>
                   </td>
                   {/* App name */}
                   <td>
