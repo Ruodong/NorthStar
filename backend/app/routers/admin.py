@@ -112,10 +112,20 @@ _BACKUP_TITLE_WHERE = (
 
 @router.get("/confluence/summary")
 async def confluence_summary() -> ApiResponse:
+    # Exclude synthetic drawio_source pages — those were pulled by
+    # scripts/backfill_drawio_sources.py from Confluence spaces OUTSIDE the
+    # FY-rooted tree, and `backfill_drawio_sources.py` currently stuffs the
+    # Confluence space key (e.g. "EA", "GAMS", "LSC20") into the fiscal_year
+    # slot as a placeholder because the column is NOT NULL. Those values must
+    # never reach the FY dropdown, otherwise architects see "EA (8)" /
+    # "GAMS (1)" / ... entries that aren't real fiscal years. The main
+    # list_pages endpoint applies the same filter (see `_drawio_source`
+    # suppression there) so this keeps the summary KPI and the grid in sync.
     pages = await pg_client.fetch(
         """
         SELECT fiscal_year, count(*) AS pages
         FROM northstar.confluence_page
+        WHERE page_type IS NULL OR page_type != 'drawio_source'
         GROUP BY fiscal_year
         ORDER BY fiscal_year
         """
