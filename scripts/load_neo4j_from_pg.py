@@ -624,6 +624,160 @@ def main() -> int:
                     )
                     stats["integrations_merged"] += 1
 
+            # ========== Confluence-extracted drawio apps + interactions ==========
+            # These are the output of scripts/parse_confluence_drawios.py,
+            # stored in confluence_diagram_app + confluence_diagram_interaction.
+            # We join back to confluence_attachment → confluence_page so every
+            # row carries a project_id and fiscal_year to hang the INVESTS_IN
+            # edge on. See spec: confluence-drawio-extract.
+            logger.info("loading confluence_diagram_app rows...")
+            try:
+                with src.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT cda.attachment_id, cda.cell_id, cda.app_name,
+                               cda.id_is_standard, cda.standard_id,
+                               cda.application_status, cda.functions,
+                               p.page_id,
+                               COALESCE(p.root_project_id, p.project_id, p.q_project_id) AS project_id,
+                               p.fiscal_year
+                        FROM northstar.confluence_diagram_app cda
+                        JOIN northstar.confluence_attachment att ON att.attachment_id = cda.attachment_id
+                        JOIN northstar.confluence_page p ON p.page_id = att.page_id
+                        """
+                    )
+                    cda_rows = cur.fetchall()
+            except psycopg.errors.UndefinedTable:
+                cda_rows = []
+                logger.warning("confluence_diagram_app missing — skipping (migration 011 not applied?)")
+
+            try:
+                with src.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT cdi.attachment_id, cdi.edge_cell_id,
+                               cdi.source_cell_id, cdi.target_cell_id,
+                               cdi.interaction_type, cdi.direction,
+                               cdi.interaction_status, cdi.business_object
+                        FROM northstar.confluence_diagram_interaction cdi
+                        """
+                    )
+                    cdi_rows = cur.fetchall()
+            except psycopg.errors.UndefinedTable:
+                cdi_rows = []
+
+            logger.info("  cda_rows=%d cdi_rows=%d", len(cda_rows), len(cdi_rows))
+
+            # Build per-attachment cell_id → app_id map as we go, so
+            # interactions can resolve endpoints back to the same app nodes.
+            conf_app_id_by_attachment_cell: dict[tuple[str, str], str] = {}
+
+            stats.setdefault("confluence_apps_merged", 0)
+            stats.setdefault("confluence_integrations_merged", 0)
+            stats.setdefault("confluence_invests_in_edges", 0)
+
+            for r in cda_rows:
+                att_id = r["attachment_id"]
+                cell_id = r["cell_id"] or ""
+                raw_std = (r["standard_id"] or "").strip()
+                cmdb_hit = bool(raw_std and raw_std in cmdb)
+                if cmdb_hit:
+                    stats["cmdb_hits"] += 1
+
+                app_name = r["app_name"] or ""
+                # Use the attachment_id as the diagram scope for hash id
+                # derivation so non-CMDB apps get a stable per-file id.
+                scope = f"conf:{att_id}"
+                pre_alias_id = derive_app_id(raw_std, app_name, scope, cmdb_hit, {})
+                app_id = derive_app_id(raw_std, app_name, scope, cmdb_hit, alias_map)
+                if app_id != pre_alias_id and not cmdb_hit:
+                    stats["alias_applied"] += 1
+
+                conf_app_id_by_attachment_cell[(att_id, cell_id)] = app_id
+
+                canonical_name = cmdb[raw_std]["name"] if cmdb_hit else app_name
+                canonical_status = (
+                    cmdb[raw_std]["status"]
+                    if cmdb_hit
+                    else (r["application_status"] or "Unknown")
+                )
+                description = r["functions"] or ""
+
+                ns.run(
+                    """
+                    MERGE (a:Application {app_id: $app_id})
+                    ON CREATE SET
+                        a.name = $name,
+                        a.status = $status,
+                        a.description = $description,
+                        a.cmdb_linked = $cmdb_hit,
+                        a.last_updated = $now
+                    ON MATCH SET
+                        a.name = CASE WHEN $cmdb_hit THEN $name ELSE coalesce(a.name, $name) END,
+                        a.status = CASE WHEN $cmdb_hit THEN $status ELSE coalesce(a.status, $status) END,
+                        a.cmdb_linked = a.cmdb_linked OR $cmdb_hit,
+                        a.last_updated = $now
+                    """,
+                    app_id=app_id,
+                    name=canonical_name,
+                    status=canonical_status,
+                    description=description,
+                    cmdb_hit=cmdb_hit,
+                    now=now_iso(),
+                )
+                stats["confluence_apps_merged"] += 1
+                stats["applications_merged"] += 1
+
+                # INVESTS_IN — only if we have a project_id for the source page
+                project_id = r.get("project_id")
+                if project_id:
+                    fy = r.get("fiscal_year") or ""
+                    ns.run(
+                        """
+                        MATCH (p:Project {project_id: $project_id})
+                        MATCH (a:Application {app_id: $app_id})
+                        MERGE (p)-[rel:INVESTS_IN]->(a)
+                        SET rel.fiscal_year = coalesce($fy, rel.fiscal_year, ''),
+                            rel.source_confluence_page_id = $page_id,
+                            rel.last_seen_at = $now
+                        """,
+                        project_id=project_id,
+                        app_id=app_id,
+                        fy=fy,
+                        page_id=r.get("page_id") or "",
+                        now=now_iso(),
+                    )
+                    stats["confluence_invests_in_edges"] += 1
+
+            # INTEGRATES_WITH edges from the confluence interactions
+            for inter in cdi_rows:
+                att_id = inter["attachment_id"]
+                src_cell = inter["source_cell_id"] or ""
+                tgt_cell = inter["target_cell_id"] or ""
+                src_app_id = conf_app_id_by_attachment_cell.get((att_id, src_cell))
+                tgt_app_id = conf_app_id_by_attachment_cell.get((att_id, tgt_cell))
+                if not src_app_id or not tgt_app_id:
+                    continue
+                ns.run(
+                    """
+                    MATCH (a:Application {app_id: $src}), (b:Application {app_id: $tgt})
+                    MERGE (a)-[rel:INTEGRATES_WITH {
+                        interaction_type: $itype,
+                        business_object: $bobj
+                    }]->(b)
+                    SET rel.status = $status,
+                        rel.direction = $direction
+                    """,
+                    src=src_app_id,
+                    tgt=tgt_app_id,
+                    itype=inter.get("interaction_type") or "",
+                    bobj=inter.get("business_object") or "",
+                    status=inter.get("interaction_status") or "Keep",
+                    direction=inter.get("direction") or "outbound",
+                )
+                stats["confluence_integrations_merged"] += 1
+                stats["integrations_merged"] += 1
+
             # ========== Confluence pages ==========
             # :ConfluencePage nodes + HAS_CONFLUENCE_PAGE / HAS_REVIEW_PAGE edges
             for page in conf_pages:

@@ -78,6 +78,9 @@
     },
     "scripts/backfill_root_project_id.py": {
       "api": ["api-tests/test_root_project_id.py"]
+    },
+    "scripts/parse_confluence_drawios.py": {
+      "api": ["api-tests/test_confluence_drawio_extract.py"]
     }
   },
   "wildcards": {
