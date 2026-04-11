@@ -26,11 +26,31 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 # title, the descendant page it came from (source_page_title), and the
 # intermediary "via" page for referenced diagrams.
 _APP_ARCH_RE = re.compile(
-    r"应用架构|solution\s*architecture",
+    # Covers the common naming conventions Lenovo architects use for the
+    # "Application Architecture" child page, in both English and Chinese.
+    # Solution Design is treated as App Arch because Lenovo project wizards
+    # label high-level solution documents as "<Project> Solution Design"
+    # (same content, different wording). Matched against attachment title
+    # AND source_page_title so the bucketing survives the child-page
+    # aggregation pathway.
+    #
+    # English side uses `a\w*ch` as a loose stem so typos like "Achitecture"
+    # / "Archtecture" / "Architecure" (all seen in real Confluence pages)
+    # still match without a hand-curated typo list.
+    r"应用架构|应用方案|解决方案|"
+    r"application\s*(?:a\w*ch|design)|"
+    r"solution\s*(?:a\w*ch|design)|"
+    r"app\s*a\w*ch",
     re.IGNORECASE,
 )
 _TECH_ARCH_RE = re.compile(
-    r"技术架构|tech架构|tech(?:nical)?\s*architecture",
+    r"技术架构|技术方案|"
+    # Architect typos in the wild: "Technical Achitecture" (missing r),
+    # "Technical Archtecture" (missing i), "Technical Architecure"
+    # (missing t). Match any word starting with 'a' and containing 'ch' —
+    # this catches all three without a hand-curated typo list.
+    r"technical\s*(?:a\w*ch|design)|"
+    r"tech\s*(?:a\w*ch|design)",
     re.IGNORECASE,
 )
 
