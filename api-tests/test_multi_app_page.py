@@ -104,8 +104,15 @@ async def test_multi_app_page_appears_in_three_rows(api):
 @pytest.mark.asyncio
 async def test_multi_app_grouping_consistency(api, pg):
     """Spec AC-4. Sum of group_size across exploded rows must equal
-    count(*) from the LEFT-JOINed exploded view. Guards against accidental
-    DISTINCT bugs that would silently collapse Pattern D back to Pattern A."""
+    count(*) from the LEFT-JOINed exploded view in the default admin
+    view (depth<=2 + root_project_id fold-up). Guards against accidental
+    DISTINCT bugs that would silently collapse Pattern D back to
+    Pattern A.
+
+    Note: this asserts admin-query consistency specifically, not "every
+    page in the tree". A sub-initiative row whose own project_id != root
+    still counts because the admin query folds by root_project_id.
+    """
     with pg.cursor() as cur:
         cur.execute(
             """
@@ -113,7 +120,8 @@ async def test_multi_app_grouping_consistency(api, pg):
             FROM northstar.confluence_page p
             LEFT JOIN northstar.confluence_page_app_link l ON l.page_id = p.page_id
             WHERE p.fiscal_year = 'FY2526'
-              AND p.project_id = 'LI2500120'
+              AND COALESCE(p.root_project_id, p.project_id) = 'LI2500120'
+              AND (p.depth IS NULL OR p.depth <= 2)
             """
         )
         expected_total = cur.fetchone()["n"]
