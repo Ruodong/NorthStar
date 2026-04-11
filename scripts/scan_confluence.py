@@ -296,6 +296,7 @@ def process_page(
     ancestor_project_id: Optional[str],
     ancestor_app_id: Optional[str],
     ancestor_app_hint: Optional[str],
+    ancestor_root_project_id: Optional[str],
     args: argparse.Namespace,
     base: str,
     attach_root: Path,
@@ -364,6 +365,17 @@ def process_page(
     if final_project_id is None:
         final_project_id = ancestor_project_id
 
+    # confluence-root-project-id spec FR-2/FR-3:
+    #   depth=1 pages are their own root — they ARE the Confluence tree root.
+    #   depth>=2 pages inherit root_project_id from the ancestor_root_project_id
+    #   thread, so a sub-initiative like FY2526-063 still rolls up to its
+    #   LI2500067 parent for admin grouping purposes while keeping its own
+    #   final_project_id on the row.
+    if depth == 1:
+        root_project_id = final_project_id
+    else:
+        root_project_id = ancestor_root_project_id or final_project_id
+
     # Sometimes the questionnaire 'Project ID' field actually holds
     # a CMDB application id (e.g. 'Tosca' page → A004164). Promote
     # those to q_app_id so the page classifies as 'application'.
@@ -416,11 +428,13 @@ def process_page(
                  q_project_id, q_project_name, q_pm, q_it_lead, q_dt_lead,
                  q_app_id, page_type, parent_id, depth,
                  effective_app_id, app_hint, effective_app_hint,
+                 root_project_id,
                  last_seen, synced_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s,
                     %s, %s, %s, %s, %s,
                     %s, %s, %s, %s,
                     %s, %s, %s,
+                    %s,
                     NOW(), NOW())
             ON CONFLICT (page_id) DO UPDATE SET
                 fiscal_year = EXCLUDED.fiscal_year,
@@ -443,6 +457,7 @@ def process_page(
                 effective_app_id = EXCLUDED.effective_app_id,
                 app_hint = EXCLUDED.app_hint,
                 effective_app_hint = EXCLUDED.effective_app_hint,
+                root_project_id = EXCLUDED.root_project_id,
                 last_seen = NOW()
             """,
             (
@@ -460,6 +475,7 @@ def process_page(
                 effective_app_id,
                 app_hint,
                 effective_app_hint,
+                root_project_id,
             ),
         )
     totals["pages"] += 1
@@ -630,17 +646,21 @@ def process_page(
     if not children:
         return
 
-    # Pass our own project_id + app_id + app_hint down as the ancestor values
-    # for children. Use effective_* values so children inherit fuzzy-matched
-    # A-ids AND inherit unresolved [hint] tags for grouping.
-    child_ancestor_pid  = final_project_id or ancestor_project_id
-    child_ancestor_aid  = effective_app_id or ancestor_app_id
-    child_ancestor_hint = effective_app_hint or ancestor_app_hint
+    # Pass our own project_id + app_id + app_hint + root_project_id down as
+    # the ancestor values for children. Use effective_* values so children
+    # inherit fuzzy-matched A-ids AND unresolved [hint] tags for grouping.
+    # root_project_id is propagated so sub-initiative pages (e.g. FY2526-063
+    # under LI2500067) still fold under the Confluence tree root.
+    child_ancestor_pid       = final_project_id or ancestor_project_id
+    child_ancestor_aid       = effective_app_id or ancestor_app_id
+    child_ancestor_hint      = effective_app_hint or ancestor_app_hint
+    child_ancestor_root_pid  = root_project_id or ancestor_root_project_id
     totals["descents"] = totals.get("descents", 0) + 1
     for child in children:
         process_page(
             client, pg, child, fy, page_id, depth + 1,
             child_ancestor_pid, child_ancestor_aid, child_ancestor_hint,
+            child_ancestor_root_pid,
             args, base, attach_root, root, totals,
         )
 
@@ -704,6 +724,7 @@ def main() -> int:
                     ancestor_project_id=None,
                     ancestor_app_id=None,
                     ancestor_app_hint=None,
+                    ancestor_root_project_id=None,
                     args=args, base=base,
                     attach_root=attach_root, root=root, totals=totals,
                 )

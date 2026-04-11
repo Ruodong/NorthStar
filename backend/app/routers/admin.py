@@ -144,6 +144,7 @@ async def list_pages(
         where.append(
             f"(p.title ILIKE ${len(args)} "
             f"OR p.project_id ILIKE ${len(args)} "
+            f"OR p.root_project_id ILIKE ${len(args)} "
             f"OR p.q_app_id ILIKE ${len(args)} "
             f"OR p.effective_app_id ILIKE ${len(args)} "
             f"OR p.app_hint ILIKE ${len(args)})"
@@ -268,6 +269,12 @@ async def list_pages(
             SELECT p.page_id, p.fiscal_year, p.title, p.page_url, p.page_type,
                    p.project_id, p.q_app_id,
                    p.effective_app_id, p.app_hint, p.effective_app_hint,
+                   -- Confluence tree root fold-up: sub-initiative pages (e.g.
+                   -- FY2526-063 under LI2500067) group under their depth-1
+                   -- ancestor's project id instead of splitting off.
+                   -- See .specify/features/confluence-root-project-id/spec.md
+                   COALESCE(p.root_project_id, p.project_id) AS group_project_id,
+                   p.root_project_id,
                    p.depth, p.parent_id,
                    p.q_project_name, p.q_pm, p.q_it_lead, p.q_dt_lead,
                    -- Own attachments on this page
@@ -333,7 +340,9 @@ async def list_pages(
         -- partitions, which is what Pattern D wants.
         keyed AS (
             SELECT e.*,
-                   COALESCE(e.project_id, 'PG:' || e.page_id) AS g_project,
+                   -- Group by the Confluence tree root (depth=1 ancestor's
+                   -- project_id) so sub-initiative pages fold up correctly.
+                   COALESCE(e.group_project_id, 'PG:' || e.page_id) AS g_project,
                    COALESCE(
                      e.link_app_id,
                      e.effective_app_id,
@@ -363,7 +372,17 @@ async def list_pages(
             FROM keyed
         )
         SELECT g.page_id, g.fiscal_year, g.title, g.page_url, g.page_type,
-               g.project_id,
+               -- project_id returned to the client IS the tree root, so
+               -- sub-initiative pages (e.g. FY2526-063 under LI2500067)
+               -- display under their LI2500067 parent in the admin list.
+               -- The original sub-initiative id is still available to clients
+               -- as `sub_project_id` for future UI pills.
+               g.group_project_id AS project_id,
+               CASE
+                 WHEN g.project_id <> g.group_project_id
+                   THEN g.project_id
+                 ELSE NULL
+               END AS sub_project_id,
                COALESCE(rp.project_name, g.q_project_name) AS project_name,
                CASE
                  WHEN rp.project_name IS NOT NULL THEN 'mspo'
@@ -398,17 +417,20 @@ async def list_pages(
                g.group_size::int AS group_size,
                g.group_pages     AS group_page_ids
         FROM grouped g
-        LEFT JOIN northstar.ref_project rp    ON rp.project_id = g.project_id
+        -- JOIN ref_project on the group root so the project name comes from
+        -- the real top-level project (LI2500067), not a sub-initiative id
+        -- that happens to be in a child page title (FY2526-063).
+        LEFT JOIN northstar.ref_project rp    ON rp.project_id = g.group_project_id
         LEFT JOIN northstar.ref_application ra
                ON ra.app_id = COALESCE(g.link_app_id, g.effective_app_id, g.q_app_id)
         WHERE g.rn = 1
         -- Ontology fix (2026-04-10): sort so that all rows sharing the same
-        -- project_id are strictly adjacent, with orphan rows (no project_id)
-        -- sinking to the tail of each FY bucket. Secondary sorts by title,
-        -- then app_id so the order is stable and pagination-friendly. The
+        -- group_project_id are strictly adjacent, with orphan rows sinking
+        -- to the tail of each FY bucket. Secondary sorts by title, then
+        -- app_id so the order is stable and pagination-friendly. The
         -- frontend relies on this adjacency for rowspan-style group folding.
         ORDER BY g.fiscal_year DESC,
-                 g.project_id ASC NULLS LAST,
+                 g.group_project_id ASC NULLS LAST,
                  g.title ASC,
                  COALESCE(
                      g.link_app_id,
@@ -427,7 +449,11 @@ async def list_pages(
         f"""
         SELECT count(*) FROM (
             SELECT DISTINCT
-                   COALESCE(p.project_id, 'PG:' || p.page_id) AS g_project,
+                   COALESCE(
+                     p.root_project_id,
+                     p.project_id,
+                     'PG:' || p.page_id
+                   ) AS g_project,
                    COALESCE(
                      l.app_id,
                      p.effective_app_id,

@@ -75,6 +75,9 @@
     },
     "scripts/backfill_page_app_link.py": {
       "api": ["api-tests/test_multi_app_page.py"]
+    },
+    "scripts/backfill_root_project_id.py": {
+      "api": ["api-tests/test_root_project_id.py"]
     }
   },
   "wildcards": {
