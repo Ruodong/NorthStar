@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { Pager } from "@/components/Pager";
 
 interface AppRow {
   app_id: string;
@@ -240,40 +241,14 @@ export default function AdminApplications() {
         </table>
       </div>
 
-      <div
-        style={{
-          display: "flex",
-          gap: 8,
-          marginTop: 14,
-          alignItems: "center",
-          justifyContent: "flex-end",
-        }}
-      >
-        <button
-          className="btn-secondary"
-          onClick={() => setPage((p) => Math.max(0, p - 1))}
-          disabled={page === 0 || loading}
-        >
-          ← Prev
-        </button>
-        <div
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: 12,
-            color: "var(--text-muted)",
-            padding: "0 8px",
-          }}
-        >
-          {page + 1} / {maxPage + 1}
-        </div>
-        <button
-          className="btn-secondary"
-          onClick={() => setPage((p) => Math.min(maxPage, p + 1))}
-          disabled={page >= maxPage || loading}
-        >
-          Next →
-        </button>
-      </div>
+      <Pager
+        page={page}
+        maxPage={maxPage}
+        total={total}
+        pageSize={PAGE_SIZE}
+        loading={loading}
+        onPageChange={setPage}
+      />
     </div>
   );
 }
