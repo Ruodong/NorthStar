@@ -32,7 +32,25 @@ export default function GraphPage() {
   const [err, setErr] = useState<string | null>(null);
   const [empty, setEmpty] = useState<boolean>(false);
 
+  // The full asset graph (all FYs, all statuses) is too large to preload
+  // without melting the browser, so we require at least one scope filter
+  // before calling the API. Dashboard deep links (?fiscal_year=… or
+  // ?status=…) still auto-load because initialParam() seeds state.
+  const hasFilter = Boolean(fy || status);
+
   useEffect(() => {
+    if (!hasFilter) {
+      // Cold state or user cleared all filters — tear down any prior graph
+      // and wait for the user to pick a fiscal year or status.
+      if (cyRef.current) {
+        cyRef.current.destroy();
+        cyRef.current = null;
+      }
+      setEmpty(false);
+      setErr(null);
+      setSelected(null);
+      return;
+    }
     loadGraph();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fy, status]);
@@ -191,7 +209,7 @@ export default function GraphPage() {
           <option value="Sunset">Sunset</option>
           <option value="3rd Party">3rd Party</option>
         </select>
-        <button className="btn-secondary" onClick={loadGraph}>
+        <button className="btn-secondary" onClick={loadGraph} disabled={!hasFilter}>
           Reload
         </button>
       </div>
@@ -203,7 +221,16 @@ export default function GraphPage() {
       )}
 
       <div className="graph-wrap">
-        {empty && <div className="empty">Graph is empty. Run an ingestion task first.</div>}
+        {!hasFilter && (
+          <div className="empty">
+            Pick a fiscal year or status above to load the asset graph. The
+            full dataset is too large to preload — scope by year (and
+            optionally status) to start exploring.
+          </div>
+        )}
+        {hasFilter && empty && (
+          <div className="empty">No nodes match the current filter.</div>
+        )}
         <div id="cy" ref={containerRef} />
         <div className="graph-legend">
           {Object.entries(STATUS_COLORS).map(([k, v]) => (

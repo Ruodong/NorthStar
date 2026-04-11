@@ -1529,7 +1529,29 @@ function ExtractedFileCard({
                       wordBreak: "break-word",
                     }}
                   >
-                    {a.cmdb_name || a.app_name || "—"}
+                    {/* Drawio label is always primary — it's what the */}
+                    {/* architect actually wrote on the diagram. CMDB name */}
+                    {/* is secondary context, shown only when it disagrees */}
+                    {/* so mis-IDed cells (e.g. "AI Verse" labelled A000001 */}
+                    {/* but A000001 is ECC in CMDB) stay visible to the */}
+                    {/* reviewer instead of being silently overwritten. */}
+                    {a.app_name || a.cmdb_name || "—"}
+                    {a.cmdb_name &&
+                      a.app_name &&
+                      a.cmdb_name.toLowerCase() !==
+                        a.app_name.toLowerCase() && (
+                        <span
+                          title={`CMDB ref_application.name for ${a.standard_id}`}
+                          style={{
+                            marginLeft: 8,
+                            fontSize: 10,
+                            color: "var(--text-dim)",
+                            fontFamily: "var(--font-mono)",
+                          }}
+                        >
+                          · CMDB: {a.cmdb_name}
+                        </span>
+                      )}
                   </td>
                   <td style={{ padding: "6px 8px" }}>
                     <StatusPill status={a.application_status} />
