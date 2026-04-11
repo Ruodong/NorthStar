@@ -79,6 +79,15 @@ async def list_pages(
     has_drawio: Optional[bool] = None,
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
+    group_by_app: bool = Query(
+        True,
+        description=(
+            "When true (default), collapse all confluence_page rows sharing the "
+            "same (project_id, q_app_id) into a single row. The page with the "
+            "lowest depth becomes the 'primary' and attachment/drawio counts are "
+            "summed across the group. Pass false for the old one-row-per-page view."
+        ),
+    ),
 ) -> ApiResponse:
     where = []
     args: list = []
@@ -100,47 +109,144 @@ async def list_pages(
             "AND a.title NOT LIKE 'drawio-backup%' AND a.title NOT LIKE '~%')"
         )
     where_clause = ("WHERE " + " AND ".join(where)) if where else ""
+
+    if not group_by_app:
+        # Legacy flat view: one row per confluence_page.
+        args.extend([limit, offset])
+        rows = await pg_client.fetch(
+            f"""
+            SELECT p.page_id, p.fiscal_year, p.title, p.page_url, p.page_type,
+                   p.project_id,
+                   COALESCE(rp.project_name, p.q_project_name) AS project_name,
+                   CASE
+                     WHEN rp.project_name IS NOT NULL THEN 'mspo'
+                     WHEN p.q_project_name IS NOT NULL THEN 'questionnaire'
+                     ELSE 'none'
+                   END AS project_name_source,
+                   p.q_app_id      AS app_id,
+                   ra.name         AS app_name,
+                   CASE WHEN ra.name IS NOT NULL THEN 'cmdb' ELSE 'none' END AS app_name_source,
+                   (rp.project_id IS NOT NULL) AS project_in_mspo,
+                   (ra.app_id IS NOT NULL)     AS app_in_cmdb,
+                   p.q_pm, p.q_it_lead, p.q_dt_lead,
+                   (SELECT count(*) FROM northstar.confluence_attachment a WHERE a.page_id = p.page_id) AS attachment_count,
+                   (SELECT count(*) FROM northstar.confluence_attachment a
+                      WHERE a.page_id = p.page_id AND a.file_kind = 'drawio'
+                        AND a.title NOT LIKE 'drawio-backup%' AND a.title NOT LIKE '~%') AS drawio_count,
+                   1 AS group_size,
+                   ARRAY[p.page_id] AS group_page_ids
+            FROM northstar.confluence_page p
+            LEFT JOIN northstar.ref_project rp ON rp.project_id = p.project_id
+            LEFT JOIN northstar.ref_application ra ON ra.app_id = p.q_app_id
+            {where_clause}
+            ORDER BY p.fiscal_year DESC, p.title
+            LIMIT ${len(args) - 1} OFFSET ${len(args)}
+            """,
+            *args,
+        )
+        total = await pg_client.fetchval(
+            f"SELECT count(*) FROM northstar.confluence_page p {where_clause}",
+            *args[:-2],
+        )
+        return ApiResponse(
+            data={
+                "total": total,
+                "rows": [dict(r) for r in rows],
+                "grouped": False,
+            }
+        )
+
+    # --- Grouped view (default) ---------------------------------------------
+    # A "group" is all pages that share (project_id, q_app_id). Rows without a
+    # project_id form singleton groups keyed by page_id. Rows without a q_app_id
+    # group only by project_id (i.e., project-level folder pages with no app
+    # stay as their own row). Within a group, the "primary" page = lowest depth
+    # (NULLS LAST), tiebreak by page_id. Display the primary's title and sum
+    # attachment/drawio counts across the whole group.
     args.extend([limit, offset])
     rows = await pg_client.fetch(
         f"""
-        SELECT p.page_id, p.fiscal_year, p.title, p.page_url, p.page_type,
-               p.project_id,
-               -- project name with three-tier fallback
-               COALESCE(rp.project_name, p.q_project_name) AS project_name,
+        WITH filtered AS (
+            SELECT p.page_id, p.fiscal_year, p.title, p.page_url, p.page_type,
+                   p.project_id, p.q_app_id, p.depth, p.parent_id,
+                   p.q_project_name, p.q_pm, p.q_it_lead, p.q_dt_lead,
+                   (SELECT count(*) FROM northstar.confluence_attachment a
+                      WHERE a.page_id = p.page_id) AS attachment_count,
+                   (SELECT count(*) FROM northstar.confluence_attachment a
+                      WHERE a.page_id = p.page_id AND a.file_kind = 'drawio'
+                        AND a.title NOT LIKE 'drawio-backup%' AND a.title NOT LIKE '~%') AS drawio_count
+            FROM northstar.confluence_page p
+            {where_clause}
+        ),
+        grouped AS (
+            SELECT *,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY COALESCE(project_id, 'PG:' || page_id),
+                                    COALESCE(q_app_id, 'NA')
+                       ORDER BY depth NULLS LAST, page_id
+                   ) AS rn,
+                   COUNT(*) OVER (
+                       PARTITION BY COALESCE(project_id, 'PG:' || page_id),
+                                    COALESCE(q_app_id, 'NA')
+                   ) AS group_size,
+                   SUM(attachment_count) OVER (
+                       PARTITION BY COALESCE(project_id, 'PG:' || page_id),
+                                    COALESCE(q_app_id, 'NA')
+                   ) AS group_att,
+                   SUM(drawio_count) OVER (
+                       PARTITION BY COALESCE(project_id, 'PG:' || page_id),
+                                    COALESCE(q_app_id, 'NA')
+                   ) AS group_dr,
+                   ARRAY_AGG(page_id) OVER (
+                       PARTITION BY COALESCE(project_id, 'PG:' || page_id),
+                                    COALESCE(q_app_id, 'NA')
+                   ) AS group_pages
+            FROM filtered
+        )
+        SELECT g.page_id, g.fiscal_year, g.title, g.page_url, g.page_type,
+               g.project_id,
+               COALESCE(rp.project_name, g.q_project_name) AS project_name,
                CASE
                  WHEN rp.project_name IS NOT NULL THEN 'mspo'
-                 WHEN p.q_project_name IS NOT NULL THEN 'questionnaire'
+                 WHEN g.q_project_name IS NOT NULL THEN 'questionnaire'
                  ELSE 'none'
                END AS project_name_source,
-               p.q_app_id      AS app_id,
+               g.q_app_id      AS app_id,
                ra.name         AS app_name,
                CASE WHEN ra.name IS NOT NULL THEN 'cmdb' ELSE 'none' END AS app_name_source,
                (rp.project_id IS NOT NULL) AS project_in_mspo,
                (ra.app_id IS NOT NULL)     AS app_in_cmdb,
-               -- expose questionnaire owner fields so the UI can show them
-               -- even when they're free-text names instead of itcodes
-               p.q_pm, p.q_it_lead, p.q_dt_lead,
-               (SELECT count(*) FROM northstar.confluence_attachment a WHERE a.page_id = p.page_id) AS attachment_count,
-               (SELECT count(*) FROM northstar.confluence_attachment a
-                  WHERE a.page_id = p.page_id AND a.file_kind = 'drawio'
-                    AND a.title NOT LIKE 'drawio-backup%' AND a.title NOT LIKE '~%') AS drawio_count
-        FROM northstar.confluence_page p
-        LEFT JOIN northstar.ref_project rp ON rp.project_id = p.project_id
-        LEFT JOIN northstar.ref_application ra ON ra.app_id = p.q_app_id
-        {where_clause}
-        ORDER BY p.fiscal_year DESC, p.title
+               g.q_pm, g.q_it_lead, g.q_dt_lead,
+               g.group_att::int  AS attachment_count,
+               g.group_dr::int   AS drawio_count,
+               g.group_size::int AS group_size,
+               g.group_pages     AS group_page_ids
+        FROM grouped g
+        LEFT JOIN northstar.ref_project rp    ON rp.project_id = g.project_id
+        LEFT JOIN northstar.ref_application ra ON ra.app_id = g.q_app_id
+        WHERE g.rn = 1
+        ORDER BY g.fiscal_year DESC, g.title
         LIMIT ${len(args) - 1} OFFSET ${len(args)}
         """,
         *args,
     )
     total = await pg_client.fetchval(
-        f"SELECT count(*) FROM northstar.confluence_page p {where_clause}",
+        f"""
+        SELECT count(*) FROM (
+            SELECT DISTINCT
+                   COALESCE(p.project_id, 'PG:' || p.page_id) AS g_project,
+                   COALESCE(p.q_app_id, 'NA') AS g_app
+            FROM northstar.confluence_page p
+            {where_clause}
+        ) sub
+        """,
         *args[:-2],
     )
     return ApiResponse(
         data={
             "total": total,
             "rows": [dict(r) for r in rows],
+            "grouped": True,
         }
     )
 
