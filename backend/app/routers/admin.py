@@ -23,6 +23,17 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 ATTACHMENT_ROOT = Path(os.environ.get("ATTACHMENT_ROOT", "/app_data"))
 
 
+# Backup / tmp attachment noise pattern — shared by summary and list endpoints.
+# These rows are draw.io editor auto-save artifacts, not real architecture
+# files. scripts/cleanup_backup_attachments.py removes them from PG; newer
+# scans skip them at INSERT time. This WHERE is a defensive filter so the
+# admin KPI is correct even when the cleanup has not been run yet on an older
+# deployment.
+_BACKUP_TITLE_WHERE = (
+    "title LIKE 'drawio-backup%' OR title LIKE '~%'"
+)
+
+
 @router.get("/confluence/summary")
 async def confluence_summary() -> ApiResponse:
     pages = await pg_client.fetch(
@@ -33,10 +44,23 @@ async def confluence_summary() -> ApiResponse:
         ORDER BY fiscal_year
         """
     )
+    # Exclude backup/tmp noise. 96% of all drawio attachments are editor
+    # auto-save snapshots; we never want to show them in the admin KPI.
     attach_kinds = await pg_client.fetch(
-        """
+        f"""
         SELECT file_kind, count(*) AS n
         FROM northstar.confluence_attachment
+        WHERE NOT ({_BACKUP_TITLE_WHERE})
+        GROUP BY file_kind
+        ORDER BY n DESC
+        """
+    )
+    # Separately surface the backup count so the UI can show "N hidden" context
+    attach_kinds_backup = await pg_client.fetch(
+        f"""
+        SELECT file_kind, count(*) AS n
+        FROM northstar.confluence_attachment
+        WHERE {_BACKUP_TITLE_WHERE}
         GROUP BY file_kind
         ORDER BY n DESC
         """
@@ -50,11 +74,16 @@ async def confluence_summary() -> ApiResponse:
         """
     )
     totals = await pg_client.fetchrow(
-        """
+        f"""
         SELECT
           (SELECT count(*) FROM northstar.confluence_page) AS total_pages,
-          (SELECT count(*) FROM northstar.confluence_attachment) AS total_attachments,
-          (SELECT count(*) FROM northstar.confluence_attachment WHERE local_path IS NOT NULL) AS downloaded,
+          (SELECT count(*) FROM northstar.confluence_attachment
+             WHERE NOT ({_BACKUP_TITLE_WHERE})) AS total_attachments,
+          (SELECT count(*) FROM northstar.confluence_attachment
+             WHERE {_BACKUP_TITLE_WHERE}) AS total_backup_attachments,
+          (SELECT count(*) FROM northstar.confluence_attachment
+             WHERE local_path IS NOT NULL
+               AND NOT ({_BACKUP_TITLE_WHERE})) AS downloaded,
           (SELECT count(*) FROM northstar.confluence_page p WHERE p.project_id IS NOT NULL
              AND EXISTS (SELECT 1 FROM northstar.ref_project r WHERE r.project_id = p.project_id)) AS projects_linked_mspo,
           (SELECT count(*) FROM northstar.confluence_page p WHERE p.q_app_id IS NOT NULL
@@ -65,6 +94,7 @@ async def confluence_summary() -> ApiResponse:
         data={
             "by_fy": [dict(r) for r in pages],
             "by_kind": [dict(r) for r in attach_kinds],
+            "by_kind_backup": [dict(r) for r in attach_kinds_backup],
             "by_type": [dict(r) for r in types],
             "totals": dict(totals) if totals else {},
         }

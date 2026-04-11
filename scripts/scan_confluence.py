@@ -436,6 +436,18 @@ def process_page(
     for att in attachments:
         att_id = att["id"]
         a_title = att.get("title", "")
+
+        # Skip drawio editor noise: drawio-backup-* and ~*.tmp files. These
+        # are auto-saved revision snapshots produced by the Confluence draw.io
+        # editor, not real architecture files. They make up ~96% of all
+        # "drawio" attachments but represent zero architect intent. Keep the
+        # flag to opt back in for debugging.
+        if not args.keep_backups and (
+            a_title.startswith("drawio-backup") or a_title.startswith("~")
+        ):
+            totals["skipped_backup"] = totals.get("skipped_backup", 0) + 1
+            continue
+
         mt = att.get("metadata", {}).get("mediaType", "")
         kind = classify(mt, a_title)
         size = att.get("extensions", {}).get("fileSize") or att.get("metadata", {}).get(
@@ -450,12 +462,10 @@ def process_page(
         if not download:
             continue
 
+        # Backup/tmp titles are filtered out at the top of this loop, so the
+        # download check is simpler now — just honor --no-download and --kinds.
         local_path: Optional[str] = None
-        should_download = (
-            not args.no_download
-            and not a_title.startswith("drawio-backup")
-            and not a_title.startswith("~")
-        )
+        should_download = not args.no_download
         if should_download and args.kinds and kind not in args.kinds:
             should_download = False
             totals["skipped_kind"] += 1
@@ -538,6 +548,12 @@ def main() -> int:
     ap.add_argument("--no-body", action="store_true", help="Skip body.storage.value fetch + parse")
     ap.add_argument("--kinds", nargs="*", default=None,
                     help="Only download these file kinds (e.g. drawio image pdf)")
+    ap.add_argument(
+        "--keep-backups",
+        action="store_true",
+        help="Also record drawio-backup* and ~*.tmp files (default: skip — "
+             "they are editor noise and make up ~96%% of all drawio attachments)",
+    )
     args = ap.parse_args()
 
     fys = args.fy or DEFAULT_FYS
@@ -553,7 +569,14 @@ def main() -> int:
     pg = psycopg.connect(pg_dsn())
     pg.autocommit = False
 
-    totals = {"pages": 0, "attachments": 0, "downloaded": 0, "skipped_kind": 0, "errors": 0}
+    totals = {
+        "pages": 0,
+        "attachments": 0,
+        "downloaded": 0,
+        "skipped_backup": 0,
+        "skipped_kind": 0,
+        "errors": 0,
+    }
     try:
         for fy in fys:
             parent_id = find_fy_parent(client, fy, space)

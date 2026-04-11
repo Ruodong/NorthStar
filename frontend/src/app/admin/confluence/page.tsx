@@ -33,10 +33,14 @@ interface ListResult {
 interface Summary {
   by_fy: { fiscal_year: string; pages: number }[];
   by_kind: { file_kind: string; n: number }[];
+  // Non-user-facing editor noise (drawio-backup*, ~*.tmp), split out so the
+  // UI can mention it without polluting the real attachment KPI.
+  by_kind_backup: { file_kind: string; n: number }[];
   by_type: { type: string; n: number }[];
   totals: {
     total_pages: number;
     total_attachments: number;
+    total_backup_attachments: number;
     downloaded: number;
     projects_linked_mspo: number;
     apps_linked_cmdb: number;
@@ -203,6 +207,21 @@ export default function ConfluenceIndex() {
                 </span>
               ))}
             </div>
+            {summary.totals.total_backup_attachments > 0 && (
+              <div
+                style={{
+                  marginTop: 8,
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 9,
+                  color: "var(--text-dim)",
+                  fontStyle: "italic",
+                }}
+                title="drawio-backup-* and ~*.tmp files — draw.io editor auto-save artifacts. Hidden from the count above. Run scripts/cleanup_backup_attachments.py to remove from PG."
+              >
+                +{summary.totals.total_backup_attachments.toLocaleString()} editor backup rows
+                hidden
+              </div>
+            )}
           </div>
         </div>
       )}
