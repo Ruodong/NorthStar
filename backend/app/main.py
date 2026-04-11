@@ -9,7 +9,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import admin, aliases, analytics, graph, ingestion, masters, whats_new
+from app.routers import (
+    admin,
+    aliases,
+    analytics,
+    graph,
+    ingestion,
+    masters,
+    search,
+    whats_new,
+)
 from app.services import neo4j_client, pg_client
 
 # SQL migrations directory — all *.sql files here are executed in alphabetical
@@ -76,6 +85,7 @@ app.include_router(masters.router)
 app.include_router(admin.router)
 app.include_router(aliases.router)
 app.include_router(whats_new.router)
+app.include_router(search.router)
 
 
 @app.get("/")

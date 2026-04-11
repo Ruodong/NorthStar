@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { CommandPalette } from "@/components/CommandPalette";
 import { StarMark } from "@/components/StarMark";
 import "./globals.css";
 
@@ -46,6 +47,7 @@ export default function RootLayout({
           </div>
         </header>
         <main className="main">{children}</main>
+        <CommandPalette />
       </body>
     </html>
   );
