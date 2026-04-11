@@ -162,6 +162,15 @@ async def list_pages(
         # 18 direct children in Confluence vs 32 rows in our admin list
         # because 14 depth-3 Solution/Technical Design pages got rolled up.
         where.append("(p.depth IS NULL OR p.depth <= 2)")
+
+    # Hide synthetic drawio_source pages from the admin list by default —
+    # these were pulled by scripts/backfill_drawio_sources.py purely to
+    # resolve inc-drawio / templateUrl references and aren't real project
+    # review pages. They don't live under the FY tree, so they'd show up
+    # as orphan rows cluttering the list.
+    where.append(
+        "(p.page_type IS NULL OR p.page_type != 'drawio_source')"
+    )
     where_clause = ("WHERE " + " AND ".join(where)) if where else ""
 
     # When include_deep=false, direct children without any app signal must
@@ -191,10 +200,32 @@ async def list_pages(
                    (rp.project_id IS NOT NULL) AS project_in_mspo,
                    (ra.app_id IS NOT NULL)     AS app_in_cmdb,
                    p.q_pm, p.q_it_lead, p.q_dt_lead,
-                   (SELECT count(*) FROM northstar.confluence_attachment a WHERE a.page_id = p.page_id) AS attachment_count,
-                   (SELECT count(*) FROM northstar.confluence_attachment a
-                      WHERE a.page_id = p.page_id AND a.file_kind = 'drawio'
-                        AND a.title NOT LIKE 'drawio-backup%' AND a.title NOT LIKE '~%') AS drawio_count,
+                   -- Flat view: own attachments + referenced drawios
+                   ((SELECT count(*) FROM northstar.confluence_attachment a
+                       WHERE a.page_id = p.page_id)
+                    + COALESCE((SELECT count(*) FROM northstar.drawio_reference dr
+                                JOIN northstar.confluence_attachment sa
+                                  ON sa.page_id = dr.source_page_id
+                                 AND sa.file_kind = 'drawio'
+                                 AND sa.title NOT LIKE 'drawio-backup%'
+                                 AND sa.title NOT LIKE '~%'
+                                 AND (dr.diagram_name = '' OR sa.title = dr.diagram_name
+                                      OR sa.title = dr.diagram_name || '.drawio')
+                                WHERE dr.inclusion_page_id = p.page_id), 0)
+                   ) AS attachment_count,
+                   ((SELECT count(*) FROM northstar.confluence_attachment a
+                       WHERE a.page_id = p.page_id AND a.file_kind = 'drawio'
+                         AND a.title NOT LIKE 'drawio-backup%' AND a.title NOT LIKE '~%')
+                    + COALESCE((SELECT count(*) FROM northstar.drawio_reference dr
+                                JOIN northstar.confluence_attachment sa
+                                  ON sa.page_id = dr.source_page_id
+                                 AND sa.file_kind = 'drawio'
+                                 AND sa.title NOT LIKE 'drawio-backup%'
+                                 AND sa.title NOT LIKE '~%'
+                                 AND (dr.diagram_name = '' OR sa.title = dr.diagram_name
+                                      OR sa.title = dr.diagram_name || '.drawio')
+                                WHERE dr.inclusion_page_id = p.page_id), 0)
+                   ) AS drawio_count,
                    1 AS group_size,
                    ARRAY[p.page_id] AS group_page_ids
             FROM northstar.confluence_page p
@@ -239,13 +270,53 @@ async def list_pages(
                    p.effective_app_id, p.app_hint, p.effective_app_hint,
                    p.depth, p.parent_id,
                    p.q_project_name, p.q_pm, p.q_it_lead, p.q_dt_lead,
+                   -- Own attachments on this page
                    (SELECT count(*) FROM northstar.confluence_attachment a
-                      WHERE a.page_id = p.page_id) AS attachment_count,
+                      WHERE a.page_id = p.page_id) AS own_attachment_count,
                    (SELECT count(*) FROM northstar.confluence_attachment a
                       WHERE a.page_id = p.page_id AND a.file_kind = 'drawio'
-                        AND a.title NOT LIKE 'drawio-backup%' AND a.title NOT LIKE '~%') AS drawio_count
+                        AND a.title NOT LIKE 'drawio-backup%' AND a.title NOT LIKE '~%') AS own_drawio_count,
+                   -- Drawio attachments reachable through drawio_reference
+                   -- links. Some pages (Robbie, Facility+, GAMS, LBP MA KM,
+                   -- LSC, LI2400338, LI2400343…) embed diagrams via the
+                   -- inc-drawio or templateUrl macros — the actual drawio
+                   -- lives on a SOURCE page scanned out-of-band. This
+                   -- subquery pulls those in so the admin list matches
+                   -- what a Confluence user sees.
+                   --
+                   -- Two parts:
+                   --   1. Refs directly owned by this page (its own macro)
+                   --   2. Refs on ANY descendant page (so a depth-2 folder
+                   --      reflects drawios embedded on its depth-3 children
+                   --      even though those children are filtered out in
+                   --      the default include_deep=false view). Descendant
+                   --      lookup uses parent_id direct-child match — good
+                   --      enough for 1-2 hops which is what we have.
+                   (SELECT count(*) FROM northstar.drawio_reference dr
+                      JOIN northstar.confluence_attachment sa
+                        ON sa.page_id = dr.source_page_id
+                       AND sa.file_kind = 'drawio'
+                       AND sa.title NOT LIKE 'drawio-backup%'
+                       AND sa.title NOT LIKE '~%'
+                       AND (dr.diagram_name = '' OR sa.title = dr.diagram_name
+                            OR sa.title = dr.diagram_name || '.drawio')
+                      WHERE dr.inclusion_page_id = p.page_id
+                         OR dr.inclusion_page_id IN (
+                             SELECT child.page_id FROM northstar.confluence_page child
+                             WHERE child.parent_id = p.page_id
+                         )
+                   ) AS ref_drawio_count
             FROM northstar.confluence_page p
             {where_clause}
+        ),
+        -- Combined attachment and drawio counts: own + referenced.
+        -- We surface them as attachment_count/drawio_count so downstream
+        -- grouping/aggregation code stays unchanged.
+        base_with_refs AS (
+            SELECT b.*,
+                   (b.own_attachment_count + b.ref_drawio_count) AS attachment_count,
+                   (b.own_drawio_count + b.ref_drawio_count) AS drawio_count
+            FROM base b
         ),
         -- Pattern D: explode each base row by its linked apps. A page with
         -- no links in confluence_page_app_link appears exactly once (link_app_id
@@ -254,7 +325,7 @@ async def list_pages(
         exploded AS (
             SELECT b.*,
                    l.app_id AS link_app_id
-            FROM base b
+            FROM base_with_refs b
             LEFT JOIN northstar.confluence_page_app_link l ON l.page_id = b.page_id
         ),
         -- Effective grouping key per exploded row: link_app_id > effective_app_id

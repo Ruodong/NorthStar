@@ -224,6 +224,61 @@ def list_attachments(client: httpx.Client, page_id: str) -> list[dict]:
     return data.get("results", [])
 
 
+# Drawio macro reference parsing — used to populate drawio_reference when
+# a page embeds a diagram from another page via inc-drawio or templateUrl.
+# Mirrors the logic in scripts/backfill_drawio_sources.py so scanner and
+# backfill agree on structure.
+_DRAWIO_MACRO_RE = re.compile(
+    r'<ac:structured-macro[^>]*ac:name="([^"]*drawio[^"]*)"[^>]*>(.*?)</ac:structured-macro>',
+    re.DOTALL,
+)
+_DRAWIO_PARAM_RE = re.compile(
+    r'<ac:parameter[^>]*ac:name="([^"]+)"[^>]*>(.*?)</ac:parameter>',
+    re.DOTALL,
+)
+_TEMPLATE_URL_RE = re.compile(r'/download/attachments/(\d+)/([^?"]+)')
+
+
+def _parse_drawio_refs(inclusion_page_id: str, body_html: str) -> list[dict]:
+    """Return list of drawio reference dicts for insertion into drawio_reference.
+
+    Each dict has keys: inclusion_page_id, source_page_id, macro_kind,
+    diagram_name, template_filename.
+    """
+    refs: list[dict] = []
+    for macro_name, block in _DRAWIO_MACRO_RE.findall(body_html or ""):
+        params: dict[str, str] = {}
+        for k, v in _DRAWIO_PARAM_RE.findall(block):
+            if "<" in v:  # corrupted empty param, skip
+                v = ""
+            params[k] = v.strip()
+
+        name_lower = macro_name.lower()
+        if name_lower == "inc-drawio":
+            src = params.get("pageId") or params.get("sourcePageId")
+            if src and src.isdigit():
+                refs.append({
+                    "inclusion_page_id": inclusion_page_id,
+                    "source_page_id": src,
+                    "macro_kind": "inc_drawio",
+                    "diagram_name": params.get("diagramName"),
+                    "template_filename": None,
+                })
+        elif name_lower == "drawio":
+            tmpl = params.get("templateUrl")
+            if tmpl:
+                m = _TEMPLATE_URL_RE.search(tmpl)
+                if m:
+                    refs.append({
+                        "inclusion_page_id": inclusion_page_id,
+                        "source_page_id": m.group(1),
+                        "macro_kind": "template_url",
+                        "diagram_name": params.get("diagramName"),
+                        "template_filename": m.group(2),
+                    })
+    return refs
+
+
 # Recursion cap. FY parent (depth=0) → project page (depth=1) →
 # "* Application Architecture" / "* Technical Architecture" child (depth=2)
 # → (rare) deeper sub-pages (depth=3). Anything below 3 is cut off to prevent
@@ -434,6 +489,45 @@ def process_page(
                     (page_id, a_id),
                 )
         totals["page_app_links"] = totals.get("page_app_links", 0) + len(multi_app_ids)
+
+    # drawio_reference: pages that render a diagram via inc-drawio or a
+    # templateUrl-based plain drawio macro are pointers, not sources. The
+    # source page may live outside our FY scan tree — it gets backfilled
+    # by scripts/backfill_drawio_sources.py. We still record the pointer
+    # on every scan so the table doesn't drift.
+    if body_html:
+        refs = _parse_drawio_refs(page_id, body_html)
+        if refs:
+            with pg.cursor() as rcur:
+                for ref in refs:
+                    try:
+                        rcur.execute(
+                            """
+                            INSERT INTO northstar.drawio_reference
+                                (inclusion_page_id, source_page_id, macro_kind,
+                                 diagram_name, template_filename,
+                                 first_seen_at, last_seen_at)
+                            VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+                            ON CONFLICT (inclusion_page_id, source_page_id,
+                                         macro_kind, diagram_name)
+                            DO UPDATE SET
+                                template_filename = EXCLUDED.template_filename,
+                                last_seen_at = NOW()
+                            """,
+                            (
+                                ref["inclusion_page_id"],
+                                ref["source_page_id"],
+                                ref["macro_kind"],
+                                ref.get("diagram_name") or "",
+                                ref.get("template_filename"),
+                            ),
+                        )
+                    except psycopg.errors.UndefinedTable:
+                        # Table missing — migration 006 not yet applied.
+                        # Don't fail the scan; the next run will try again.
+                        pg.rollback()
+                        break
+            totals["drawio_refs"] = totals.get("drawio_refs", 0) + len(refs)
 
     # Attachments
     try:
