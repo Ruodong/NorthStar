@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import mimetypes
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -17,6 +18,61 @@ from app.models.schemas import ApiResponse
 from app.services import pg_client
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+# Attachment detail-view sort buckets. Architects want the two canonical
+# architecture diagrams (application architecture + technical architecture)
+# pinned to the top of the list — in that order — with everything else
+# below sorted by recency. Detection is based on the attachment's own
+# title, the descendant page it came from (source_page_title), and the
+# intermediary "via" page for referenced diagrams.
+_APP_ARCH_RE = re.compile(
+    r"应用架构|solution\s*architecture",
+    re.IGNORECASE,
+)
+_TECH_ARCH_RE = re.compile(
+    r"技术架构|tech架构|tech(?:nical)?\s*architecture",
+    re.IGNORECASE,
+)
+
+
+def _arch_bucket(row: dict) -> int:
+    """0 = 应用架构, 1 = 技术架构, 2 = everything else."""
+    haystack = " ".join(
+        s for s in (
+            row.get("title"),
+            row.get("source_page_title"),
+            row.get("via_page_title"),
+        ) if s
+    )
+    if _APP_ARCH_RE.search(haystack):
+        return 0
+    if _TECH_ARCH_RE.search(haystack):
+        return 1
+    return 2
+
+
+def _attachment_sort_key(row: dict) -> tuple:
+    """Sort: arch bucket → drawio-before-image inside arch buckets →
+    recency (version DESC, then synced_at DESC) → stable title tiebreak.
+
+    `synced_at` is the first-insert time written by scan_confluence.py
+    (scanner only refreshes `last_seen`, not `synced_at`), so a newly
+    uploaded drawio gets a fresh synced_at and floats above older rows.
+    `version` is Confluence's own revision counter and is a stronger
+    signal when an attachment is re-uploaded under the same filename.
+    """
+    bucket = _arch_bucket(row)
+    if bucket < 2:
+        # Inside an architecture bucket, keep drawio above rendered PNG so
+        # the architect hits the source first, image second.
+        kind_rank = 0 if (row.get("file_kind") == "drawio") else 1
+    else:
+        # "Rest" bucket: purely by recency, no file-kind preference.
+        kind_rank = 0
+    version_neg = -(row.get("version") or 0)
+    synced_at = row.get("synced_at")
+    synced_neg = -synced_at.timestamp() if synced_at else 0.0
+    return (bucket, kind_rank, version_neg, synced_neg, row.get("title") or "")
 
 # Container path where the attachments volume is mounted (docker-compose
 # mounts the host data/ dir into /app_data).
@@ -521,7 +577,7 @@ async def get_page(page_id: str) -> ApiResponse:
     own_rows = await pg_client.fetch(
         """
         SELECT attachment_id, title, media_type, file_kind, file_size, version,
-               download_path, local_path,
+               download_path, local_path, synced_at,
                'own' AS source_kind,
                NULL::text AS source_page_id,
                NULL::text AS source_page_title,
@@ -551,7 +607,7 @@ async def get_page(page_id: str) -> ApiResponse:
             WHERE s.lvl < 5
         )
         SELECT a.attachment_id, a.title, a.media_type, a.file_kind, a.file_size, a.version,
-               a.download_path, a.local_path,
+               a.download_path, a.local_path, a.synced_at,
                'descendant' AS source_kind,
                s.page_id    AS source_page_id,
                s.title      AS source_page_title,
@@ -576,7 +632,7 @@ async def get_page(page_id: str) -> ApiResponse:
             SELECT page_id, title FROM northstar.confluence_page WHERE parent_id = $1
         )
         SELECT sa.attachment_id, sa.title, sa.media_type, sa.file_kind, sa.file_size, sa.version,
-               sa.download_path, sa.local_path,
+               sa.download_path, sa.local_path, sa.synced_at,
                'referenced' AS source_kind,
                sp.page_id   AS source_page_id,
                sp.title     AS source_page_title,
@@ -610,14 +666,9 @@ async def get_page(page_id: str) -> ApiResponse:
         if existing is None or PRIORITY[r["source_kind"]] < PRIORITY[existing["source_kind"]]:
             seen[key] = r
     unified = list(seen.values())
-    unified.sort(
-        key=lambda r: (
-            {"drawio": 1, "image": 2, "pdf": 3, "office": 4, "xml": 5, "other": 6}.get(
-                r.get("file_kind") or "other", 9
-            ),
-            r.get("title") or "",
-        )
-    )
+    # Architecture-aware sort (see _attachment_sort_key): 应用架构 bucket
+    # first, 技术架构 bucket second, everything else by recency DESC.
+    unified.sort(key=_attachment_sort_key)
 
     # Build a child tree for the Hierarchy tab (direct children only — the
     # client can follow the page_id link to go deeper). Include their own
