@@ -179,15 +179,24 @@ class ResolveCache:
 # extract_app_ids_multi — Pattern D: comma-separated A-ids in one title
 # ---------------------------------------------------------------------------
 
-_MULTI_APP_ID = re.compile(r"A\d{5,7}")
+# Negative lookbehind for a letter so we don't match "A250197" inside
+# "EA250197" (the EA-prefixed project id convention). Negative lookahead
+# for a trailing digit so "A0000901" doesn't split into A000090 / 1.
+# Must be preceded by start-of-string or a non-letter character.
+_MULTI_APP_ID = re.compile(r"(?<![A-Za-z])A\d{5,7}(?!\d)")
 
 
 def extract_app_ids_multi(title: Optional[str]) -> list[str]:
-    """Find ALL occurrences of A\\d{5,7} in a title.
+    """Find ALL non-substring occurrences of A\\d{5,7} in a title.
 
     Used for Pattern D where a page title like
     "A000090,A000432,A003974- Architecture" covers multiple apps in one page.
     Returns them in title order, de-duplicated.
+
+    Rejects A-ids that are substrings of other identifiers:
+      - "EA250197-FY2526-..." does NOT yield A250197 (preceded by E)
+      - "A000090,A000432" yields ['A000090', 'A000432']        (comma OK)
+      - "A0000901" does NOT yield A000090                       (trailing digit)
     """
     if not title:
         return []
