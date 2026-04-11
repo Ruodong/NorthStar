@@ -36,6 +36,26 @@ async def get_neighbors(app_id: str, depth: int = Query(1, ge=1, le=3)) -> ApiRe
     return ApiResponse(data=data)
 
 
+@router.get("/nodes/{app_id}/impact")
+async def get_impact(
+    app_id: str,
+    depth: int = Query(2, ge=1, le=3, description="Traversal depth (1-3)"),
+) -> ApiResponse:
+    """Reverse dependency analysis — who upstream is affected if this app changes.
+
+    Traverses INTEGRATES_WITH edges in reverse up to `depth` hops. Returns
+    results bucketed by distance, with per-bucket fan-out cap and
+    business-object aggregation. See graph_query.reverse_dependency for
+    semantic details.
+    """
+    data = await graph_query.reverse_dependency(app_id, depth)
+    if data.get("root") is None:
+        raise HTTPException(
+            status_code=404, detail=f"Application {app_id} not found"
+        )
+    return ApiResponse(data=data)
+
+
 @router.get("/edges")
 async def list_edges(
     status: Optional[str] = None,

@@ -303,3 +303,175 @@ async def top_hubs(limit: int = 10) -> list[dict]:
     LIMIT $limit
     """
     return await neo4j_client.run_query(cypher, {"limit": limit})
+
+
+# ---------------------------------------------------------------------------
+# Reverse dependency / Impact Analysis
+# ---------------------------------------------------------------------------
+# "If I sunset this app, who breaks?" — traverse INTEGRATES_WITH edges in
+# reverse (callers upstream) for 1, 2, or 3 hops. Neo4j does not support
+# parameterizing the path length, so we keep three hard-coded queries.
+#
+# Per-depth handling in Python:
+#   - group results by distance
+#   - cap each distance bucket at FAN_OUT_CAP entries (default 50)
+#   - aggregate "directly impacted business objects" from the first edge
+#     of each path (the one closest to the target — that's the hop that
+#     actually exposes the business impact of removing the target)
+
+IMPACT_FAN_OUT_CAP = 50
+IMPACT_TOTAL_LIMIT = 400  # Cypher LIMIT — pulled down to 200 after grouping
+
+_REVERSE_CYPHER_BY_DEPTH: dict[int, str] = {
+    1: """
+    MATCH path=(a:Application {app_id: $app_id})<-[r:INTEGRATES_WITH*1..1]-(up:Application)
+    RETURN up.app_id AS app_id,
+           up.name AS name,
+           coalesce(up.status, '') AS status,
+           coalesce(up.cmdb_linked, false) AS cmdb_linked,
+           length(path) AS distance,
+           [rel IN r | coalesce(rel.business_object, '')] AS path_business_objects,
+           [rel IN r | coalesce(rel.interaction_type, '')] AS path_types
+    ORDER BY distance, up.name
+    LIMIT $limit
+    """,
+    2: """
+    MATCH path=(a:Application {app_id: $app_id})<-[r:INTEGRATES_WITH*1..2]-(up:Application)
+    RETURN up.app_id AS app_id,
+           up.name AS name,
+           coalesce(up.status, '') AS status,
+           coalesce(up.cmdb_linked, false) AS cmdb_linked,
+           length(path) AS distance,
+           [rel IN r | coalesce(rel.business_object, '')] AS path_business_objects,
+           [rel IN r | coalesce(rel.interaction_type, '')] AS path_types
+    ORDER BY distance, up.name
+    LIMIT $limit
+    """,
+    3: """
+    MATCH path=(a:Application {app_id: $app_id})<-[r:INTEGRATES_WITH*1..3]-(up:Application)
+    RETURN up.app_id AS app_id,
+           up.name AS name,
+           coalesce(up.status, '') AS status,
+           coalesce(up.cmdb_linked, false) AS cmdb_linked,
+           length(path) AS distance,
+           [rel IN r | coalesce(rel.business_object, '')] AS path_business_objects,
+           [rel IN r | coalesce(rel.interaction_type, '')] AS path_types
+    ORDER BY distance, up.name
+    LIMIT $limit
+    """,
+}
+
+
+async def reverse_dependency(app_id: str, depth: int = 2) -> dict:
+    """Return upstream impact analysis for an application.
+
+    Args:
+        app_id: The target application id.
+        depth: Traversal depth (1, 2, or 3). Values outside this range are clamped.
+
+    Returns:
+        {
+            "root": {app_id, name, status},
+            "depth": int,
+            "total_upstream": int (unique callers across all depths, pre-cap),
+            "by_distance": [
+                {
+                    "distance": 1,
+                    "total": <unique callers at this distance>,
+                    "shown": <min(total, FAN_OUT_CAP)>,
+                    "apps": [... up to FAN_OUT_CAP rows ...],
+                },
+                ...
+            ],
+            "business_objects": [{"name": str, "count": int}, ...],
+            "truncated_at_cypher_limit": bool,
+        }
+    """
+    depth = max(1, min(depth, 3))
+
+    # 1. Verify the root app exists — gives a clean 404 path in the caller
+    root_row = await neo4j_client.run_query(
+        """
+        MATCH (a:Application {app_id: $app_id})
+        RETURN a.app_id AS app_id, a.name AS name, coalesce(a.status, '') AS status
+        """,
+        {"app_id": app_id},
+    )
+    if not root_row:
+        return {"root": None, "depth": depth, "by_distance": [], "business_objects": []}
+
+    cypher = _REVERSE_CYPHER_BY_DEPTH[depth]
+    rows = await neo4j_client.run_query(
+        cypher,
+        {"app_id": app_id, "limit": IMPACT_TOTAL_LIMIT},
+    )
+
+    truncated = len(rows) >= IMPACT_TOTAL_LIMIT
+
+    # Deduplicate: the same upstream app can show up on multiple paths at the
+    # same distance. Keep the first row per (app_id, distance) so downstream
+    # budgets stay honest.
+    seen: set[tuple[str, int]] = set()
+    unique_rows: list[dict] = []
+    for r in rows:
+        key = (r["app_id"], r["distance"])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_rows.append(r)
+
+    # 2. Bucket by distance, apply fan-out cap per bucket
+    buckets: dict[int, list[dict]] = {}
+    for r in unique_rows:
+        buckets.setdefault(r["distance"], []).append(r)
+
+    by_distance: list[dict] = []
+    for d in sorted(buckets.keys()):
+        full = buckets[d]
+        shown = full[:IMPACT_FAN_OUT_CAP]
+        by_distance.append(
+            {
+                "distance": d,
+                "total": len(full),
+                "shown": len(shown),
+                "apps": [
+                    {
+                        "app_id": row["app_id"],
+                        "name": row["name"],
+                        "status": row["status"],
+                        "cmdb_linked": row["cmdb_linked"],
+                    }
+                    for row in shown
+                ],
+            }
+        )
+
+    # 3. Business-object aggregation
+    # Semantics: for each upstream path, take only the TERMINAL edge's
+    # business_object (the edge closest to the query app_id). This reflects
+    # "what business concern is directly exposed to the target app". For
+    # reverse traversal `a <- up`, the terminal edge is the first element of
+    # the edge list since we traverse from root outward.
+    bo_counter: dict[str, int] = {}
+    for r in unique_rows:
+        bos = r.get("path_business_objects") or []
+        if not bos:
+            continue
+        terminal = bos[0]
+        if not terminal:
+            terminal = "Unlabeled"
+        bo_counter[terminal] = bo_counter.get(terminal, 0) + 1
+    business_objects = [
+        {"name": k, "count": v}
+        for k, v in sorted(bo_counter.items(), key=lambda kv: kv[1], reverse=True)
+    ][:10]
+
+    return {
+        "root": root_row[0],
+        "depth": depth,
+        "total_upstream": len(unique_rows),
+        "by_distance": by_distance,
+        "business_objects": business_objects,
+        "truncated_at_cypher_limit": truncated,
+        "fan_out_cap": IMPACT_FAN_OUT_CAP,
+    }
