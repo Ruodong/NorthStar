@@ -4,7 +4,22 @@
 |---------|---------------------------|
 | Author  | Ruodong Yang              |
 | Date    | 2026-04-10                |
-| Status  | Implemented (retrospective) |
+| Status  | Implemented — First closed-loop pilot GREEN 2026-04-10 |
+
+## 0. Pilot run record (2026-04-10)
+
+First pass of the closed-loop v2 cycle against this feature uncovered three
+real bugs plus one test-framework defect, all fixed:
+
+| Failing test | Root cause | Fix |
+|---|---|---|
+| `test_application_has_no_source_project_id` | 1531 nodes still carried legacy scalars; Neo4j had never been wiped since the ontology refactor | `python scripts/load_neo4j_from_pg.py --wipe` |
+| `test_manual_alias_targets_exist` | `northstar.manual_app_aliases` table did not exist | `psql < backend/sql/003_ontology_fix.sql` |
+| `test_tech_arch_diagram_has_no_graph_data` | Loader was marking 3 Tech_Arch drawios with `has_graph_data=true` (loader bug, not spec drift) | Guard `and diagram_type == 'App_Arch'` in `load_neo4j_from_pg.py` |
+| `test_node_detail_includes_investments` | Backend container was running a stale image (code on disk had been updated but container never rebuilt) | `docker compose up -d --build backend` |
+| `test_backend_health` / `test_graph_nodes_fiscal_year_filter_via_invests_in` (`Event loop is closed`) | Session-scoped httpx AsyncClient reused across per-test event loops | Switch `api` fixture to function-scoped in `api-tests/conftest.py` |
+
+Final pytest result: **15 passed, 1 skipped** (the skip is `test_manual_alias_targets_exist` which only activates once `manual_app_aliases` has rows — deliberate).
 
 ---
 
