@@ -139,6 +139,46 @@ def test_confluence_page_parent_tree_is_consistent(pg):
 
 
 # ---------------------------------------------------------------------------
+# AC-6: Pattern C — 3-layer LI → A-id → arch, every layer carries own A-id
+# ---------------------------------------------------------------------------
+
+def test_pattern_c_three_layer_a_id(pg):
+    """Regression lock for Pattern C: a project folder at depth=1 with
+    q_app_id=NULL, app-level folders at depth=2 carrying q_app_id from
+    title (`A000328-BPP Architecture`), and arch leaves at depth=3 ALSO
+    carrying q_app_id from title (`A000328-BPP Application Architecture`).
+
+    All three share (project_id, q_app_id) so the admin grouping folds them
+    into one row without needing effective_app_id inheritance.
+
+    Uses LI2500120 + A000328 BPP as the canonical example.
+    """
+    with pg.cursor() as cur:
+        cur.execute(
+            """
+            SELECT page_id, depth, q_app_id, title
+            FROM northstar.confluence_page
+            WHERE project_id = 'LI2500120'
+              AND q_app_id = 'A000328'
+            ORDER BY depth, page_id
+            """
+        )
+        rows = cur.fetchall()
+    # Expect: one depth=2 parent + two depth=3 children, all with q_app_id=A000328
+    assert len(rows) >= 3, (
+        f"Pattern C: expected >=3 pages for (LI2500120, A000328), got {len(rows)}"
+    )
+    depths = [r["depth"] for r in rows]
+    assert 2 in depths, "Pattern C: missing depth=2 app-folder page"
+    assert depths.count(3) >= 2, "Pattern C: missing at least 2 depth=3 arch children"
+    for r in rows:
+        assert r["q_app_id"] == "A000328", (
+            f"Pattern C: page {r['page_id']} at depth={r['depth']} "
+            f"has q_app_id={r['q_app_id']!r}, expected A000328"
+        )
+
+
+# ---------------------------------------------------------------------------
 # AC-5: drawio coverage ratio improved
 # ---------------------------------------------------------------------------
 

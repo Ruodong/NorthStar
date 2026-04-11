@@ -61,7 +61,20 @@
       "api": ["api-tests/test_ontology.py"]
     },
     "scripts/scan_confluence.py": {
-      "api": ["api-tests/test_confluence_child_pages.py"]
+      "api": [
+        "api-tests/test_confluence_child_pages.py",
+        "api-tests/test_app_hint_match.py",
+        "api-tests/test_multi_app_page.py"
+      ]
+    },
+    "scripts/title_parser.py": {
+      "api": ["api-tests/test_app_hint_extract.py"]
+    },
+    "scripts/backfill_app_hint.py": {
+      "api": ["api-tests/test_app_hint_match.py"]
+    },
+    "scripts/backfill_page_app_link.py": {
+      "api": ["api-tests/test_multi_app_page.py"]
     }
   },
   "wildcards": {

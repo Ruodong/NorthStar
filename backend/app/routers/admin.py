@@ -103,7 +103,8 @@ async def list_pages(
             f"(p.title ILIKE ${len(args)} "
             f"OR p.project_id ILIKE ${len(args)} "
             f"OR p.q_app_id ILIKE ${len(args)} "
-            f"OR p.effective_app_id ILIKE ${len(args)})"
+            f"OR p.effective_app_id ILIKE ${len(args)} "
+            f"OR p.app_hint ILIKE ${len(args)})"
         )
     if has_drawio:
         where.append(
@@ -127,6 +128,7 @@ async def list_pages(
                      ELSE 'none'
                    END AS project_name_source,
                    p.q_app_id      AS app_id,
+                   p.app_hint      AS app_hint,
                    ra.name         AS app_name,
                    CASE WHEN ra.name IS NOT NULL THEN 'cmdb' ELSE 'none' END AS app_name_source,
                    (rp.project_id IS NOT NULL) AS project_in_mspo,
@@ -169,9 +171,9 @@ async def list_pages(
     args.extend([limit, offset])
     rows = await pg_client.fetch(
         f"""
-        WITH filtered AS (
+        WITH base AS (
             SELECT p.page_id, p.fiscal_year, p.title, p.page_url, p.page_type,
-                   p.project_id, p.q_app_id, p.effective_app_id,
+                   p.project_id, p.q_app_id, p.effective_app_id, p.app_hint,
                    p.depth, p.parent_id,
                    p.q_project_name, p.q_pm, p.q_it_lead, p.q_dt_lead,
                    (SELECT count(*) FROM northstar.confluence_attachment a
@@ -182,30 +184,49 @@ async def list_pages(
             FROM northstar.confluence_page p
             {where_clause}
         ),
+        -- Pattern D: explode each base row by its linked apps. A page with
+        -- no links in confluence_page_app_link appears exactly once (link_app_id
+        -- = NULL). A page with N links appears N times, once per app. The
+        -- LEFT JOIN makes that happen for free.
+        exploded AS (
+            SELECT b.*,
+                   l.app_id AS link_app_id
+            FROM base b
+            LEFT JOIN northstar.confluence_page_app_link l ON l.page_id = b.page_id
+        ),
+        -- Effective grouping key per exploded row: link_app_id > effective_app_id
+        -- > [hint] > NA. The same physical page_id may end up in multiple
+        -- partitions, which is what Pattern D wants.
+        keyed AS (
+            SELECT e.*,
+                   COALESCE(e.project_id, 'PG:' || e.page_id) AS g_project,
+                   COALESCE(
+                     e.link_app_id,
+                     e.effective_app_id,
+                     'HINT:' || e.app_hint,
+                     'NA'
+                   ) AS g_app
+            FROM exploded e
+        ),
         grouped AS (
             SELECT *,
                    ROW_NUMBER() OVER (
-                       PARTITION BY COALESCE(project_id, 'PG:' || page_id),
-                                    COALESCE(effective_app_id, 'NA')
+                       PARTITION BY g_project, g_app
                        ORDER BY depth NULLS LAST, page_id
                    ) AS rn,
                    COUNT(*) OVER (
-                       PARTITION BY COALESCE(project_id, 'PG:' || page_id),
-                                    COALESCE(effective_app_id, 'NA')
+                       PARTITION BY g_project, g_app
                    ) AS group_size,
                    SUM(attachment_count) OVER (
-                       PARTITION BY COALESCE(project_id, 'PG:' || page_id),
-                                    COALESCE(effective_app_id, 'NA')
+                       PARTITION BY g_project, g_app
                    ) AS group_att,
                    SUM(drawio_count) OVER (
-                       PARTITION BY COALESCE(project_id, 'PG:' || page_id),
-                                    COALESCE(effective_app_id, 'NA')
+                       PARTITION BY g_project, g_app
                    ) AS group_dr,
                    ARRAY_AGG(page_id) OVER (
-                       PARTITION BY COALESCE(project_id, 'PG:' || page_id),
-                                    COALESCE(effective_app_id, 'NA')
+                       PARTITION BY g_project, g_app
                    ) AS group_pages
-            FROM filtered
+            FROM keyed
         )
         SELECT g.page_id, g.fiscal_year, g.title, g.page_url, g.page_type,
                g.project_id,
@@ -215,9 +236,22 @@ async def list_pages(
                  WHEN g.q_project_name IS NOT NULL THEN 'questionnaire'
                  ELSE 'none'
                END AS project_name_source,
-               COALESCE(g.effective_app_id, g.q_app_id) AS app_id,
+               -- app_id precedence: exploded link > effective > [hint] > NULL
+               CASE
+                 WHEN g.link_app_id IS NOT NULL THEN g.link_app_id
+                 WHEN COALESCE(g.effective_app_id, g.q_app_id) IS NOT NULL
+                   THEN COALESCE(g.effective_app_id, g.q_app_id)
+                 WHEN g.app_hint IS NOT NULL
+                   THEN '[' || g.app_hint || ']'
+                 ELSE NULL
+               END AS app_id,
+               g.app_hint                                AS app_hint,
                ra.name                                   AS app_name,
-               CASE WHEN ra.name IS NOT NULL THEN 'cmdb' ELSE 'none' END AS app_name_source,
+               CASE
+                 WHEN ra.name IS NOT NULL THEN 'cmdb'
+                 WHEN g.app_hint IS NOT NULL AND g.link_app_id IS NULL THEN 'hint_unresolved'
+                 ELSE 'none'
+               END AS app_name_source,
                (rp.project_id IS NOT NULL) AS project_in_mspo,
                (ra.app_id IS NOT NULL)     AS app_in_cmdb,
                g.q_pm, g.q_it_lead, g.q_dt_lead,
@@ -227,7 +261,8 @@ async def list_pages(
                g.group_pages     AS group_page_ids
         FROM grouped g
         LEFT JOIN northstar.ref_project rp    ON rp.project_id = g.project_id
-        LEFT JOIN northstar.ref_application ra ON ra.app_id = COALESCE(g.effective_app_id, g.q_app_id)
+        LEFT JOIN northstar.ref_application ra
+               ON ra.app_id = COALESCE(g.link_app_id, g.effective_app_id, g.q_app_id)
         WHERE g.rn = 1
         ORDER BY g.fiscal_year DESC, g.title
         LIMIT ${len(args) - 1} OFFSET ${len(args)}
@@ -239,8 +274,14 @@ async def list_pages(
         SELECT count(*) FROM (
             SELECT DISTINCT
                    COALESCE(p.project_id, 'PG:' || p.page_id) AS g_project,
-                   COALESCE(p.effective_app_id, 'NA') AS g_app
+                   COALESCE(
+                     l.app_id,
+                     p.effective_app_id,
+                     'HINT:' || p.app_hint,
+                     'NA'
+                   ) AS g_app
             FROM northstar.confluence_page p
+            LEFT JOIN northstar.confluence_page_app_link l ON l.page_id = p.page_id
             {where_clause}
         ) sub
         """,

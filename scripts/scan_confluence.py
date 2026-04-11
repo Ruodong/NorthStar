@@ -32,9 +32,14 @@ import httpx
 import psycopg
 from psycopg.rows import dict_row
 
-# Local module
+# Local modules
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from confluence_body import parse_body
+from title_parser import (
+    ResolveCache,
+    extract_app_hint,
+    extract_app_ids_multi,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
 logger = logging.getLogger("scan-confluence")
@@ -319,6 +324,26 @@ def process_page(
     else:
         page_type = page_type  # keep "other"
 
+    # Pattern B: extract free-text app hint from title, try CMDB fuzzy match.
+    # Scoped to the current totals dict so the cache is shared within one
+    # scan run (scanner attaches the ResolveCache onto totals on first use).
+    app_hint = extract_app_hint(title)
+    hint_resolved: Optional[str] = None
+    if app_hint and not promoted_app_id:
+        cache: Optional[ResolveCache] = totals.get("_resolve_cache")
+        if cache is None:
+            # psycopg cursors are lightweight but reused connections
+            # prefer a short-lived cursor for the cache.
+            cache = ResolveCache(pg.cursor())
+            totals["_resolve_cache"] = cache
+        hint_resolved = cache.get(app_hint)
+
+    # effective_app_id precedence:
+    #   1) own promoted_app_id (A-id extracted from title/questionnaire)
+    #   2) hint-resolved CMDB match
+    #   3) inherited from ancestor (Pattern A)
+    effective_app_id = promoted_app_id or hint_resolved or ancestor_app_id
+
     with pg.cursor() as cur:
         cur.execute(
             """
@@ -326,11 +351,13 @@ def process_page(
                 (page_id, fiscal_year, title, project_id, page_url,
                  body_html, body_text, body_questionnaire, body_size_chars,
                  q_project_id, q_project_name, q_pm, q_it_lead, q_dt_lead,
-                 q_app_id, page_type, parent_id, depth, effective_app_id,
+                 q_app_id, page_type, parent_id, depth,
+                 effective_app_id, app_hint,
                  last_seen, synced_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s,
                     %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s,
                     NOW(), NOW())
             ON CONFLICT (page_id) DO UPDATE SET
                 fiscal_year = EXCLUDED.fiscal_year,
@@ -351,6 +378,7 @@ def process_page(
                 parent_id = EXCLUDED.parent_id,
                 depth = EXCLUDED.depth,
                 effective_app_id = EXCLUDED.effective_app_id,
+                app_hint = EXCLUDED.app_hint,
                 last_seen = NOW()
             """,
             (
@@ -365,13 +393,37 @@ def process_page(
                 page_type,
                 parent_id,
                 depth,
-                # FR-9: effective_app_id = own q_app_id OR nearest ancestor's.
-                # Lets drawios on "<project>-应用架构图"/"<project>-技术架构图"
-                # leaf pages roll up to the parent's (project, app) group.
-                promoted_app_id or ancestor_app_id,
+                effective_app_id,
+                app_hint,
             ),
         )
     totals["pages"] += 1
+
+    # Pattern D: many-to-many page ↔ app link. A single title can reference
+    # multiple A-ids (e.g. "A000090,A000432,A003974- Architecture"). Insert
+    # each as a (page_id, app_id, 'title_extract') link; idempotent via
+    # ON CONFLICT DO NOTHING.
+    multi_app_ids = extract_app_ids_multi(title)
+    # Also include promoted_app_id (APP_TITLE_RE match) if not already in list
+    if promoted_app_id and promoted_app_id not in multi_app_ids:
+        multi_app_ids = [promoted_app_id] + multi_app_ids
+    # Also include hint-resolved effective_app_id for single-app pages so the
+    # link table is a complete view of "every app this page is relevant to".
+    if effective_app_id and effective_app_id not in multi_app_ids:
+        multi_app_ids = multi_app_ids + [effective_app_id]
+    if multi_app_ids:
+        with pg.cursor() as lcur:
+            for a_id in multi_app_ids:
+                lcur.execute(
+                    """
+                    INSERT INTO northstar.confluence_page_app_link
+                        (page_id, app_id, source)
+                    VALUES (%s, %s, 'title_extract')
+                    ON CONFLICT (page_id, app_id) DO NOTHING
+                    """,
+                    (page_id, a_id),
+                )
+        totals["page_app_links"] = totals.get("page_app_links", 0) + len(multi_app_ids)
 
     # Attachments
     try:
@@ -464,9 +516,11 @@ def process_page(
     if not children:
         return
 
-    # Pass our own project_id + app_id down as the ancestor values for children
+    # Pass our own project_id + app_id down as the ancestor values for children.
+    # Use effective_app_id (which already includes hint resolution) so children
+    # inherit our fuzzy-matched A-id just as well as our title-extracted one.
     child_ancestor_pid = final_project_id or ancestor_project_id
-    child_ancestor_aid = promoted_app_id or ancestor_app_id
+    child_ancestor_aid = effective_app_id or ancestor_app_id
     totals["descents"] = totals.get("descents", 0) + 1
     for child in children:
         process_page(
