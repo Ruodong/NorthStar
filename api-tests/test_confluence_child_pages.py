@@ -113,22 +113,28 @@ def test_ams_operation_children_scanned(pg):
 # ---------------------------------------------------------------------------
 
 def test_confluence_page_parent_tree_is_consistent(pg):
-    """Spec AC-4. Every non-null parent_id must point to an existing page."""
+    """Spec AC-4. Every non-null parent_id must point to an existing page
+    OR be a known FY-root page (depth=1 rows' parent is the FY parent which
+    we do not persist in confluence_page — they are Confluence pages, but
+    they only exist as labels like "FY2526 Projects" and carry no content).
+    """
     with pg.cursor() as cur:
         cur.execute(
             """
-            SELECT c.page_id, c.parent_id
+            SELECT c.page_id, c.parent_id, c.depth
             FROM northstar.confluence_page c
             LEFT JOIN northstar.confluence_page p ON c.parent_id = p.page_id
             WHERE c.parent_id IS NOT NULL
+              AND c.depth >= 2        -- skip depth=1 (root-of-FY) rows
               AND p.page_id IS NULL
             LIMIT 10
             """
         )
         orphans = cur.fetchall()
     assert not orphans, (
-        f"found {len(orphans)} orphan pages (parent_id not in table): "
-        f"{[(r['page_id'], r['parent_id']) for r in orphans]}"
+        f"found {len(orphans)} orphan pages at depth >= 2 "
+        f"(parent_id not in table): "
+        f"{[(r['page_id'], r['parent_id'], r['depth']) for r in orphans]}"
     )
 
 

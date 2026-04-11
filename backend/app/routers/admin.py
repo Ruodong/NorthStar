@@ -168,7 +168,8 @@ async def list_pages(
         f"""
         WITH filtered AS (
             SELECT p.page_id, p.fiscal_year, p.title, p.page_url, p.page_type,
-                   p.project_id, p.q_app_id, p.depth, p.parent_id,
+                   p.project_id, p.q_app_id, p.effective_app_id,
+                   p.depth, p.parent_id,
                    p.q_project_name, p.q_pm, p.q_it_lead, p.q_dt_lead,
                    (SELECT count(*) FROM northstar.confluence_attachment a
                       WHERE a.page_id = p.page_id) AS attachment_count,
@@ -182,24 +183,24 @@ async def list_pages(
             SELECT *,
                    ROW_NUMBER() OVER (
                        PARTITION BY COALESCE(project_id, 'PG:' || page_id),
-                                    COALESCE(q_app_id, 'NA')
+                                    COALESCE(effective_app_id, 'NA')
                        ORDER BY depth NULLS LAST, page_id
                    ) AS rn,
                    COUNT(*) OVER (
                        PARTITION BY COALESCE(project_id, 'PG:' || page_id),
-                                    COALESCE(q_app_id, 'NA')
+                                    COALESCE(effective_app_id, 'NA')
                    ) AS group_size,
                    SUM(attachment_count) OVER (
                        PARTITION BY COALESCE(project_id, 'PG:' || page_id),
-                                    COALESCE(q_app_id, 'NA')
+                                    COALESCE(effective_app_id, 'NA')
                    ) AS group_att,
                    SUM(drawio_count) OVER (
                        PARTITION BY COALESCE(project_id, 'PG:' || page_id),
-                                    COALESCE(q_app_id, 'NA')
+                                    COALESCE(effective_app_id, 'NA')
                    ) AS group_dr,
                    ARRAY_AGG(page_id) OVER (
                        PARTITION BY COALESCE(project_id, 'PG:' || page_id),
-                                    COALESCE(q_app_id, 'NA')
+                                    COALESCE(effective_app_id, 'NA')
                    ) AS group_pages
             FROM filtered
         )
@@ -211,8 +212,8 @@ async def list_pages(
                  WHEN g.q_project_name IS NOT NULL THEN 'questionnaire'
                  ELSE 'none'
                END AS project_name_source,
-               g.q_app_id      AS app_id,
-               ra.name         AS app_name,
+               COALESCE(g.effective_app_id, g.q_app_id) AS app_id,
+               ra.name                                   AS app_name,
                CASE WHEN ra.name IS NOT NULL THEN 'cmdb' ELSE 'none' END AS app_name_source,
                (rp.project_id IS NOT NULL) AS project_in_mspo,
                (ra.app_id IS NOT NULL)     AS app_in_cmdb,
@@ -223,7 +224,7 @@ async def list_pages(
                g.group_pages     AS group_page_ids
         FROM grouped g
         LEFT JOIN northstar.ref_project rp    ON rp.project_id = g.project_id
-        LEFT JOIN northstar.ref_application ra ON ra.app_id = g.q_app_id
+        LEFT JOIN northstar.ref_application ra ON ra.app_id = COALESCE(g.effective_app_id, g.q_app_id)
         WHERE g.rn = 1
         ORDER BY g.fiscal_year DESC, g.title
         LIMIT ${len(args) - 1} OFFSET ${len(args)}
@@ -235,7 +236,7 @@ async def list_pages(
         SELECT count(*) FROM (
             SELECT DISTINCT
                    COALESCE(p.project_id, 'PG:' || p.page_id) AS g_project,
-                   COALESCE(p.q_app_id, 'NA') AS g_app
+                   COALESCE(p.effective_app_id, 'NA') AS g_app
             FROM northstar.confluence_page p
             {where_clause}
         ) sub

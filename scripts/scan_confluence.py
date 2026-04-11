@@ -234,6 +234,7 @@ def process_page(
     parent_id: Optional[str],
     depth: int,
     ancestor_project_id: Optional[str],
+    ancestor_app_id: Optional[str],
     args: argparse.Namespace,
     base: str,
     attach_root: Path,
@@ -325,11 +326,11 @@ def process_page(
                 (page_id, fiscal_year, title, project_id, page_url,
                  body_html, body_text, body_questionnaire, body_size_chars,
                  q_project_id, q_project_name, q_pm, q_it_lead, q_dt_lead,
-                 q_app_id, page_type, parent_id, depth,
+                 q_app_id, page_type, parent_id, depth, effective_app_id,
                  last_seen, synced_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s,
                     %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s,
                     NOW(), NOW())
             ON CONFLICT (page_id) DO UPDATE SET
                 fiscal_year = EXCLUDED.fiscal_year,
@@ -349,6 +350,7 @@ def process_page(
                 page_type = EXCLUDED.page_type,
                 parent_id = EXCLUDED.parent_id,
                 depth = EXCLUDED.depth,
+                effective_app_id = EXCLUDED.effective_app_id,
                 last_seen = NOW()
             """,
             (
@@ -363,6 +365,10 @@ def process_page(
                 page_type,
                 parent_id,
                 depth,
+                # FR-9: effective_app_id = own q_app_id OR nearest ancestor's.
+                # Lets drawios on "<project>-应用架构图"/"<project>-技术架构图"
+                # leaf pages roll up to the parent's (project, app) group.
+                promoted_app_id or ancestor_app_id,
             ),
         )
     totals["pages"] += 1
@@ -458,13 +464,15 @@ def process_page(
     if not children:
         return
 
-    # Pass our own project_id down as the ancestor for children
+    # Pass our own project_id + app_id down as the ancestor values for children
     child_ancestor_pid = final_project_id or ancestor_project_id
+    child_ancestor_aid = promoted_app_id or ancestor_app_id
     totals["descents"] = totals.get("descents", 0) + 1
     for child in children:
         process_page(
             client, pg, child, fy, page_id, depth + 1,
-            child_ancestor_pid, args, base, attach_root, root, totals,
+            child_ancestor_pid, child_ancestor_aid,
+            args, base, attach_root, root, totals,
         )
 
 
@@ -512,6 +520,7 @@ def main() -> int:
                     client, pg, page, fy,
                     parent_id=parent_id, depth=1,
                     ancestor_project_id=None,
+                    ancestor_app_id=None,
                     args=args, base=base,
                     attach_root=attach_root, root=root, totals=totals,
                 )
