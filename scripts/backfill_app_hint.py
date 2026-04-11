@@ -57,17 +57,26 @@ def main() -> int:
     }
 
     try:
+        # Load every page ordered by depth (NULLs first — pre-migration rows,
+        # then 1, 2, 3 — so we can do a single-pass ancestor walk in memory.
+        # We keep track of each page's resolved effective_app_id in a dict
+        # so depth=N rows can look up their parent's freshly-computed value.
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT page_id, title, q_app_id, app_hint, effective_app_id
+                SELECT page_id, title, q_app_id, parent_id, depth,
+                       app_hint, effective_app_id
                 FROM northstar.confluence_page
+                ORDER BY COALESCE(depth, 0), page_id
                 """
             )
             rows = cur.fetchall()
         logger.info("loaded %d confluence_page rows", len(rows))
 
-        # One cache per run, shared across all rows.
+        # parent_eff[page_id] = the effective_app_id we computed for this
+        # page, used when processing its children.
+        parent_eff: dict[str, str | None] = {}
+
         with conn.cursor() as resolve_cur:
             cache = ResolveCache(resolve_cur)
 
@@ -80,23 +89,23 @@ def main() -> int:
 
                     new_hint = extract_app_hint(row["title"])
 
-                    # effective_app_id rule:
-                    # own q_app_id wins; else hint-resolved CMDB id; else None
-                    # (The ancestor-walk rule from Pattern A is handled by
-                    # migration 006's recursive CTE + scanner; we preserve
-                    # effective_app_id when row["q_app_id"] is NULL but the
-                    # existing effective_app_id is NOT the hint resolution.)
+                    # effective_app_id precedence (rebuilt from scratch):
+                    #   1) own q_app_id
+                    #   2) hint-resolved CMDB A-id
+                    #   3) inherited from parent (walked in depth order)
                     if row["q_app_id"]:
                         new_eff = row["q_app_id"]
                     else:
-                        # Prefer existing ancestor-derived effective_app_id
-                        # unless hint resolves to something different.
                         hint_resolved = cache.get(new_hint) if new_hint else None
                         if hint_resolved:
                             new_eff = hint_resolved
+                        elif row["parent_id"] and row["parent_id"] in parent_eff:
+                            new_eff = parent_eff[row["parent_id"]]
                         else:
-                            # Keep whatever Pattern A backfilled (may be None)
-                            new_eff = old_eff
+                            new_eff = None
+
+                    # Record for descendants
+                    parent_eff[page_id] = new_eff
 
                     if new_hint == old_hint and new_eff == old_eff:
                         stats["no_change"] += 1

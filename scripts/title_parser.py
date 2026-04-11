@@ -32,29 +32,73 @@ _SUFFIX_ZH_ARCH     = re.compile(
     r"(架构|设计|架构图|设计图|架构设计)\s*$",
 )
 
+# Pattern E: "<anything> Application Architecture - <APP_NAME>" (or Technical /
+# Solution etc). The arch keyword is a mid-title SEPARATOR, and the app name
+# is the trailing segment. Captures the tail as the hint.
+_MID_EN_ARCH_SEP    = re.compile(
+    r"^.+?\s+(Application|Technical|Solution|Integration|Integrated)"
+    r"\s+(Architecture|Design)\s*[\-:：]\s*(?P<tail>.+?)\s*$",
+    re.IGNORECASE,
+)
+
 
 def extract_app_hint(title: Optional[str]) -> Optional[str]:
     """Extract a free-text application name hint from a Confluence page title.
 
-    Returns the middle segment after stripping project id prefix and
-    arch/design suffix, or None if nothing useful remains.
+    IMPORTANT: the extractor ONLY returns a hint when it sees evidence that
+    the page is actually an architecture/design leaf page. Three patterns
+    are recognized:
 
-    Examples (see spec AC-1):
-        "LI2500034-CSDC-Solution Design"                   -> "CSDC"
-        "LI2500034 - RetailFaimly- Solution Design"        -> "RetailFaimly"
-        "GSC Content Extractor Application Architecture"   -> "GSC Content Extractor"
-        "建店Java版本-应用架构图"                          -> "建店Java版本"
-        "LI2500009 - Solution Design"                      -> None
+    1. Arch/design suffix at the END (Pattern B):
+         "LI2500034-CSDC-Solution Design"              -> "CSDC"
+         "GSC Content Extractor Application Architecture" -> "GSC Content Extractor"
+         "建店Java版本-应用架构图"                     -> "建店Java版本"
+
+    2. Arch/design phrase as mid-title SEPARATOR (Pattern E):
+         "KSA Application Architecture - OF"           -> "OF"
+         "KSA Application Architecture - LeMES-MBG"    -> "LeMES-MBG"
+
+    3. No suffix and no mid-title separator → None (e.g. section titles like
+       "00 Order Fulfillment", project folders like "KSA Oasis DTIT Project").
     """
     if not title:
         return None
     t = title.strip()
     t = _PREFIX_COPY_OF.sub("", t)
     t = _PREFIX_PROJECT_ID.sub("", t)
-    t = _SUFFIX_EN_ARCH.sub("", t)
-    t = _SUFFIX_ZH_ARCH.sub("", t)
-    t = t.strip(" -:：\t")
+
+    # Rule 2: mid-title "<...> Application Architecture - <APP>" — the tail
+    # after the separator is the hint. Run this BEFORE the suffix check so
+    # titles like "KSA Application Architecture - OF" (which would also
+    # partially match the suffix regex on "Architecture" at the end) fall
+    # into this branch first.
+    m = _MID_EN_ARCH_SEP.match(t)
+    if m:
+        tail = m.group("tail").strip(" -:：\t")
+        if tail and len(tail) >= 2:
+            return tail
+        return None
+
+    # Rule 1: trailing arch/design suffix
+    t_after_en, en_matches = _SUFFIX_EN_ARCH.subn("", t)
+    t_after_zh, zh_matches = _SUFFIX_ZH_ARCH.subn("", t_after_en)
+    if en_matches == 0 and zh_matches == 0:
+        return None
+
+    t = t_after_zh.strip(" -:：&\t")
     if not t or len(t) < 2:
+        return None
+
+    # Combined titles like "KSA Application Architecture & Technical Design"
+    # leave "Application Architecture" residue after stripping one suffix.
+    # Reject if the residue still contains an arch/design keyword — it's not
+    # a clean app name, it's an umbrella title.
+    if re.search(
+        r"\b(Application|Technical|Solution|Integration|Integrated)\b"
+        r".*\b(Architecture|Design)\b",
+        t,
+        re.IGNORECASE,
+    ):
         return None
     return t
 
