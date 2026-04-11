@@ -186,6 +186,17 @@ async def list_pages(
             "want full depth visibility."
         ),
     ),
+    hide_empty: bool = Query(
+        True,
+        description=(
+            "When true (default), hide project-folder pages that have NO "
+            "Confluence content anywhere: zero own attachments, zero drawio "
+            "macro embeds, and zero attachments on their direct child pages. "
+            "These rows — typically FY2526-xxx project stubs with only a "
+            "title — are noise in the raw data view. Pass false to see "
+            "every scanned page including empty stubs."
+        ),
+    ),
 ) -> ApiResponse:
     where = []
     args: list = []
@@ -219,6 +230,34 @@ async def list_pages(
         # 18 direct children in Confluence vs 32 rows in our admin list
         # because 14 depth-3 Solution/Technical Design pages got rolled up.
         where.append("(p.depth IS NULL OR p.depth <= 2)")
+
+    if hide_empty:
+        # Hide project-folder pages that have NO Confluence content anywhere:
+        # no own attachments, no drawio macro embeds, no attachments on any
+        # direct child page. "FY2526-125 CoC PBI Data Refresh" style stubs
+        # that only have a title are noise in the raw data view.
+        where.append(
+            """(
+                EXISTS (
+                    SELECT 1 FROM northstar.confluence_attachment a
+                    WHERE a.page_id = p.page_id
+                      AND a.title NOT LIKE 'drawio-backup%'
+                      AND a.title NOT LIKE '~%'
+                )
+                OR EXISTS (
+                    SELECT 1 FROM northstar.drawio_reference dr
+                    WHERE dr.inclusion_page_id = p.page_id
+                )
+                OR EXISTS (
+                    SELECT 1 FROM northstar.confluence_attachment a2
+                    JOIN northstar.confluence_page cp2
+                         ON cp2.page_id = a2.page_id
+                    WHERE cp2.parent_id = p.page_id
+                      AND a2.title NOT LIKE 'drawio-backup%'
+                      AND a2.title NOT LIKE '~%'
+                )
+            )"""
+        )
 
     # Hide synthetic drawio_source pages from the admin list by default —
     # these were pulled by scripts/backfill_drawio_sources.py purely to

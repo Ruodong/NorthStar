@@ -60,6 +60,11 @@ export default function ConfluenceIndex() {
   // match what the user sees in Confluence. Flip on to reveal depth-3
   // grandchildren promoted as independent app rows by Pattern E.
   const [includeDeep, setIncludeDeep] = useState(false);
+  // Default: hide project-folder pages that have NO Confluence content
+  // anywhere (no attachments on themselves or their direct children).
+  // Flip ON to "Show empty stubs" to see everything including the
+  // FY2526-xxx project stubs with only a title.
+  const [showEmpty, setShowEmpty] = useState(false);
   const [page, setPage] = useState(0);
   const [data, setData] = useState<ListResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -95,6 +100,9 @@ export default function ConfluenceIndex() {
         if (pageType) params.set("page_type", pageType);
         if (hasDrawio) params.set("has_drawio", "true");
         if (includeDeep) params.set("include_deep", "true");
+        // Backend default is hide_empty=true; send false explicitly when
+        // the user wants to see empty stubs.
+        if (showEmpty) params.set("hide_empty", "false");
         params.set("limit", String(PAGE_SIZE));
         params.set("offset", String(page * PAGE_SIZE));
         const r = await fetch(`/api/admin/confluence/pages?${params}`, { cache: "no-store" });
@@ -110,7 +118,7 @@ export default function ConfluenceIndex() {
     return () => {
       cancelled = true;
     };
-  }, [qDebounced, fy, pageType, hasDrawio, includeDeep, page]);
+  }, [qDebounced, fy, pageType, hasDrawio, includeDeep, showEmpty, page]);
 
   const total = data?.total ?? 0;
   const maxPage = Math.max(0, Math.ceil(total / PAGE_SIZE) - 1);
@@ -331,6 +339,20 @@ export default function ConfluenceIndex() {
             }}
           />
           Include sub-applications
+        </label>
+        <label
+          style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13 }}
+          title="Default: hide project-folder pages with zero attachments on themselves OR any direct child (empty stubs). Turn on to see every scanned page including bare titles like 'FY2526-125 CoC PBI Data Refresh'."
+        >
+          <input
+            type="checkbox"
+            checked={showEmpty}
+            onChange={(e) => {
+              setShowEmpty(e.target.checked);
+              setPage(0);
+            }}
+          />
+          Show empty stubs
         </label>
         <div style={{ flex: 1 }} />
         <div
