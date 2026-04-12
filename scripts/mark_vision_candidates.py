@@ -247,7 +247,7 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="Print what would be marked, do not write.")
     args = ap.parse_args()
 
-    conn = psycopg.connect(pg_dsn())
+    conn = psycopg.connect(pg_dsn(), row_factory=dict_row)
     conn.autocommit = False
     try:
         if args.dry_run:
