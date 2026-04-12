@@ -178,7 +178,13 @@ export default function ConfluenceIndex() {
   }, []);
 
   useEffect(() => {
-    const t = setTimeout(() => setQDebounced(q), 250);
+    const t = setTimeout(() => {
+      setQDebounced(q);
+      // Reset to page 0 whenever the search query changes — otherwise
+      // a search typed on page 42 would fetch at offset 2100 and miss
+      // all results that live on earlier pages.
+      setPage(0);
+    }, 250);
     return () => clearTimeout(t);
   }, [q]);
 
@@ -436,7 +442,7 @@ export default function ConfluenceIndex() {
           onChange={(e) => setQ(e.target.value)}
           style={{ minWidth: 320 }}
         />
-        <select value={fy} onChange={(e) => setFy(e.target.value)}>
+        <select value={fy} onChange={(e) => { setFy(e.target.value); setPage(0); }}>
           <option value="">All fiscal years</option>
           {summary?.by_fy.map((f) => (
             <option key={f.fiscal_year} value={f.fiscal_year}>
