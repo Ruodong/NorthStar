@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { usePathname } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Pager } from "@/components/Pager";
 
 interface PageRow {
@@ -49,7 +50,13 @@ interface Summary {
 
 const PAGE_SIZE = 50;
 
+// sessionStorage key for scroll position restore across back-nav.
+// Tab-scoped, cleared on tab close — never leaks across sessions.
+const SCROLL_STORAGE_KEY = "northstar.admin.confluence.scroll";
+
 export default function ConfluenceIndex() {
+  const pathname = usePathname();
+
   const [summary, setSummary] = useState<Summary | null>(null);
   const [q, setQ] = useState("");
   const [qDebounced, setQDebounced] = useState("");
@@ -69,6 +76,81 @@ export default function ConfluenceIndex() {
   const [data, setData] = useState<ListResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Two-phase mount for URL state: defaults first (matches SSR so no
+  // hydration mismatch), then a post-mount effect reads the URL and
+  // applies the stored filter/page values. `hydrated` flips to true after
+  // that effect runs so the URL-sync effect doesn't clobber the URL with
+  // defaults on the very first render.
+  const [hydrated, setHydrated] = useState(false);
+  // Scroll restore runs once per mount, after data lands. Gate with a ref
+  // so rerenders don't keep overwriting the user's subsequent scrolling.
+  const scrollRestoredRef = useRef(false);
+
+  // Step 1 of URL state round-trip: on first client mount, read the URL
+  // and apply it to state. Runs once.
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    const urlQ = sp.get("q") ?? "";
+    setQ(urlQ);
+    setQDebounced(urlQ);
+    setFy(sp.get("fy") ?? "");
+    setPageType(sp.get("page_type") ?? "");
+    setHasDrawio(sp.get("has_drawio") === "1");
+    setIncludeDeep(sp.get("include_deep") === "1");
+    setShowEmpty(sp.get("show_empty") === "1");
+    setPage(Math.max(0, Number(sp.get("page") ?? "0")));
+    setHydrated(true);
+  }, []);
+
+  // Step 2: sync state → URL on every change (once hydrated).
+  // `window.history.replaceState` is deliberately used instead of
+  // `router.replace` so the URL update is silent — no re-render, no data
+  // re-fetch, just a cheap history entry mutation the browser preserves
+  // on back-nav.
+  useEffect(() => {
+    if (!hydrated) return;
+    const params = new URLSearchParams();
+    if (qDebounced) params.set("q", qDebounced);
+    if (fy) params.set("fy", fy);
+    if (pageType) params.set("page_type", pageType);
+    if (hasDrawio) params.set("has_drawio", "1");
+    if (includeDeep) params.set("include_deep", "1");
+    if (showEmpty) params.set("show_empty", "1");
+    if (page > 0) params.set("page", String(page));
+    const qs = params.toString();
+    const newUrl = qs ? `${pathname}?${qs}` : pathname;
+    window.history.replaceState(null, "", newUrl);
+  }, [hydrated, qDebounced, fy, pageType, hasDrawio, includeDeep, showEmpty, page, pathname]);
+
+  // Scroll position persistence: save on every scroll (throttled via rAF).
+  // Restore once, after data for the first mount lands. We key off the
+  // URL so each distinct filter/page combo has its own remembered scroll,
+  // but in practice the URL is stable across the user's round trip.
+  useEffect(() => {
+    let rafId: number | null = null;
+    const onScroll = () => {
+      if (rafId !== null) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = null;
+        try {
+          sessionStorage.setItem(
+            SCROLL_STORAGE_KEY,
+            JSON.stringify({
+              url: window.location.pathname + window.location.search,
+              y: window.scrollY,
+            }),
+          );
+        } catch {
+          /* quota / private-mode — ignore */
+        }
+      });
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      if (rafId !== null) cancelAnimationFrame(rafId);
+    };
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -89,6 +171,10 @@ export default function ConfluenceIndex() {
   }, [q]);
 
   useEffect(() => {
+    // Wait for the URL-hydration effect to apply stored state before
+    // firing the first fetch — otherwise a fresh mount with "?page=50"
+    // in the URL would issue two fetches (defaults + URL values).
+    if (!hydrated) return;
     let cancelled = false;
     (async () => {
       setLoading(true);
@@ -118,7 +204,33 @@ export default function ConfluenceIndex() {
     return () => {
       cancelled = true;
     };
-  }, [qDebounced, fy, pageType, hasDrawio, includeDeep, showEmpty, page]);
+  }, [hydrated, qDebounced, fy, pageType, hasDrawio, includeDeep, showEmpty, page]);
+
+  // Scroll restore: once, after the FIRST data load on this mount, jump to
+  // the remembered scrollY if its URL matches. The URL match guards against
+  // restoring a scroll that belonged to a different filter view.
+  useEffect(() => {
+    if (scrollRestoredRef.current) return;
+    if (loading) return;
+    if (!data) return;
+    scrollRestoredRef.current = true;
+    try {
+      const raw = sessionStorage.getItem(SCROLL_STORAGE_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as { url?: string; y?: number };
+      const currentUrl = window.location.pathname + window.location.search;
+      if (saved.url === currentUrl && typeof saved.y === "number") {
+        // Two rAFs to ensure the DOM has painted the table before scrolling.
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            window.scrollTo({ top: saved.y!, behavior: "auto" });
+          });
+        });
+      }
+    } catch {
+      /* ignore malformed JSON or storage errors */
+    }
+  }, [loading, data]);
 
   const total = data?.total ?? 0;
   const maxPage = Math.max(0, Math.ceil(total / PAGE_SIZE) - 1);
