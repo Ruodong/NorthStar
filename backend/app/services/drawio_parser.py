@@ -863,6 +863,96 @@ def _parse_app_arch(root: ET.Element) -> dict:
             "_geom": (gx, gy, gw, gh),
         })
 
+    # --- Frame promotion pre-pass ---
+    # Some drawios render a big filled rectangle (the visual container)
+    # with NO text at all, and separately drop a small labeled cell at
+    # the top of that rectangle holding the "ID: Axxxxxx Container Name"
+    # text. The label cell's geometry is tiny (e.g. 140x60) so it fails
+    # the 150x100 container-merge threshold below, and the big rectangle
+    # is skipped entirely at the `if not value: continue` check because
+    # it has no text — the visual container never enters `applications`
+    # and the merge pass has nothing to group sub-components under.
+    #
+    # Fix: scan root <mxCell> elements for empty-value filled rectangles
+    # with a legend color and meaningful size, then for each labeled app
+    # whose std_id is set AND whose geometry sits near the top of such a
+    # frame AND is within the frame's x-range, PROMOTE the app's _geom
+    # to the frame's bounds and copy the frame's fillColor. The existing
+    # containment merge then groups sub-components correctly and the
+    # rollup picks up the new fillColor → status.
+    #
+    # Pilot case (spec confluence-drawio-extract EC-8): FY2526-251
+    # "Hologram - Solution Design v2", cell pdtPq4H0RmGznJhyn2F4-11 (A004598
+    # LHSAS Portal, 140x60, no fill) + cell pdtPq4H0RmGznJhyn2F4-12 (640x680,
+    # fillColor=#f8cecc, no text) → promote label to 640x680 pink, merge
+    # Admin Dashboard / Web Application / Backend / Data Store children.
+    frame_rects: list[tuple[float, float, float, float, Optional[str]]] = []
+    for cell in root.iter("mxCell"):
+        if cell.get("vertex", "0") != "1":
+            continue
+        if cell.get("edge", "0") == "1":
+            continue
+        value = cell.get("value", "") or ""
+        if value.strip():
+            # Cell has text — not an anonymous frame
+            continue
+        style = cell.get("style", "") or ""
+        if "edgeLabel" in style:
+            continue
+        fill = _get_fill_color(style)
+        if not fill or fill.lower() in ("none",):
+            continue
+        # Only treat legend-colored frames as containers. Custom colors
+        # (borders, unrelated decorations) are skipped.
+        if fill.lower() not in LEGEND_FILL_COLORS and fill.lower() not in FILL_COLOR_MAP:
+            continue
+        geom = cell.find("mxGeometry")
+        if geom is None:
+            continue
+        try:
+            fx = float(geom.get("x", 0) or 0)
+            fy = float(geom.get("y", 0) or 0)
+            fw = float(geom.get("width", 0) or 0)
+            fh = float(geom.get("height", 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        # Require meaningful size — skip tiny decorations
+        if fw * fh < 50000:
+            continue
+        frame_rects.append((fx, fy, fw, fh, fill))
+
+    if frame_rects:
+        for app in applications:
+            if not app.get("standard_id"):
+                continue
+            if app.get("fill_color"):
+                # Label already has its own fill; no need to inherit
+                continue
+            ax, ay, aw, ah = app.get("_geom", (0, 0, 0, 0))
+            if aw == 0 or ah == 0:
+                continue
+            # Only promote small labels — large cells are already their
+            # own container and shouldn't be overridden.
+            if aw >= 300 or ah >= 200:
+                continue
+            # Find a frame whose bounds (a) contain the label cell and
+            # (b) have the label near the top edge (within 60 pixels).
+            for fx, fy, fw, fh, fill in frame_rects:
+                if not (fx <= ax and fy <= ay and
+                        fx + fw >= ax + aw and fy + fh >= ay + ah):
+                    continue
+                if ay - fy > 60:
+                    # Label is not near the top — likely coincidental
+                    # geometric containment, don't promote
+                    continue
+                # Promote: label now reports the frame's geometry + fill.
+                app["_geom"] = (fx, fy, fw, fh)
+                app["fill_color"] = fill
+                app["application_status"] = _fill_to_status(
+                    fill, legend_colors
+                )
+                break
+
     # --- Merge child apps into parent containers ---
     # If app A's geometry fully contains app B, B is a sub-component of A
     merged_ids: set[str] = set()
