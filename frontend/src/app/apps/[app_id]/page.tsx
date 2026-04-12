@@ -13,6 +13,33 @@ interface AppNode {
   description?: string;
   cmdb_linked?: boolean;
   last_updated?: string;
+  // CMDB enrichment (from ref_application via Postgres)
+  short_description?: string;
+  app_full_name?: string;
+  u_service_area?: string;
+  app_classification?: string;
+  app_ownership?: string;
+  app_solution_type?: string;
+  portfolio_mgt?: string;
+  owned_by?: string;
+  owned_by_name?: string;
+  app_it_owner?: string;
+  app_it_owner_name?: string;
+  app_dt_owner?: string;
+  app_dt_owner_name?: string;
+  app_operation_owner?: string;
+  app_operation_owner_name?: string;
+  app_owner_tower?: string;
+  app_owner_domain?: string;
+  app_operation_owner_tower?: string;
+  app_operation_owner_domain?: string;
+  patch_level?: string;
+  decommissioned_at?: string;
+  data_residency_geo?: string;
+  data_residency_country?: string;
+  data_center?: string;
+  support?: string;
+  source_system?: string;
 }
 
 interface OutboundEdge {
@@ -35,17 +62,23 @@ interface Investment {
   project_id: string;
   project_name: string;
   fiscal_year: string;
-  page_id: string;
-  page_title: string;
+  root_page_id: string | null;
 }
 
 interface DiagramRef {
-  diagram_id: string;
-  diagram_type: string;
-  file_kind: string;
-  file_name: string;
-  source_systems: string[];
-  has_graph_data: boolean;
+  // Neo4j diagram (DESCRIBED_BY edge)
+  diagram_id?: string;
+  diagram_type?: string;
+  file_kind?: string;
+  file_name?: string;
+  source_systems?: string[];
+  has_graph_data?: boolean;
+  // Postgres drawio reference (confluence_diagram_app)
+  attachment_id?: string;
+  page_id?: string;
+  page_title?: string;
+  page_url?: string;
+  fiscal_year?: string;
 }
 
 interface ConfluencePageRef {
@@ -667,6 +700,45 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
+function CmdbField({
+  label, value, resolvedName, mono, pill, wide,
+}: {
+  label: string;
+  value?: string | null;
+  resolvedName?: string | null;
+  mono?: boolean;
+  pill?: boolean;
+  wide?: boolean;
+}) {
+  if (!value && !pill) return null;
+  return (
+    <div style={{
+      display: wide ? "block" : "flex",
+      gap: 12,
+      fontSize: 13,
+      lineHeight: 1.8,
+    }}>
+      <dt style={{ color: "var(--text-dim)", minWidth: 130, flexShrink: 0 }}>{label}</dt>
+      <dd style={{
+        margin: 0,
+        fontFamily: mono ? "var(--font-mono)" : undefined,
+        fontSize: mono ? 12 : undefined,
+        ...(wide ? { marginTop: 2, color: "var(--text-muted)", fontSize: 12, lineHeight: 1.6 } : {}),
+      }}>
+        {pill ? <StatusPill status={value || "Unknown"} /> : (
+          <>
+            {resolvedName ? (
+              <>{resolvedName} <span style={{ color: "var(--text-dim)", fontSize: 11 }}>{value}</span></>
+            ) : (
+              Array.isArray(value) ? (value as string[]).join(", ") : value
+            )}
+          </>
+        )}
+      </dd>
+    </div>
+  );
+}
+
 function Panel({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div
@@ -719,36 +791,36 @@ function OverviewTab({
   return (
     <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}>
       <Panel title="Basic">
-        <dl style={{ margin: 0, fontSize: 13, lineHeight: 1.8 }}>
-          <div style={{ display: "flex", gap: 12 }}>
-            <dt style={{ color: "var(--text-dim)", minWidth: 110 }}>App ID</dt>
-            <dd style={{ margin: 0, fontFamily: "var(--font-mono)" }}>{app.app_id}</dd>
-          </div>
-          <div style={{ display: "flex", gap: 12 }}>
-            <dt style={{ color: "var(--text-dim)", minWidth: 110 }}>Name</dt>
-            <dd style={{ margin: 0 }}>{app.name}</dd>
-          </div>
-          <div style={{ display: "flex", gap: 12 }}>
-            <dt style={{ color: "var(--text-dim)", minWidth: 110 }}>Status</dt>
-            <dd style={{ margin: 0 }}>
-              <StatusPill status={app.status} />
-            </dd>
-          </div>
-          <div style={{ display: "flex", gap: 12 }}>
-            <dt style={{ color: "var(--text-dim)", minWidth: 110 }}>CMDB linked</dt>
-            <dd style={{ margin: 0, color: app.cmdb_linked ? "var(--success)" : "var(--text-dim)" }}>
-              {app.cmdb_linked ? "yes" : "no"}
-            </dd>
-          </div>
-          {app.last_updated && (
-            <div style={{ display: "flex", gap: 12 }}>
-              <dt style={{ color: "var(--text-dim)", minWidth: 110 }}>Last updated</dt>
-              <dd style={{ margin: 0, color: "var(--text-muted)", fontSize: 12 }}>
-                {new Date(app.last_updated).toISOString().slice(0, 10)}
-              </dd>
-            </div>
-          )}
-        </dl>
+        <CmdbField label="App ID" value={app.app_id} mono />
+        <CmdbField label="Name" value={app.name} />
+        <CmdbField label="Full Name" value={app.app_full_name} />
+        <CmdbField label="Status" value={app.status} pill />
+        <CmdbField label="Description" value={app.short_description} wide />
+        <CmdbField label="Service Area" value={app.u_service_area} />
+        <CmdbField label="Classification" value={app.app_classification} />
+        <CmdbField label="Solution Type" value={app.app_solution_type} />
+        <CmdbField label="Ownership" value={app.app_ownership} />
+        <CmdbField label="Portfolio" value={app.portfolio_mgt} />
+      </Panel>
+
+      <Panel title="Owners">
+        <CmdbField label="Owned By" value={app.owned_by} resolvedName={app.owned_by_name} mono />
+        <CmdbField label="IT Owner" value={app.app_it_owner} resolvedName={app.app_it_owner_name} mono />
+        <CmdbField label="DT Owner" value={app.app_dt_owner} resolvedName={app.app_dt_owner_name} mono />
+        <CmdbField label="Ops Owner" value={app.app_operation_owner} resolvedName={app.app_operation_owner_name} mono />
+        <CmdbField label="Owner Tower" value={app.app_owner_tower} />
+        <CmdbField label="Owner Domain" value={app.app_owner_domain} />
+        <CmdbField label="Ops Tower" value={app.app_operation_owner_tower} />
+        <CmdbField label="Ops Domain" value={app.app_operation_owner_domain} />
+      </Panel>
+
+      <Panel title="Deployment">
+        <CmdbField label="Data Residency" value={app.data_residency_geo} />
+        <CmdbField label="Country" value={app.data_residency_country} />
+        <CmdbField label="Data Center" value={app.data_center} />
+        <CmdbField label="Patch Level" value={app.patch_level} />
+        <CmdbField label="Support" value={app.support} />
+        {app.decommissioned_at && <CmdbField label="Decommissioned" value={new Date(app.decommissioned_at).toISOString().slice(0, 10)} />}
       </Panel>
 
       <Panel title="Fiscal year presence">
@@ -991,7 +1063,7 @@ function InvestmentsTab({ investments }: { investments: Investment[] }) {
         </thead>
         <tbody>
           {sorted.map((inv, idx) => (
-            <tr key={`${inv.project_id}-${inv.page_id}-${idx}`}>
+            <tr key={`${inv.project_id}-${idx}`}>
               <td
                 style={{
                   padding: "8px 12px",
@@ -1017,12 +1089,12 @@ function InvestmentsTab({ investments }: { investments: Investment[] }) {
                   color: "var(--text)",
                 }}
               >
-                {inv.page_id ? (
+                {inv.root_page_id ? (
                   <Link
-                    href={`/admin/confluence/${inv.page_id}?tab=extracted`}
+                    href={`/admin/confluence/${inv.root_page_id}?tab=extracted`}
                     style={{ color: "var(--accent)", textDecoration: "none" }}
                   >
-                    {inv.project_name || inv.page_title || inv.project_id}
+                    {inv.project_name || inv.project_id}
                   </Link>
                 ) : (
                   <span style={{ color: "var(--text-muted)" }}>

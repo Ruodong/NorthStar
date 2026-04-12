@@ -108,39 +108,122 @@ async def get_application(app_id: str) -> Optional[dict]:
     # --- Postgres: investments (project → app via confluence_diagram_app) ---
     investments = await _fetch_investments_from_pg(app_id)
 
+    # --- Postgres: CMDB enrichment (full ref_application row) ---
+    app_dict = dict(row["app"])
+    cmdb = await _fetch_cmdb_enrichment(app_id)
+    if cmdb:
+        app_dict.update(cmdb)
+
+    # --- Postgres: drawio diagram references (confluence_diagram_app) ---
+    pg_diagrams = await _fetch_diagram_refs_from_pg(app_id)
+
+    # Merge Neo4j diagrams (DESCRIBED_BY edges) with Postgres drawio refs
+    neo4j_diagrams = [d for d in row["diagrams"] if d.get("diagram_id")]
+    seen_att_ids = {d.get("diagram_id") for d in neo4j_diagrams}
+    for pd in pg_diagrams:
+        if pd["attachment_id"] not in seen_att_ids:
+            neo4j_diagrams.append(pd)
+
     return {
-        "app": row["app"],
+        "app": app_dict,
         "outbound": [e for e in row["out_edges"] if e.get("target")],
         "inbound": [e for e in row["in_edges"] if e.get("source")],
         "investments": investments,
-        "diagrams": [d for d in row["diagrams"] if d.get("diagram_id")],
+        "diagrams": neo4j_diagrams,
         "confluence_pages": [c for c in row["confluence_pages"] if c.get("page_id")],
     }
+
+
+async def _fetch_cmdb_enrichment(app_id: str) -> Optional[dict]:
+    """Fetch full CMDB fields from ref_application to enrich the Neo4j app node.
+
+    Neo4j only stores 6 properties (app_id, name, status, cmdb_linked,
+    description, last_updated). The CMDB has 22+ columns with ownership,
+    classification, deployment, and organizational data. This enrichment
+    adds them to the app dict so the frontend can display the full BASIC panel.
+    """
+    sql = """
+    SELECT
+        a.short_description, a.app_full_name,
+        a.u_service_area, a.app_classification, a.app_ownership,
+        a.app_solution_type, a.portfolio_mgt,
+        a.owned_by,            e_o.name  AS owned_by_name,
+        a.app_it_owner,        e_it.name AS app_it_owner_name,
+        a.app_dt_owner,        e_dt.name AS app_dt_owner_name,
+        a.app_operation_owner, e_op.name AS app_operation_owner_name,
+        a.app_owner_tower, a.app_owner_domain,
+        a.app_operation_owner_tower, a.app_operation_owner_domain,
+        a.patch_level, a.decommissioned_at,
+        a.data_residency_geo, a.data_residency_country, a.data_center,
+        a.support, a.source_system
+    FROM northstar.ref_application a
+    LEFT JOIN northstar.ref_employee e_o  ON e_o.itcode  = a.owned_by
+    LEFT JOIN northstar.ref_employee e_it ON e_it.itcode = a.app_it_owner
+    LEFT JOIN northstar.ref_employee e_dt ON e_dt.itcode = a.app_dt_owner
+    LEFT JOIN northstar.ref_employee e_op ON e_op.itcode = a.app_operation_owner
+    WHERE a.app_id = $1
+    """
+    row = await pg_client.fetchrow(sql, app_id)
+    if row is None:
+        return None
+    return {k: v for k, v in dict(row).items() if v is not None}
+
+
+async def _fetch_diagram_refs_from_pg(app_id: str) -> list[dict]:
+    """Find drawio attachments that reference this app via confluence_diagram_app.
+
+    Returns attachment-level summaries so the Diagrams tab can show which
+    drawio files contain this application, with links to the Confluence page.
+    """
+    sql = """
+    SELECT DISTINCT
+        ca.attachment_id,
+        ca.title       AS file_name,
+        ca.file_kind,
+        cp.page_id::text AS page_id,
+        cp.title       AS page_title,
+        cp.page_url,
+        cp.fiscal_year
+    FROM northstar.confluence_diagram_app cda
+    JOIN northstar.confluence_attachment ca ON ca.attachment_id = cda.attachment_id
+    JOIN northstar.confluence_page cp ON cp.page_id = ca.page_id
+    WHERE COALESCE(cda.resolved_app_id, cda.standard_id) = $1
+    ORDER BY cp.fiscal_year DESC, ca.title
+    """
+    rows = await pg_client.fetch(sql, app_id)
+    return [dict(r) for r in rows]
 
 
 async def _fetch_investments_from_pg(app_id: str) -> list[dict]:
     """Query Postgres for projects that reference this app via drawio diagrams.
 
-    Returns a list of {project_id, project_name, fiscal_year, page_id, page_title}
-    sorted by fiscal_year DESC, project_id.
+    Returns one row per project_id with {project_id, project_name, fiscal_year,
+    root_page_id}.  project_name comes from ref_project.  root_page_id is the
+    depth-1 Confluence page for the project (used for the detail link).
     """
     sql = """
-    SELECT DISTINCT
+    SELECT DISTINCT ON (cp.project_id)
         cp.project_id,
-        COALESCE(cp.q_project_name, rp.project_name) AS project_name,
+        rp.project_name,
         cp.fiscal_year,
-        cp.page_id::text AS page_id,
-        cp.title AS page_title
+        (SELECT p2.page_id::text
+           FROM northstar.confluence_page p2
+          WHERE p2.project_id = cp.project_id AND p2.depth = 1
+          ORDER BY p2.page_id LIMIT 1
+        ) AS root_page_id
     FROM northstar.confluence_diagram_app cda
     JOIN northstar.confluence_attachment ca ON ca.attachment_id = cda.attachment_id
     JOIN northstar.confluence_page cp ON cp.page_id = ca.page_id
     LEFT JOIN northstar.ref_project rp ON rp.project_id = cp.project_id
     WHERE COALESCE(cda.resolved_app_id, cda.standard_id) = $1
       AND cp.project_id IS NOT NULL
-    ORDER BY cp.fiscal_year DESC, cp.project_id
+    ORDER BY cp.project_id, cp.fiscal_year DESC
     """
     rows = await pg_client.fetch(sql, app_id)
-    return [dict(r) for r in rows]
+    # Re-sort by fiscal_year DESC for display
+    result = [dict(r) for r in rows]
+    result.sort(key=lambda r: (r.get("fiscal_year") or "", r.get("project_id") or ""), reverse=True)
+    return result
 
 
 async def get_neighbors(app_id: str, depth: int = 1) -> dict:

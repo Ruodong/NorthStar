@@ -241,7 +241,7 @@ export default function ProjectOverviewPage() {
       {/* MSPO + Confluence side-by-side */}
       <div className="panel-grid">
         <div className="panel">
-          <div className="panel-title">MSPO Master (EAM)</div>
+          <div className="panel-title">MSPO Master</div>
           {mspo ? (
             <table>
               <tbody>
