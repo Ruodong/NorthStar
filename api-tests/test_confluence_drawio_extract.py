@@ -288,3 +288,117 @@ def test_fill_none_container_with_a_id_merges_children():
     assert container["application_status"] == "Change", (
         f"container status must bubble up to Change, got {container['application_status']!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# EC-9: child "New" must NOT make container "New" — bubbles up as "Change"
+# ---------------------------------------------------------------------------
+
+def test_container_status_child_new_becomes_change():
+    """Spec EC-9. An existing application (one with a standard CMDB A-id)
+    cannot become "New" just because one of its sub-modules is painted red.
+    The app already exists in CMDB — it's *changing*, not brand new. So any
+    New / Change / Sunset signal on a child must collapse to a single
+    "Change" on the container, never "New".
+
+    Regression for the `adm 应用架构` case where A000038 ADM Support was
+    reported with `application_status='New'` in the admin Extracted tab
+    because one tiny sub-module ("automatic expense allocation") was red.
+    """
+    from app.services.drawio_parser import parse_drawio_xml
+
+    xml = """<mxfile>
+      <diagram name="App Arch">
+        <mxGraphModel>
+          <root>
+            <mxCell id="0"/>
+            <mxCell id="1" parent="0"/>
+            <mxCell id="cont" parent="1" vertex="1"
+                    value="ID: A000038 ADM Support"
+                    style="rounded=1;fillColor=none;strokeColor=#000000;verticalAlign=top;">
+              <mxGeometry x="300" y="-700" width="1000" height="400" as="geometry"/>
+            </mxCell>
+            <!-- Keep child (blue #dae8fc) -->
+            <mxCell id="child_keep" parent="1" vertex="1"
+                    value="Meeting Room"
+                    style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;">
+              <mxGeometry x="350" y="-650" width="130" height="40" as="geometry"/>
+            </mxCell>
+            <!-- Change child (yellow #fff2cc) -->
+            <mxCell id="child_change" parent="1" vertex="1"
+                    value="International Mail"
+                    style="rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;">
+              <mxGeometry x="500" y="-650" width="130" height="40" as="geometry"/>
+            </mxCell>
+            <!-- New child (red/pink #f8cecc) — this is the one that used to
+                 poison the bubble-up. -->
+            <mxCell id="child_new" parent="1" vertex="1"
+                    value="automatic expense allocation"
+                    style="rounded=1;fillColor=#f8cecc;strokeColor=#b85450;">
+              <mxGeometry x="650" y="-650" width="160" height="40" as="geometry"/>
+            </mxCell>
+          </root>
+        </mxGraphModel>
+      </diagram>
+    </mxfile>"""
+
+    res = parse_drawio_xml(xml, "App_Arch")
+    apps = res.get("applications", [])
+
+    assert len(apps) == 1, (
+        f"expected only the container to survive merging, got {len(apps)}: "
+        f"{[a['app_name'] for a in apps]}"
+    )
+
+    container = apps[0]
+    assert container["standard_id"] == "A000038"
+    assert container.get("is_container") is True
+
+    # The whole point of this regression test — child "New" must NOT bubble
+    # up as "New". It must collapse to "Change".
+    assert container["application_status"] == "Change", (
+        f"container must be Change when any child is New/Change/Sunset; "
+        f"got {container['application_status']!r}. A red sub-module should "
+        f"mark the application as *changing*, not *new*."
+    )
+
+
+def test_container_status_all_keep_children_stays_keep():
+    """Spec EC-9 negative. When every child of a fillColor=none container
+    is Keep, the container must stay Keep (no phantom Change)."""
+    from app.services.drawio_parser import parse_drawio_xml
+
+    xml = """<mxfile>
+      <diagram name="App Arch">
+        <mxGraphModel>
+          <root>
+            <mxCell id="0"/>
+            <mxCell id="1" parent="0"/>
+            <mxCell id="cont" parent="1" vertex="1"
+                    value="ID: A000038 ADM Support"
+                    style="rounded=1;fillColor=none;strokeColor=#000000;verticalAlign=top;">
+              <mxGeometry x="300" y="-700" width="1000" height="400" as="geometry"/>
+            </mxCell>
+            <mxCell id="c1" parent="1" vertex="1"
+                    value="Meeting Room"
+                    style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;">
+              <mxGeometry x="350" y="-650" width="130" height="40" as="geometry"/>
+            </mxCell>
+            <mxCell id="c2" parent="1" vertex="1"
+                    value="Stationery"
+                    style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;">
+              <mxGeometry x="500" y="-650" width="130" height="40" as="geometry"/>
+            </mxCell>
+          </root>
+        </mxGraphModel>
+      </diagram>
+    </mxfile>"""
+
+    res = parse_drawio_xml(xml, "App_Arch")
+    apps = res.get("applications", [])
+    assert len(apps) == 1
+    container = apps[0]
+    assert container["application_status"] == "Keep", (
+        f"all-Keep children must leave container as Keep; "
+        f"got {container['application_status']!r}"
+    )

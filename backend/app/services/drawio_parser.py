@@ -980,27 +980,33 @@ def _parse_app_arch(root: ET.Element) -> dict:
                 children_statuses & {"New", "Change", "Sunset"}
             )
 
-            # Container status rollup: when the container shape itself has no
-            # fill color (Unknown), derive its status from the children that
-            # DO have one. Priority rule: any "change" signal (New/Change/
-            # Sunset) in the children bubbles up because a container "is
-            # changing" as soon as any of its parts changes. 3rd-Party and
-            # Keep propagate only when all non-unknown children agree.
-            if parent_app.get("application_status") in ("", "Unknown", None):
-                real_statuses = {s for s in children_statuses if s and s != "Unknown"}
-                if real_statuses:
-                    # Priority bubble-up — strongest "change" signal wins
-                    for priority in ("New", "Change", "Sunset"):
-                        if priority in real_statuses:
-                            parent_app["application_status"] = priority
-                            break
-                    else:
-                        # No change signal — only 3rd Party and/or Keep left
-                        if "3rd Party" in real_statuses:
-                            parent_app["application_status"] = "3rd Party"
-                        elif real_statuses == {"Keep"}:
-                            parent_app["application_status"] = "Keep"
-                        # Otherwise leave as Unknown (shouldn't normally happen)
+            # Container status rollup (EC-9):
+            #
+            # Rule: an existing application cannot become "New" just because a
+            # sub-module inside it is new — it already exists in CMDB. The
+            # correct signal is that the application is *changing*. So any
+            # New / Change / Sunset signal on any child collapses into a
+            # single "Change" on the container, regardless of what colour the
+            # architect gave the container frame itself. Without this rule,
+            # A000038 ADM Support shows up as "New" in the admin Extracted
+            # tab whenever one tiny sub-module (e.g. "automatic expense
+            # allocation") is painted red, which is architecturally wrong.
+            #
+            # Keep / 3rd Party bubble-up only runs when the container has no
+            # colour of its own (Unknown), because those are the "no change
+            # signal" defaults and we don't want to overwrite an intentional
+            # container status with them.
+            real_statuses = {s for s in children_statuses if s and s != "Unknown"}
+            has_change_signal = bool(real_statuses & {"New", "Change", "Sunset"})
+
+            if has_change_signal:
+                parent_app["application_status"] = "Change"
+            elif parent_app.get("application_status") in ("", "Unknown", None):
+                if "3rd Party" in real_statuses:
+                    parent_app["application_status"] = "3rd Party"
+                elif real_statuses == {"Keep"}:
+                    parent_app["application_status"] = "Keep"
+                # Otherwise leave as Unknown (shouldn't normally happen)
 
     # Remove merged children from applications list
     if merged_ids:
