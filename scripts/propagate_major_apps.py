@@ -123,6 +123,7 @@ def main() -> int:
                         JOIN subtree s ON c.parent_id = s.page_id
                         WHERE s.lvl < %(max_depth)s
                     )
+                    -- Drawio-extracted major apps
                     SELECT DISTINCT
                         COALESCE(cda.resolved_app_id, cda.standard_id) AS app_id
                     FROM subtree s
@@ -135,6 +136,17 @@ def main() -> int:
                       AND att.file_kind = 'drawio'
                       AND att.title NOT LIKE 'drawio-backup%%'
                       AND att.title NOT LIKE '~%%'
+                    UNION
+                    -- Vision-extracted major apps (Phase 2)
+                    SELECT DISTINCT
+                        COALESCE(via.resolved_app_id, via.standard_id) AS app_id
+                    FROM subtree s
+                    JOIN northstar.confluence_attachment att2
+                         ON att2.page_id = s.page_id
+                    JOIN northstar.confluence_image_extract_app via
+                         ON via.attachment_id = att2.attachment_id
+                    WHERE via.application_status = ANY(%(statuses)s)
+                      AND COALESCE(via.resolved_app_id, via.standard_id) IS NOT NULL
                     """,
                     {"root": page_id,
                      "max_depth": MAX_DEPTH,
