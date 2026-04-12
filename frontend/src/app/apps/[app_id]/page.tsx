@@ -1100,6 +1100,25 @@ function InvestmentsTab({ investments }: { investments: Investment[] }) {
 
   return (
     <Panel title={`Projects that invested in this app (${investments.length})`}>
+      {/* Legend */}
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 14, marginBottom: 10 }}>
+        {(["Change", "New", "Sunset"] as const).map((s) => (
+          <span key={s} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 10 }}>
+            <span
+              style={{
+                width: 10,
+                height: 10,
+                borderRadius: 2,
+                background: STATUS_COLORS[s] || "var(--border)",
+                opacity: 0.85,
+              }}
+            />
+            <span style={{ color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0.4 }}>
+              {s}
+            </span>
+          </span>
+        ))}
+      </div>
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
         <thead>
           <tr style={{ color: "var(--text-dim)", textTransform: "uppercase", fontSize: 10 }}>
@@ -1173,9 +1192,7 @@ function InvestmentsTab({ investments }: { investments: Investment[] }) {
                         key={`${ma.app_id}-${mi}`}
                         href={`/apps/${ma.app_id}`}
                         style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: 4,
+                          display: "inline-block",
                           padding: "1px 8px",
                           borderRadius: "var(--radius-sm)",
                           border: `1px solid ${STATUS_COLORS[ma.status] || "var(--border)"}`,
@@ -1186,7 +1203,6 @@ function InvestmentsTab({ investments }: { investments: Investment[] }) {
                         }}
                         title={`${ma.app_id} — ${ma.app_name} (${ma.status})`}
                       >
-                        <span style={{ fontWeight: 600 }}>{ma.status?.[0]}</span>
                         {ma.app_name}
                       </Link>
                     ))}
