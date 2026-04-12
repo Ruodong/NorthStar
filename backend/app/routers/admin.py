@@ -553,14 +553,43 @@ async def list_pages(
             FROM base b
         ),
         -- Pattern D: explode each base row by its linked apps. A page with
-        -- no links in confluence_page_app_link appears exactly once (link_app_id
-        -- = NULL). A page with N links appears N times, once per app. The
-        -- LEFT JOIN makes that happen for free.
+        -- N major_app links yields N rows, one per link. A page with no links
+        -- yields a single row with link_app_id=NULL so it can fall through to
+        -- effective_app_id / hint / NA in the keyed CTE.
+        --
+        -- Extra branch (2026-04-11): if a page has links AND has its own
+        -- effective_app_id that is NOT in the linked set, emit an additional
+        -- row with link_app_id=NULL so the effective_app_id gets its own
+        -- group. Otherwise Pattern B (app_hint → CMDB-resolved A-id) gets
+        -- silently shadowed whenever major_app propagation adds any link.
+        -- Example: LI2500034-CSDC-Solution Design has 4 major_app links
+        -- (A000303, A000323, A000612, A002814) from its drawio diagrams, but
+        -- its own effective_app_id=A000590 (resolved from 'CSDC' in title).
+        -- Without this branch, A000590 would never surface in the admin list.
         exploded AS (
-            SELECT b.*,
-                   l.app_id AS link_app_id
+            SELECT b.*, l.app_id AS link_app_id
             FROM base_with_refs b
-            LEFT JOIN northstar.confluence_page_app_link l ON l.page_id = b.page_id
+            JOIN northstar.confluence_page_app_link l ON l.page_id = b.page_id
+            UNION ALL
+            SELECT b.*, NULL::varchar AS link_app_id
+            FROM base_with_refs b
+            WHERE NOT EXISTS (
+                SELECT 1 FROM northstar.confluence_page_app_link l0
+                WHERE l0.page_id = b.page_id
+            )
+            UNION ALL
+            SELECT b.*, NULL::varchar AS link_app_id
+            FROM base_with_refs b
+            WHERE b.effective_app_id IS NOT NULL
+              AND EXISTS (
+                SELECT 1 FROM northstar.confluence_page_app_link l1
+                WHERE l1.page_id = b.page_id
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM northstar.confluence_page_app_link l2
+                WHERE l2.page_id = b.page_id
+                  AND l2.app_id = b.effective_app_id
+              )
         ),
         -- Effective grouping key per exploded row: link_app_id > effective_app_id
         -- > [hint] > NA. The same physical page_id may end up in multiple
@@ -672,24 +701,57 @@ async def list_pages(
     total_na_fallback_sql = (
         "'PAGE:' || p.page_id" if not include_deep else "'NA'"
     )
+    # `where_clause` is either empty or begins with "WHERE ..."; for branches
+    # 2 and 3 below we need to append "AND ..." conditions, so normalize to
+    # "WHERE true" when no filters are set.
+    where_or_true = where_clause if where_clause else "WHERE true"
+    # Mirror the list-query exploded CTE so the count matches the rendered
+    # rows exactly. See the `exploded AS (...)` comment above for why the
+    # effective_app_id branch exists.
     total = await pg_client.fetchval(
         f"""
         SELECT count(*) FROM (
-            SELECT DISTINCT
-                   COALESCE(
-                     p.root_project_id,
-                     p.project_id,
-                     'PG:' || p.page_id
-                   ) AS g_project,
-                   COALESCE(
-                     l.app_id,
-                     p.effective_app_id,
-                     'HINT:' || COALESCE(p.app_hint, p.effective_app_hint),
-                     {total_na_fallback_sql}
-                   ) AS g_app
-            FROM northstar.confluence_page p
-            LEFT JOIN northstar.confluence_page_app_link l ON l.page_id = p.page_id
-            {where_clause}
+            SELECT DISTINCT g_project, g_app FROM (
+                SELECT COALESCE(
+                         p.root_project_id, p.project_id, 'PG:' || p.page_id
+                       ) AS g_project,
+                       l.app_id AS g_app
+                FROM northstar.confluence_page p
+                JOIN northstar.confluence_page_app_link l ON l.page_id = p.page_id
+                {where_clause}
+                UNION ALL
+                SELECT COALESCE(
+                         p.root_project_id, p.project_id, 'PG:' || p.page_id
+                       ) AS g_project,
+                       COALESCE(
+                         p.effective_app_id,
+                         'HINT:' || COALESCE(p.app_hint, p.effective_app_hint),
+                         {total_na_fallback_sql}
+                       ) AS g_app
+                FROM northstar.confluence_page p
+                {where_or_true}
+                  AND NOT EXISTS (
+                    SELECT 1 FROM northstar.confluence_page_app_link l0
+                    WHERE l0.page_id = p.page_id
+                  )
+                UNION ALL
+                SELECT COALESCE(
+                         p.root_project_id, p.project_id, 'PG:' || p.page_id
+                       ) AS g_project,
+                       p.effective_app_id AS g_app
+                FROM northstar.confluence_page p
+                {where_or_true}
+                  AND p.effective_app_id IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1 FROM northstar.confluence_page_app_link l1
+                    WHERE l1.page_id = p.page_id
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM northstar.confluence_page_app_link l2
+                    WHERE l2.page_id = p.page_id
+                      AND l2.app_id = p.effective_app_id
+                  )
+            ) u
         ) sub
         """,
         *args[:-2],
@@ -1700,10 +1762,16 @@ async def preview_attachment(attachment_id: str):
             str(raw_path),
             media_type=media_type,
             filename=title,
-            # 1 year immutable — attachment_id is stable. Browser treats
-            # this URL as a static resource and never revalidates unless
-            # the user hard-refreshes.
-            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+            # NOTE: deliberately NOT using `immutable`. See the
+            # `_pdf_inline_headers` docstring — an earlier version of the
+            # PPTX path used `max-age=31536000, immutable` and trapped
+            # users for a year on a header bug (Content-Disposition:
+            # attachment instead of inline). Same risk applies here: if
+            # this FileResponse ever returns a bad header, `immutable`
+            # would lock it in for 1 year with no recovery. 1h +
+            # must-revalidate lets ETag short-circuit repeat hits while
+            # preserving a fast escape hatch.
+            headers={"Cache-Control": "public, max-age=3600, must-revalidate"},
         )
 
     # PDF path: PPTX / DOCX. Everything else falls through to 415.
