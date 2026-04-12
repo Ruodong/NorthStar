@@ -40,10 +40,17 @@ _APP_ARCH_RE = re.compile(
     # English side uses `a\w*ch` as a loose stem so typos like "Achitecture"
     # / "Archtecture" / "Architecure" (all seen in real Confluence pages)
     # still match without a hand-curated typo list.
+    #
+    # Naked 'Architecture Diagram' (no 'Application' qualifier) counts as
+    # App Arch because that's the dominant Lenovo shorthand for the
+    # high-level system diagram — e.g. 'LUDP External Cluster(TianJin)
+    # Architecture Diagram'. _arch_bucket checks TECH_ARCH_RE FIRST below
+    # so titles containing 'technical' still win the Tech bucket.
     r"应用架构|应用方案|解决方案|"
-    r"application\s*(?:a\w*ch|design)|"
-    r"solution\s*(?:a\w*ch|design)|"
-    r"app\s*a\w*ch",
+    r"application\s*(?:a\w*ch|design|diagram)|"
+    r"solution\s*(?:a\w*ch|design|diagram)|"
+    r"app\s*a\w*ch|"
+    r"architecture\s*diagram",
     re.IGNORECASE,
 )
 _TECH_ARCH_RE = re.compile(
@@ -52,14 +59,20 @@ _TECH_ARCH_RE = re.compile(
     # "Technical Archtecture" (missing i), "Technical Architecure"
     # (missing t). Match any word starting with 'a' and containing 'ch' —
     # this catches all three without a hand-curated typo list.
-    r"technical\s*(?:a\w*ch|design)|"
+    r"technical\s*(?:a\w*ch|design|diagram)|"
     r"tech\s*(?:a\w*ch|design)",
     re.IGNORECASE,
 )
 
 
 def _arch_bucket(row: dict) -> int:
-    """0 = 应用架构, 1 = 技术架构, 2 = everything else."""
+    """0 = App Arch, 1 = Tech Arch, 2 = everything else.
+
+    Tech is checked FIRST so a title like 'Technical Architecture Diagram'
+    wins the Tech bucket before the _APP_ARCH_RE 'architecture diagram'
+    fallback would claim it. App is the fallback — if nothing said
+    technical/tech, any architecture/solution/design wording means App.
+    """
     haystack = " ".join(
         s for s in (
             row.get("title"),
@@ -67,10 +80,10 @@ def _arch_bucket(row: dict) -> int:
             row.get("via_page_title"),
         ) if s
     )
-    if _APP_ARCH_RE.search(haystack):
-        return 0
     if _TECH_ARCH_RE.search(haystack):
         return 1
+    if _APP_ARCH_RE.search(haystack):
+        return 0
     return 2
 
 
