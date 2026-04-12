@@ -54,6 +54,14 @@ const PAGE_SIZE = 50;
 // Tab-scoped, cleared on tab close — never leaks across sessions.
 const SCROLL_STORAGE_KEY = "northstar.admin.confluence.scroll";
 
+// Module-level cache: maps API URL → response. Survives component
+// unmount/remount within the same JS context (client-side navigation in
+// Next.js preserves the module). Cleared on full-page reload (F5).
+// This gives instant back-nav — the table renders from cache while a
+// background fetch silently refreshes the data.
+const _listCache = new Map<string, ListResult>();
+const _summaryCache: { data: Summary | null } = { data: null };
+
 export default function ConfluenceIndex() {
   const pathname = usePathname();
 
@@ -153,14 +161,17 @@ export default function ConfluenceIndex() {
   }, []);
 
   useEffect(() => {
+    // Serve cached summary instantly on remount, then refresh in background.
+    if (_summaryCache.data) setSummary(_summaryCache.data);
     (async () => {
       try {
         const r = await fetch("/api/admin/confluence/summary", { cache: "no-store" });
         const j = await r.json();
         if (!j.success) throw new Error(j.error);
+        _summaryCache.data = j.data;
         setSummary(j.data);
       } catch (e) {
-        setErr(String(e));
+        if (!_summaryCache.data) setErr(String(e));
       }
     })();
   }, []);
@@ -176,27 +187,43 @@ export default function ConfluenceIndex() {
     // in the URL would issue two fetches (defaults + URL values).
     if (!hydrated) return;
     let cancelled = false;
+
+    // Build the API URL so we can key the module-level cache.
+    const params = new URLSearchParams();
+    if (qDebounced) params.set("q", qDebounced);
+    if (fy) params.set("fiscal_year", fy);
+    if (pageType) params.set("page_type", pageType);
+    if (hasDrawio) params.set("has_drawio", "true");
+    if (includeDeep) params.set("include_deep", "true");
+    if (showEmpty) params.set("hide_empty", "false");
+    params.set("limit", String(PAGE_SIZE));
+    params.set("offset", String(page * PAGE_SIZE));
+    const apiUrl = `/api/admin/confluence/pages?${params}`;
+
+    // Serve from module-level cache instantly (back-nav case). This lets
+    // the table render without any loading flash. A background fetch still
+    // runs to pick up any server-side changes, but visually the page
+    // appears frozen — exactly as the user left it.
+    const cached = _listCache.get(apiUrl);
+    if (cached) {
+      setData(cached);
+      // Still set loading=true briefly so the status bar shows "loading…"
+      // during the background refresh, but the table is already visible.
+    }
+
     (async () => {
-      setLoading(true);
+      if (!cached) setLoading(true);
       setErr(null);
       try {
-        const params = new URLSearchParams();
-        if (qDebounced) params.set("q", qDebounced);
-        if (fy) params.set("fiscal_year", fy);
-        if (pageType) params.set("page_type", pageType);
-        if (hasDrawio) params.set("has_drawio", "true");
-        if (includeDeep) params.set("include_deep", "true");
-        // Backend default is hide_empty=true; send false explicitly when
-        // the user wants to see empty stubs.
-        if (showEmpty) params.set("hide_empty", "false");
-        params.set("limit", String(PAGE_SIZE));
-        params.set("offset", String(page * PAGE_SIZE));
-        const r = await fetch(`/api/admin/confluence/pages?${params}`, { cache: "no-store" });
+        const r = await fetch(apiUrl, { cache: "no-store" });
         const j = await r.json();
         if (!j.success) throw new Error(j.error);
-        if (!cancelled) setData(j.data);
+        if (!cancelled) {
+          _listCache.set(apiUrl, j.data);
+          setData(j.data);
+        }
       } catch (e) {
-        if (!cancelled) setErr(String(e));
+        if (!cancelled && !cached) setErr(String(e));
       } finally {
         if (!cancelled) setLoading(false);
       }
