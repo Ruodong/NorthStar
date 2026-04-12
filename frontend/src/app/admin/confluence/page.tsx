@@ -572,8 +572,8 @@ export default function ConfluenceIndex() {
                 groupInfo.positions[idx + 1] === "solo" ||
                 groupInfo.positions[idx + 1] === "first";
               const hiddenApps =
-                isLastInGroup && r.project_app_total && r.project_app_total > 5
-                  ? r.project_app_total - 5
+                isLastInGroup && r.project_app_total && r.project_app_total > 10
+                  ? r.project_app_total - 10
                   : 0;
 
               return (<React.Fragment key={r.page_id}>

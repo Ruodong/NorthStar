@@ -744,7 +744,7 @@ async def list_pages(
         LEFT JOIN northstar.ref_project rp    ON rp.project_id = c.group_project_id
         LEFT JOIN northstar.ref_application ra
                ON ra.app_id = COALESCE(c.link_app_id, c.effective_app_id, c.q_app_id)
-        WHERE c.project_app_rank <= 5
+        WHERE c.project_app_rank <= 10
         -- Ontology fix (2026-04-10): sort so that all rows sharing the same
         -- group_project_id are strictly adjacent, with orphan rows sinking
         -- to the tail of each FY bucket. Secondary sorts by title, then
