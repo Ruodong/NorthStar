@@ -437,7 +437,7 @@ async def list_pages(
                                  AND sa.file_kind = 'drawio'
                                  AND sa.title NOT LIKE 'drawio-backup%'
                                  AND sa.title NOT LIKE '~%'
-                                 AND ((dr.diagram_name = '' AND dr.macro_kind != 'page_link') OR sa.title = dr.diagram_name
+                                 AND ((dr.diagram_name = '' AND dr.macro_kind = 'inc-drawio') OR sa.title = dr.diagram_name
                                       OR sa.title = dr.diagram_name || '.drawio')
                                 WHERE dr.inclusion_page_id = p.page_id), 0)
                    ) AS attachment_count,
@@ -450,7 +450,7 @@ async def list_pages(
                                  AND sa.file_kind = 'drawio'
                                  AND sa.title NOT LIKE 'drawio-backup%'
                                  AND sa.title NOT LIKE '~%'
-                                 AND ((dr.diagram_name = '' AND dr.macro_kind != 'page_link') OR sa.title = dr.diagram_name
+                                 AND ((dr.diagram_name = '' AND dr.macro_kind = 'inc-drawio') OR sa.title = dr.diagram_name
                                       OR sa.title = dr.diagram_name || '.drawio')
                                 WHERE dr.inclusion_page_id = p.page_id), 0)
                    ) AS drawio_count,
@@ -532,7 +532,7 @@ async def list_pages(
                        AND sa.file_kind = 'drawio'
                        AND sa.title NOT LIKE 'drawio-backup%'
                        AND sa.title NOT LIKE '~%'
-                       AND ((dr.diagram_name = '' AND dr.macro_kind != 'page_link') OR sa.title = dr.diagram_name
+                       AND ((dr.diagram_name = '' AND dr.macro_kind = 'inc-drawio') OR sa.title = dr.diagram_name
                             OR sa.title = dr.diagram_name || '.drawio')
                       WHERE dr.inclusion_page_id = p.page_id
                          OR dr.inclusion_page_id IN (
@@ -955,7 +955,7 @@ async def get_page(page_id: str) -> ApiResponse:
          AND sa.file_kind = 'drawio'
          AND sa.title NOT LIKE 'drawio-backup%'
          AND sa.title NOT LIKE '~%'
-         AND ((dr.diagram_name = '' AND dr.macro_kind != 'page_link') OR sa.title = dr.diagram_name
+         AND ((dr.diagram_name = '' AND dr.macro_kind = 'inc-drawio') OR sa.title = dr.diagram_name
               OR sa.title = dr.diagram_name || '.drawio')
         """,
         page_id,
@@ -997,7 +997,7 @@ async def get_page(page_id: str) -> ApiResponse:
                    AND sa.file_kind = 'drawio'
                    AND sa.title NOT LIKE 'drawio-backup%'
                    AND sa.title NOT LIKE '~%'
-                   AND ((dr.diagram_name = '' AND dr.macro_kind != 'page_link') OR sa.title = dr.diagram_name
+                   AND ((dr.diagram_name = '' AND dr.macro_kind = 'inc-drawio') OR sa.title = dr.diagram_name
                         OR sa.title = dr.diagram_name || '.drawio')
                   WHERE dr.inclusion_page_id = c.page_id) AS ref_drawio
         FROM northstar.confluence_page c
@@ -1069,7 +1069,7 @@ _EXTRACTED_SOURCES_CTE = """
          AND sa.file_kind = 'drawio'
          AND sa.title NOT LIKE 'drawio-backup%%'
          AND sa.title NOT LIKE '~%%'
-         AND ((dr.diagram_name = '' AND dr.macro_kind != 'page_link')
+         AND ((dr.diagram_name = '' AND dr.macro_kind = 'inc-drawio')
               OR sa.title = dr.diagram_name
               OR sa.title = dr.diagram_name || '.drawio')
     ),
