@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from app.services import neo4j_client
+from app.services import neo4j_client, pg_client
 
 
 async def list_applications(
@@ -55,7 +55,13 @@ async def list_applications(
 
 
 async def get_application(app_id: str) -> Optional[dict]:
-    """Fetch an application with its integrations, investing projects, and diagrams."""
+    """Fetch an application with its integrations, investing projects, and diagrams.
+
+    Investments are now sourced from Postgres (confluence_diagram_app → page → project)
+    instead of Neo4j INVESTS_IN edges, giving richer data (project_name, page_id for
+    deep-links) and covering the full CMDB surface.
+    """
+    # --- Neo4j: app node + integrations + diagrams + confluence pages ---
     cypher = """
     MATCH (a:Application {app_id: $app_id})
     OPTIONAL MATCH (a)-[r:INTEGRATES_WITH]->(other:Application)
@@ -74,15 +80,8 @@ async def get_application(app_id: str) -> Optional[dict]:
         business_object: r2.business_object,
         protocol: r2.protocol
     }) AS in_edges
-    OPTIONAL MATCH (p:Project)-[inv:INVESTS_IN]->(a)
-    WITH a, out_edges, in_edges, collect(DISTINCT {
-        project_id: p.project_id,
-        name: p.name,
-        fiscal_year: inv.fiscal_year,
-        review_status: inv.review_status
-    }) AS investments
     OPTIONAL MATCH (a)-[:DESCRIBED_BY]->(d:Diagram)
-    WITH a, out_edges, in_edges, investments, collect(DISTINCT {
+    WITH a, out_edges, in_edges, collect(DISTINCT {
         diagram_id: d.diagram_id,
         diagram_type: d.diagram_type,
         file_kind: d.file_kind,
@@ -94,7 +93,6 @@ async def get_application(app_id: str) -> Optional[dict]:
     RETURN a AS app,
            out_edges,
            in_edges,
-           investments,
            diagrams,
            collect(DISTINCT {
                page_id: cp.page_id,
@@ -106,14 +104,43 @@ async def get_application(app_id: str) -> Optional[dict]:
     if not rows:
         return None
     row = rows[0]
+
+    # --- Postgres: investments (project → app via confluence_diagram_app) ---
+    investments = await _fetch_investments_from_pg(app_id)
+
     return {
         "app": row["app"],
         "outbound": [e for e in row["out_edges"] if e.get("target")],
         "inbound": [e for e in row["in_edges"] if e.get("source")],
-        "investments": [p for p in row["investments"] if p.get("project_id")],
+        "investments": investments,
         "diagrams": [d for d in row["diagrams"] if d.get("diagram_id")],
         "confluence_pages": [c for c in row["confluence_pages"] if c.get("page_id")],
     }
+
+
+async def _fetch_investments_from_pg(app_id: str) -> list[dict]:
+    """Query Postgres for projects that reference this app via drawio diagrams.
+
+    Returns a list of {project_id, project_name, fiscal_year, page_id, page_title}
+    sorted by fiscal_year DESC, project_id.
+    """
+    sql = """
+    SELECT DISTINCT
+        cp.project_id,
+        COALESCE(cp.q_project_name, rp.project_name) AS project_name,
+        cp.fiscal_year,
+        cp.page_id::text AS page_id,
+        cp.title AS page_title
+    FROM northstar.confluence_diagram_app cda
+    JOIN northstar.confluence_attachment ca ON ca.attachment_id = cda.attachment_id
+    JOIN northstar.confluence_page cp ON cp.page_id = ca.page_id
+    LEFT JOIN northstar.ref_project rp ON rp.project_id = cp.project_id
+    WHERE COALESCE(cda.resolved_app_id, cda.standard_id) = $1
+      AND cp.project_id IS NOT NULL
+    ORDER BY cp.fiscal_year DESC, cp.project_id
+    """
+    rows = await pg_client.fetch(sql, app_id)
+    return [dict(r) for r in rows]
 
 
 async def get_neighbors(app_id: str, depth: int = 1) -> dict:

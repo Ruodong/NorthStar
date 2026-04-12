@@ -33,9 +33,10 @@ interface InboundEdge {
 
 interface Investment {
   project_id: string;
-  name: string;
+  project_name: string;
   fiscal_year: string;
-  review_status: string;
+  page_id: string;
+  page_title: string;
 }
 
 interface DiagramRef {
@@ -969,6 +970,7 @@ function InvestmentsTab({ investments }: { investments: Investment[] }) {
     );
   }
 
+  // Already sorted by fiscal_year DESC from backend, but re-sort just in case
   const sorted = [...investments].sort((a, b) => (b.fiscal_year || "").localeCompare(a.fiscal_year || ""));
 
   return (
@@ -977,19 +979,19 @@ function InvestmentsTab({ investments }: { investments: Investment[] }) {
         <thead>
           <tr style={{ color: "var(--text-dim)", textTransform: "uppercase", fontSize: 10 }}>
             <th style={{ textAlign: "left", padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
-              Project
+              Project ID
+            </th>
+            <th style={{ textAlign: "left", padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
+              Project Name
             </th>
             <th style={{ textAlign: "left", padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
               Fiscal Year
             </th>
-            <th style={{ textAlign: "left", padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
-              Review
-            </th>
           </tr>
         </thead>
         <tbody>
-          {sorted.map((inv) => (
-            <tr key={inv.project_id}>
+          {sorted.map((inv, idx) => (
+            <tr key={`${inv.project_id}-${inv.page_id}-${idx}`}>
               <td
                 style={{
                   padding: "8px 12px",
@@ -997,10 +999,36 @@ function InvestmentsTab({ investments }: { investments: Investment[] }) {
                   fontFamily: "var(--font-mono)",
                 }}
               >
-                {inv.project_id}
-                <span style={{ marginLeft: 10, color: "var(--text-muted)", fontFamily: "var(--font-body)" }}>
-                  {inv.name}
-                </span>
+                {inv.project_id ? (
+                  <Link
+                    href={`/admin/projects/${encodeURIComponent(inv.project_id)}`}
+                    style={{ color: "var(--accent)", textDecoration: "none" }}
+                  >
+                    {inv.project_id}
+                  </Link>
+                ) : (
+                  "—"
+                )}
+              </td>
+              <td
+                style={{
+                  padding: "8px 12px",
+                  borderBottom: "1px solid var(--border)",
+                  color: "var(--text)",
+                }}
+              >
+                {inv.page_id ? (
+                  <Link
+                    href={`/admin/confluence/${inv.page_id}?tab=extracted`}
+                    style={{ color: "var(--accent)", textDecoration: "none" }}
+                  >
+                    {inv.project_name || inv.page_title || inv.project_id}
+                  </Link>
+                ) : (
+                  <span style={{ color: "var(--text-muted)" }}>
+                    {inv.project_name || "—"}
+                  </span>
+                )}
               </td>
               <td
                 style={{
@@ -1011,15 +1039,6 @@ function InvestmentsTab({ investments }: { investments: Investment[] }) {
                 }}
               >
                 {inv.fiscal_year || "—"}
-              </td>
-              <td
-                style={{
-                  padding: "8px 12px",
-                  borderBottom: "1px solid var(--border)",
-                  color: "var(--text-muted)",
-                }}
-              >
-                {inv.review_status || "—"}
               </td>
             </tr>
           ))}
