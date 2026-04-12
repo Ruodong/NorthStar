@@ -634,51 +634,21 @@ export default function ConfluenceIndex() {
                   </td>
                   {/* Applications — inline [id] name · [id] name format */}
                   <td>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 12px", alignItems: "baseline" }}>
+                    <span style={{ fontSize: 12 }}>
                       {(r.project_apps && r.project_apps.length > 0
                         ? r.project_apps
                         : [{ app_id: r.app_id, app_name: r.app_name, app_in_cmdb: r.app_in_cmdb }]
                       ).map((app, ai) => {
                         const isStdId = app.app_id && /^A\d{5,7}$/.test(app.app_id);
-                        return (
-                          <span key={app.app_id || ai} style={{ whiteSpace: "nowrap", fontSize: 12 }}>
-                            {ai > 0 && (
-                              <span style={{ color: "var(--text-dim)", margin: "0 2px" }}>·</span>
-                            )}
-                            {app.app_id && (
-                              isStdId && app.app_in_cmdb ? (
-                                <Link
-                                  href={`/admin/applications/${encodeURIComponent(app.app_id)}`}
-                                  style={{
-                                    color: "var(--accent)",
-                                    fontFamily: "var(--font-mono)",
-                                    fontSize: 11,
-                                    textDecoration: "none",
-                                    marginRight: 4,
-                                  }}
-                                >
-                                  [{app.app_id}]
-                                </Link>
-                              ) : (
-                                <span
-                                  style={{
-                                    color: "var(--text-dim)",
-                                    fontFamily: "var(--font-mono)",
-                                    fontSize: 11,
-                                    marginRight: 4,
-                                  }}
-                                >
-                                  [{app.app_id}]
-                                </span>
-                              )
-                            )}
-                            <span style={{ color: app.app_in_cmdb ? "var(--text)" : "var(--text-muted)" }}>
-                              {app.app_name || (r.page_type === "application" ? r.title : "—")}
-                            </span>
-                          </span>
-                        );
-                      })}
-                    </div>
+                        const idPart = app.app_id
+                          ? isStdId && app.app_in_cmdb
+                            ? `[${app.app_id}]`
+                            : `[${app.app_id}]`
+                          : "";
+                        const namePart = app.app_name || "—";
+                        return (ai > 0 ? " · " : "") + (idPart ? idPart + " " : "") + namePart;
+                      }).join("")}
+                    </span>
                   </td>
                   {/* Attach count */}
                   <td
