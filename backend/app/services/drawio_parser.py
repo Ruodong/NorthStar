@@ -632,9 +632,19 @@ def _is_legend(value: str, fill_color: str | None = None) -> bool:
     # Exact match for Tech Arch legend labels (avoid false positives like "vm" in "JVM")
     if lower in TECH_LEGEND_EXACT_LABELS:
         return True
-    # Filter items with legend fill colors (fill:none = decoration shapes)
+    # Filter items with legend fill colors (fill:none = decoration shapes).
+    # EXCEPT: an application container drawn with transparent fill so its
+    # child modules stay visible (e.g. "ID: A000038 ADM Support" in
+    # adm 应用架构). Those cells carry a standard CMDB A-id, which legend
+    # decorations never do — so presence of A\d{5,6} in the value is a
+    # reliable signal that it's a real application container, not a legend
+    # item. Without this exemption the container is dropped and the
+    # geometry-containment merge pass has no parent to merge the children
+    # into, leaving every sub-module as an independent app. See EC-7 in
+    # .specify/features/confluence-drawio-extract/spec.md.
     if fill_color is not None and fill_color.lower().strip() in LEGEND_FILL_COLORS:
-        return True
+        if not STANDARD_ID_RE.search(value or ""):
+            return True
     # Filter role/user shapes by color
     if fill_color is not None and fill_color.lower().strip() in ROLE_FILL_COLORS:
         return True

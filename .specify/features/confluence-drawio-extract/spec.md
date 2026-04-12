@@ -76,6 +76,7 @@ Extrapolating conservatively (5 apps avg × 2580 files = ~13k apps, ~30k interac
 - **EC-4** — Pre-existing rows in the extraction tables from a previous partial run. `ON CONFLICT DO UPDATE SET ...` overwrites with new values, never duplicates.
 - **EC-5** — Two different attachments yield apps with the same `standard_id` (e.g. A000001 appears in many diagrams). The loader's existing `MERGE (a:Application {app_id: ...})` handles this: the node is created once, multiple INVESTS_IN / INTEGRATES_WITH edges accumulate.
 - **EC-6** — A confluence page with multiple drawio attachments (e.g. LBP has v1, v2, v3). Each file is parsed independently; apps from all versions are merged at the Neo4j layer via MERGE.
+- **EC-7** — Application container with `fillColor=none` + standard CMDB A-id (e.g. ADM Support `A000038` in `adm 应用架构`). The container frame uses transparent fill so the child modules inside (International Mail, Badges, Meeting Room, ...) stay visible. Before the fix, `_is_legend` treated every `fillColor=none` cell as a decoration and dropped it, so the container never entered `applications` and the geometry-containment merge pass had no parent — the 53 child modules ended up in `confluence_diagram_app` as independent rows. Fix: `_is_legend` exempts cells whose value contains a standard id (`A\d{5,6}`) from the `fillColor=none` decoration filter. Regression test: `test_fill_none_container_with_a_id_merges_children` in `test_confluence_drawio_extract.py`.
 
 ## 6. API impact
 
@@ -91,7 +92,7 @@ None directly. This is an ingestion-layer feature. Future iteration: `/api/admin
 
 ## 8. Out of scope
 
-- Parser improvements (bug fixes, new shape support) — we use the existing drawio_parser as-is
+- Parser improvements beyond bug-fixes driven by observed mis-extractions (net-new shape support, new diagram types) — we use the existing drawio_parser as-is. Bug-fixes like EC-7 are tracked here because they change extraction output visible in `confluence_diagram_app`.
 - Admin UI changes to display extracted apps inline on the attachment viewer (Phase 2)
 - Tech_Arch extraction from Confluence drawios — App_Arch only for now (matches existing loader behaviour)
 - Reverse-linking `:Application` nodes to their source drawio page via `DESCRIBED_BY` — already happens for EGM and will carry over because Confluence-only diagrams already get `:Diagram` nodes

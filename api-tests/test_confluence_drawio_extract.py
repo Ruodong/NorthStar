@@ -9,7 +9,16 @@ Runs against the live PG + backend on 71. Assumes:
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
 import pytest
+
+
+# Ensure backend is importable for the parser regression test (no DB required)
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT / "backend") not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT / "backend"))
 
 
 pytestmark = pytest.mark.confluence_drawio_extract
@@ -151,4 +160,97 @@ def test_parser_is_idempotent(pg):
         future_rows = cur.fetchone()["n"]
     assert future_rows == 0, (
         f"{future_rows} rows have last_seen_at in the future — clock skew bug?"
+    )
+
+
+# ---------------------------------------------------------------------------
+# EC-7: fillColor=none container with standard A-id must keep its children merged
+# ---------------------------------------------------------------------------
+
+def test_fill_none_container_with_a_id_merges_children():
+    """Spec EC-7. A transparent-fill application container (e.g. "ID: A000038
+    ADM Support") that carries a standard CMDB A-id must be preserved and its
+    geometrically-contained sub-modules merged into it, rather than dropped by
+    _is_legend (which would leave every sub-module as an independent app).
+
+    Regression for the adm 应用架构 case where the parser returned 58 apps
+    (including 47 raw sub-modules of ADM Support) instead of 1 container app
+    with 47 children in its functions.
+    """
+    # pure parser test — no DB required
+    from app.services.drawio_parser import parse_drawio_xml
+
+    # Minimal App_Arch XML with:
+    #   - a fillColor=none big container labeled "ID: A000038 ADM Support"
+    #   - three child modules fully inside it (parent=1, absolute coords)
+    #   - one unrelated standalone app with its own A-id outside the container
+    xml = """<mxfile>
+      <diagram name="App Arch">
+        <mxGraphModel>
+          <root>
+            <mxCell id="0"/>
+            <mxCell id="1" parent="0"/>
+            <mxCell id="cont" parent="1" vertex="1"
+                    value="ID: A000038 ADM Support"
+                    style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#000000;fillColor=none;verticalAlign=top;">
+              <mxGeometry x="300" y="-700" width="1000" height="400" as="geometry"/>
+            </mxCell>
+            <mxCell id="child1" parent="1" vertex="1"
+                    value="Meeting Room"
+                    style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;">
+              <mxGeometry x="350" y="-650" width="130" height="40" as="geometry"/>
+            </mxCell>
+            <mxCell id="child2" parent="1" vertex="1"
+                    value="International Mail"
+                    style="rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;">
+              <mxGeometry x="500" y="-650" width="130" height="40" as="geometry"/>
+            </mxCell>
+            <mxCell id="child3" parent="1" vertex="1"
+                    value="Badges"
+                    style="rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;">
+              <mxGeometry x="650" y="-650" width="130" height="40" as="geometry"/>
+            </mxCell>
+            <mxCell id="outside" parent="1" vertex="1"
+                    value="A000302 OACP"
+                    style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;">
+              <mxGeometry x="1500" y="-400" width="150" height="60" as="geometry"/>
+            </mxCell>
+          </root>
+        </mxGraphModel>
+      </diagram>
+    </mxfile>"""
+
+    res = parse_drawio_xml(xml, "App_Arch")
+    apps = res.get("applications", [])
+
+    # Exactly 2 applications survive: the ADM Support container and the
+    # standalone OACP app. All 3 children must have been merged into ADM Support.
+    names = sorted(a["app_name"] for a in apps)
+    standard_ids = sorted(a["standard_id"] for a in apps if a.get("standard_id"))
+    assert len(apps) == 2, (
+        f"expected 2 apps (container + outside), got {len(apps)}: {names}"
+    )
+    assert standard_ids == ["A000038", "A000302"], (
+        f"both A-ids must survive, got {standard_ids}"
+    )
+
+    container = next(a for a in apps if a["standard_id"] == "A000038")
+    assert container.get("is_container") is True, (
+        "A000038 must be flagged as a container after the merge pass"
+    )
+    assert container["app_name"] == "ADM Support", (
+        f"container name must strip the ID prefix; got {container['app_name']!r}"
+    )
+
+    # All 3 child module names must appear in the container's functions field
+    funcs = container.get("functions", "")
+    for child_name in ("Meeting Room", "International Mail", "Badges"):
+        assert child_name in funcs, (
+            f"child {child_name!r} not merged into container.functions: {funcs!r}"
+        )
+
+    # Container status must have bubbled up from children: Change (from
+    # #fff2cc children) wins over Keep because any change signal bubbles up.
+    assert container["application_status"] == "Change", (
+        f"container status must bubble up to Change, got {container['application_status']!r}"
     )
