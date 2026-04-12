@@ -279,6 +279,7 @@ async def _fetch_investments_from_pg(app_id: str) -> list[dict]:
     LEFT JOIN northstar.ref_project rp ON rp.project_id = cp.project_id
     WHERE COALESCE(cda.resolved_app_id, cda.standard_id) = $1
       AND cp.project_id IS NOT NULL
+      AND cda.application_status IN ('Change', 'New', 'Sunset')
     ORDER BY cp.project_id, cp.fiscal_year DESC
     """
     rows = await pg_client.fetch(sql, app_id)
