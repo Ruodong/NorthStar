@@ -5,6 +5,7 @@ from the local filesystem (populated by scripts/scan_confluence.py).
 """
 from __future__ import annotations
 
+import logging
 import mimetypes
 import os
 import re
@@ -12,10 +13,12 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.models.schemas import ApiResponse
-from app.services import pg_client
+from app.services import converter_client, pg_client
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -95,8 +98,43 @@ def _attachment_sort_key(row: dict) -> tuple:
     return (bucket, kind_rank, version_neg, synced_neg, row.get("title") or "")
 
 # Container path where the attachments volume is mounted (docker-compose
-# mounts the host data/ dir into /app_data).
+# mounts the host data/ dir into /app_data). Read-only — do NOT write
+# to this directory.
 ATTACHMENT_ROOT = Path(os.environ.get("ATTACHMENT_ROOT", "/app_data"))
+
+# Container path where the preview cache volume is mounted (read-write).
+# Converted PDFs from the office-preview feature land here, keyed by
+# attachment_id for idempotent lookup. Separate from ATTACHMENT_ROOT so
+# the raw-attachment mount stays read-only.
+PREVIEW_CACHE_ROOT = Path(
+    os.environ.get("PREVIEW_CACHE_ROOT", "/app_cache/preview")
+)
+
+# Media types the office-preview endpoint accepts. Everything else on
+# confluence_attachment — legacy .ppt/.xls/.doc, ConceptDraw, generic
+# octet-stream — returns 415.
+_PREVIEW_PDF_MEDIA_TYPES = {
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",  # PPTX
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",    # DOCX
+}
+_PREVIEW_XLSX_MEDIA_TYPE = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
+
+def _preview_error(status: int, error_code: str, detail: str = "") -> JSONResponse:
+    """Return a minimal JSON error for the preview endpoint.
+
+    We deliberately do NOT wrap in ApiResponse — the preview endpoint
+    normally returns binary (PDF/XLSX), and the consumer is an iframe
+    or SheetJS, not a JSON-aware client. The error branch still uses
+    JSON because at least browser devtools / curl can read it. See
+    spec FR-18 for the explicit ApiResponse envelope exemption.
+    """
+    return JSONResponse(
+        status_code=status,
+        content={"error": error_code, "detail": detail},
+    )
 
 
 # Backup / tmp attachment noise pattern — shared by summary and list endpoints.
@@ -1559,3 +1597,176 @@ async def serve_attachment(attachment_id: str):
         raise HTTPException(status_code=404, detail=f"file missing: {full_path}")
     media_type = row["media_type"] or mimetypes.guess_type(row["title"])[0] or "application/octet-stream"
     return FileResponse(str(full_path), media_type=media_type, filename=row["title"])
+
+
+@router.get("/confluence/attachments/{attachment_id}/preview")
+async def preview_attachment(attachment_id: str):
+    """Browser-previewable response for an Office attachment.
+
+    * PPTX / DOCX → converted to PDF via the northstar-converter sidecar,
+      cached under PREVIEW_CACHE_ROOT/{id}.pdf, served as application/pdf
+    * XLSX → served raw, so the client-side SheetJS renderer can parse it
+    * Anything else → 415 unsupported_format
+
+    Spec: .specify/features/office-preview/spec.md  (FR-8 … FR-18)
+    """
+    row = await pg_client.fetchrow(
+        """
+        SELECT attachment_id, title, media_type, file_kind, local_path
+        FROM northstar.confluence_attachment
+        WHERE attachment_id = $1
+        """,
+        attachment_id,
+    )
+    if row is None:
+        return _preview_error(404, "not_found", f"no row for {attachment_id}")
+    title = row["title"] or "file"
+    media_type = (row["media_type"] or "").strip()
+
+    # XLSX path: pass the raw bytes through. SheetJS renders client-side.
+    if media_type == _PREVIEW_XLSX_MEDIA_TYPE:
+        if not row["local_path"]:
+            return _preview_error(
+                404, "file_missing",
+                "attachment not downloaded — run scripts/download_missing_attachments.py",
+            )
+        raw_path = ATTACHMENT_ROOT / Path(row["local_path"]).name
+        if not raw_path.exists():
+            return _preview_error(
+                404, "file_missing", f"expected at {raw_path}",
+            )
+        return FileResponse(
+            str(raw_path),
+            media_type=media_type,
+            filename=title,
+            # 1 year immutable — attachment_id is stable. Browser treats
+            # this URL as a static resource and never revalidates unless
+            # the user hard-refreshes.
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+
+    # PDF path: PPTX / DOCX. Everything else falls through to 415.
+    if media_type not in _PREVIEW_PDF_MEDIA_TYPES:
+        return _preview_error(
+            415,
+            "unsupported_format",
+            f"preview not supported for media_type={media_type!r} (kind={row['file_kind']!r})",
+        )
+
+    if not row["local_path"]:
+        return _preview_error(
+            404, "file_missing",
+            "attachment not downloaded — run scripts/download_missing_attachments.py",
+        )
+
+    raw_path = ATTACHMENT_ROOT / Path(row["local_path"]).name
+    if not raw_path.exists():
+        return _preview_error(
+            404, "file_missing", f"expected at {raw_path}",
+        )
+
+    # Cache lookup. Filename is just <attachment_id>.pdf so that a
+    # subsequent request can skip the entire converter round-trip.
+    PREVIEW_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+    pdf_path = PREVIEW_CACHE_ROOT / f"{attachment_id}.pdf"
+
+    if pdf_path.exists():
+        return FileResponse(
+            str(pdf_path),
+            media_type="application/pdf",
+            filename=f"{Path(title).stem}.pdf",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+
+    # Cache miss — call the converter. We load the source bytes into
+    # memory rather than streaming because the converter interface is
+    # multipart and httpx's multipart helper needs `bytes`. Raw files
+    # are capped at 100MB by the converter (spec FR-7) so memory cost
+    # per request is bounded.
+    try:
+        source_bytes = raw_path.read_bytes()
+    except OSError as exc:
+        logger.error("failed to read raw attachment %s: %s", attachment_id, exc)
+        return _preview_error(500, "io_error", str(exc))
+
+    logger.info(
+        "preview cache miss att=%s title=%s bytes=%d",
+        attachment_id, title, len(source_bytes),
+    )
+
+    try:
+        pdf_bytes = await converter_client.convert_to_pdf(
+            source_bytes=source_bytes,
+            filename=title,
+            media_type=media_type,
+        )
+    except converter_client.ConverterError as exc:
+        # Map service-layer errors to HTTP status codes. ConverterError
+        # may carry an explicit `status` (413/415/504); otherwise we
+        # default to 502 (converter_failed).
+        status = exc.status if exc.status else 502
+        return _preview_error(status, exc.kind, exc.detail)
+
+    # Atomic write: stage into <id>.pdf.tmp, then os.replace so a
+    # concurrent reader either sees the old cache (nothing) or the
+    # new one, never a half-written file. NFR-5.
+    tmp_path = PREVIEW_CACHE_ROOT / f"{attachment_id}.pdf.tmp"
+    try:
+        # Open with O_EXCL to cleanly lose a concurrent-writer race:
+        # if another request already claimed the tmp file, we just
+        # drop our bytes and let their race-winner populate the cache.
+        fd = os.open(
+            str(tmp_path),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o644,
+        )
+        try:
+            os.write(fd, pdf_bytes)
+        finally:
+            os.close(fd)
+        os.replace(str(tmp_path), str(pdf_path))
+    except FileExistsError:
+        # Someone else is writing. Back off briefly — if they finish,
+        # serve their cached copy; otherwise serve the bytes we just
+        # got without persisting them.
+        if pdf_path.exists():
+            return FileResponse(
+                str(pdf_path),
+                media_type="application/pdf",
+                filename=f"{Path(title).stem}.pdf",
+                headers={"Cache-Control": "public, max-age=31536000, immutable"},
+            )
+        # Race winner hasn't materialized the final file yet — return
+        # our bytes directly, unpersisted. Next request will populate
+        # the cache properly.
+        from fastapi.responses import Response as _Response
+        return _Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+    except OSError as exc:
+        # Disk full, permission denied, etc. We still have the bytes —
+        # serve them rather than failing the request — but log loudly.
+        logger.error(
+            "preview cache write failed att=%s path=%s err=%s",
+            attachment_id, tmp_path, exc,
+        )
+        # Clean up the tmp file if we managed to create it.
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        from fastapi.responses import Response as _Response
+        return _Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
+
+    return FileResponse(
+        str(pdf_path),
+        media_type="application/pdf",
+        filename=f"{Path(title).stem}.pdf",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )

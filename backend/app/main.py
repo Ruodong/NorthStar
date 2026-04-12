@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -48,6 +49,28 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 logger = logging.getLogger(__name__)
 
 
+def _purge_stale_preview_tmp() -> None:
+    """Delete orphaned `.pdf.tmp` files left behind when the backend
+    was killed mid-conversion. Spec: office-preview EC-7.
+
+    If the directory doesn't exist yet (first-boot, or running outside
+    a container that mounted the cache volume) this is a silent no-op.
+    """
+    from pathlib import Path as _Path
+    cache_root = _Path(os.environ.get("PREVIEW_CACHE_ROOT", "/app_cache/preview"))
+    if not cache_root.is_dir():
+        return
+    removed = 0
+    for tmp in cache_root.glob("*.pdf.tmp"):
+        try:
+            tmp.unlink()
+            removed += 1
+        except OSError as exc:
+            logger.warning("could not remove stale preview tmp %s: %s", tmp, exc)
+    if removed:
+        logger.info("purged %d stale preview .pdf.tmp files", removed)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
@@ -62,6 +85,10 @@ async def lifespan(app: FastAPI):
         logger.info("Neo4j ready; schema constraints/indexes ensured")
     except Exception as exc:  # noqa: BLE001
         logger.error("Neo4j bootstrap failed: %s", exc)
+    try:
+        _purge_stale_preview_tmp()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("preview tmp cleanup failed: %s", exc)
     yield
     await neo4j_client.close()
     await pg_client.close()

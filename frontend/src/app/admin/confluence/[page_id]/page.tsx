@@ -883,7 +883,20 @@ function AttachmentPreview({ attachment }: { attachment: Attachment }) {
     );
   }
 
-  // office / other → cannot preview inline
+  // office files: route through the OfficePreview component which
+  // handles PPTX/DOCX (server-side LibreOffice → PDF in an iframe)
+  // and XLSX (client-side SheetJS → HTML table) internally, and
+  // degrades gracefully for legacy .ppt/.xls/.doc/ConceptDraw.
+  if (attachment.file_kind === "office") {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", flex: 1 }}>
+        {header}
+        <OfficePreview attachment={attachment} rawSrc={src} />
+      </div>
+    );
+  }
+
+  // Anything else (unknown kind) → download fallback
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1 }}>
       {header}
@@ -900,6 +913,322 @@ function AttachmentPreview({ attachment }: { attachment: Attachment }) {
           Download to view
         </a>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// OfficePreview
+//
+// PPTX / DOCX  → server-side LibreOffice converts to PDF, which the
+//                browser's built-in PDF viewer renders in an iframe.
+// XLSX         → client-side SheetJS parses the raw bytes and renders
+//                one HTML table per workbook sheet, with a tab row.
+// Everything   → legacy .ppt/.xls/.doc and ConceptDraw files fall into
+//   else        the download-only card. Spec office-preview FR-19..FR-25.
+//
+// Lazy-loading: the component does not run until the parent decides
+// to mount it (i.e. the user clicks an attachment). This ensures we
+// don't kick off 5 parallel LibreOffice conversions just because the
+// user opened a page with 5 PPTX attachments.
+// ---------------------------------------------------------------------------
+
+type OfficeMode = "pdf" | "xlsx" | "unsupported";
+
+function officeMode(mediaType: string): OfficeMode {
+  const mt = (mediaType || "").toLowerCase();
+  if (
+    mt === "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    || mt === "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+  ) {
+    return "pdf";
+  }
+  if (mt === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") {
+    return "xlsx";
+  }
+  return "unsupported";
+}
+
+function OfficePreview({
+  attachment,
+  rawSrc,
+}: {
+  attachment: Attachment;
+  rawSrc: string;
+}) {
+  const mode = officeMode(attachment.media_type);
+  const previewSrc = `/api/admin/confluence/attachments/${attachment.attachment_id}/preview`;
+
+  if (mode === "unsupported") {
+    return (
+      <div style={{ margin: "auto", textAlign: "center", color: "var(--text-muted)", padding: 40 }}>
+        <div style={{ fontSize: 14, marginBottom: 10 }}>
+          This Office format can&rsquo;t be previewed in-browser. Supported formats: PPTX, DOCX, XLSX.
+          Legacy .ppt / .xls / .doc and ConceptDraw files must be downloaded.
+        </div>
+        <a
+          href={rawSrc}
+          download={attachment.title}
+          className="btn"
+          style={{ display: "inline-block" }}
+        >
+          Download to view
+        </a>
+      </div>
+    );
+  }
+
+  if (mode === "pdf") {
+    return <OfficePdfPreview previewSrc={previewSrc} title={attachment.title} />;
+  }
+
+  return <OfficeXlsxPreview previewSrc={previewSrc} title={attachment.title} />;
+}
+
+function OfficePdfPreview({
+  previewSrc,
+  title,
+}: {
+  previewSrc: string;
+  title: string;
+}) {
+  const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
+  const [errMsg, setErrMsg] = useState<string | null>(null);
+
+  // Detect an HTTP error before committing to iframe rendering. A HEAD
+  // request is cheap and lets us show a real error panel instead of
+  // the browser's default "this file could not be loaded" screen.
+  useEffect(() => {
+    setStatus("loading");
+    setErrMsg(null);
+    const ctrl = new AbortController();
+    (async () => {
+      try {
+        const r = await fetch(previewSrc, { method: "HEAD", signal: ctrl.signal });
+        if (!r.ok) {
+          // Try to pull the error code from the JSON body (endpoint
+          // returns JSON on error per FR-18 rationale).
+          let code = `HTTP ${r.status}`;
+          try {
+            const body = await fetch(previewSrc, { signal: ctrl.signal });
+            if (!body.ok) {
+              const j = await body.json();
+              code = j.error || code;
+            }
+          } catch {
+            // Ignore — stick with the generic HTTP status.
+          }
+          setErrMsg(code);
+          setStatus("error");
+          return;
+        }
+        setStatus("ready");
+      } catch (e) {
+        if ((e as Error).name === "AbortError") return;
+        setErrMsg(String(e));
+        setStatus("error");
+      }
+    })();
+    return () => ctrl.abort();
+  }, [previewSrc]);
+
+  if (status === "error") {
+    return (
+      <div style={{ margin: "auto", textAlign: "center", padding: 40 }}>
+        <div style={{ fontSize: 14, color: "var(--text-muted)", marginBottom: 6 }}>
+          Preview failed.
+        </div>
+        <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 14 }}>
+          Error: <code>{errMsg}</code>
+        </div>
+        <a
+          href={previewSrc.replace("/preview", "/raw")}
+          download={title}
+          className="btn"
+        >
+          Download original
+        </a>
+      </div>
+    );
+  }
+
+  if (status === "loading") {
+    return (
+      <div style={{ margin: "auto", textAlign: "center", padding: 40 }}>
+        <div style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 10 }}>
+          Converting to PDF&hellip;
+        </div>
+        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+          First view of a large PPTX can take 10&ndash;60 seconds. Subsequent views are instant.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <iframe
+      src={previewSrc}
+      title={title}
+      style={{ flex: 1, border: 0, minHeight: 640, background: "var(--bg)" }}
+    />
+  );
+}
+
+function OfficeXlsxPreview({
+  previewSrc,
+  title,
+}: {
+  previewSrc: string;
+  title: string;
+}) {
+  // Lazy-load the SheetJS runtime so the main bundle isn't bloated
+  // by the ~600KB xlsx library on every admin page load.
+  const [workbook, setWorkbook] = useState<unknown | null>(null);
+  const [sheetNames, setSheetNames] = useState<string[]>([]);
+  const [activeSheet, setActiveSheet] = useState<string | null>(null);
+  const [tableHtml, setTableHtml] = useState<string>("");
+  const [err, setErr] = useState<string | null>(null);
+  const [rowCount, setRowCount] = useState<number>(0);
+  const [truncated, setTruncated] = useState<boolean>(false);
+
+  // Spec EC-5: cap rendered rows at 1000 per sheet.
+  const MAX_ROWS = 1000;
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [xlsxMod, resp] = await Promise.all([
+          import("xlsx"),
+          fetch(previewSrc),
+        ]);
+        if (!resp.ok) {
+          throw new Error(`HTTP ${resp.status}`);
+        }
+        const buf = await resp.arrayBuffer();
+        const wb = xlsxMod.read(new Uint8Array(buf), { type: "array" });
+        if (cancelled) return;
+        setWorkbook(wb);
+        setSheetNames(wb.SheetNames);
+        setActiveSheet(wb.SheetNames[0] || null);
+      } catch (e) {
+        if (!cancelled) setErr(String(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [previewSrc]);
+
+  // Render the active sheet whenever the user switches tabs.
+  useEffect(() => {
+    if (!workbook || !activeSheet) return;
+    (async () => {
+      try {
+        const xlsxMod = await import("xlsx");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const ws = (workbook as any).Sheets[activeSheet];
+        const range = xlsxMod.utils.decode_range(ws["!ref"] || "A1");
+        const actualRows = range.e.r - range.s.r + 1;
+        setRowCount(actualRows);
+        if (actualRows > MAX_ROWS) {
+          setTruncated(true);
+          const capped: typeof range = {
+            s: { r: range.s.r, c: range.s.c },
+            e: { r: range.s.r + MAX_ROWS - 1, c: range.e.c },
+          };
+          ws["!ref"] = xlsxMod.utils.encode_range(capped);
+        } else {
+          setTruncated(false);
+        }
+        const html = xlsxMod.utils.sheet_to_html(ws, { editable: false });
+        setTableHtml(html);
+      } catch (e) {
+        setErr(String(e));
+      }
+    })();
+  }, [workbook, activeSheet]);
+
+  if (err) {
+    return (
+      <div style={{ margin: "auto", textAlign: "center", padding: 40 }}>
+        <div style={{ fontSize: 13, color: "var(--text-muted)", marginBottom: 10 }}>
+          Excel preview failed: <code>{err}</code>
+        </div>
+        <a href={previewSrc} download={title} className="btn">
+          Download original
+        </a>
+      </div>
+    );
+  }
+
+  if (!workbook) {
+    return (
+      <div style={{ margin: "auto", textAlign: "center", padding: 40, color: "var(--text-muted)", fontSize: 13 }}>
+        Loading workbook&hellip;
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 640 }}>
+      <div
+        style={{
+          display: "flex",
+          gap: 4,
+          padding: "8px 14px",
+          borderBottom: "1px solid var(--border)",
+          background: "var(--bg-elevated)",
+          overflowX: "auto",
+        }}
+      >
+        {sheetNames.map((name) => (
+          <button
+            key={name}
+            onClick={() => setActiveSheet(name)}
+            style={{
+              padding: "6px 12px",
+              fontSize: 12,
+              fontFamily: "var(--font-mono)",
+              background: activeSheet === name ? "var(--accent)" : "transparent",
+              color: activeSheet === name ? "var(--bg)" : "var(--text)",
+              border: "1px solid var(--border)",
+              borderRadius: 3,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {name}
+          </button>
+        ))}
+      </div>
+      {truncated && (
+        <div
+          style={{
+            padding: "6px 14px",
+            fontSize: 11,
+            color: "var(--text-muted)",
+            borderBottom: "1px solid var(--border)",
+            background: "var(--bg-elevated)",
+          }}
+        >
+          Showing first {MAX_ROWS.toLocaleString()} of {rowCount.toLocaleString()} rows. Download the file to see the full sheet.
+        </div>
+      )}
+      <div
+        style={{
+          flex: 1,
+          overflow: "auto",
+          padding: 12,
+          fontSize: 12,
+          background: "var(--bg)",
+        }}
+        // The html we inject is produced by SheetJS from the local
+        // workbook bytes, not from user input over the wire — safe
+        // to render as-is. eslint-disable-next-line lives below.
+        // eslint-disable-next-line react/no-danger
+        dangerouslySetInnerHTML={{ __html: tableHtml }}
+      />
     </div>
   );
 }

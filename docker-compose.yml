@@ -38,6 +38,24 @@ services:
       timeout: 5s
       retries: 10
 
+  converter:
+    build: ./scripts/converter
+    image: northstar-converter
+    container_name: northstar-converter
+    restart: unless-stopped
+    # Intentionally NOT publishing a host port — the backend reaches
+    # this service only via the docker internal network at
+    # http://converter:8080. Exposing it to the host would allow
+    # arbitrary LAN clients to submit files for conversion.
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=2)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
   backend:
     build: ./backend
     image: northstar-backend
@@ -49,6 +67,8 @@ services:
       neo4j:
         condition: service_healthy
       postgres:
+        condition: service_healthy
+      converter:
         condition: service_healthy
     environment:
       - NEO4J_URI=bolt://neo4j:7687
@@ -64,10 +84,15 @@ services:
       - LLM_ENABLED=${LLM_ENABLED:-false}
       - LOCAL_DRAWIO_ROOT=/data/local_drawio
       - ATTACHMENT_ROOT=/app_data
+      - PREVIEW_CACHE_ROOT=/app_cache/preview
+      - CONVERTER_URL=http://converter:8080
       - CORS_ORIGINS=*
     volumes:
       - ./data/local_drawio:/data/local_drawio:ro
       - ./data/attachments:/app_data:ro
+      # Preview cache is backend-writable (separate from read-only raw
+      # attachments) so converted PDFs persist across container rebuilds.
+      - ./data/preview_cache:/app_cache/preview
 
   frontend:
     build: ./frontend
