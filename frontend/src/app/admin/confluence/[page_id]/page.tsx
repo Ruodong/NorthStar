@@ -181,6 +181,9 @@ interface ExtractedData {
   interactions: ExtractedInteraction[];
   by_attachment: ExtractedByAttachment[];
   major_apps: ExtractedMajorApp[];
+  vision_apps?: ExtractedApp[];
+  vision_interactions?: ExtractedInteraction[];
+  vision_by_attachment?: ExtractedByAttachment[];
 }
 
 // Image vision extract (Phase 1 PoC) — the `/vision-extract` endpoint
@@ -258,7 +261,17 @@ export default function ConfluencePageDetail() {
   const [extracted, setExtracted] = useState<ExtractedData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<Attachment | null>(null);
-  const [tab, setTab] = useState<Tab>("attachments");
+  // Read initial tab from URL query param (?tab=extracted) so the list
+  // page's APP NAME link can deep-link directly to the Extracted tab.
+  const [tab, setTab] = useState<Tab>(() => {
+    if (typeof window === "undefined") return "attachments";
+    const sp = new URLSearchParams(window.location.search);
+    const t = sp.get("tab");
+    if (t && ["attachments", "extracted", "hierarchy", "questionnaire", "raw"].includes(t)) {
+      return t as Tab;
+    }
+    return "attachments";
+  });
 
   useEffect(() => {
     (async () => {
@@ -437,9 +450,16 @@ export default function ConfluencePageDetail() {
         <TabButton
           active={tab === "extracted"}
           onClick={() => setTab("extracted")}
-          disabled={!extracted || (extracted.apps.length === 0 && imageCount === 0)}
+          disabled={!extracted || (
+            extracted.apps.length === 0
+            && (extracted.vision_apps?.length ?? 0) === 0
+            && imageCount === 0
+          )}
         >
-          Extracted <Chip>{(extracted?.apps.length ?? 0) || (imageCount > 0 ? `${imageCount} img` : 0)}</Chip>
+          Extracted <Chip>{
+            (extracted?.apps.length ?? 0) + (extracted?.vision_apps?.length ?? 0)
+            || (imageCount > 0 ? `${imageCount} img` : 0)
+          }</Chip>
         </TabButton>
         <TabButton active={tab === "hierarchy"} onClick={() => setTab("hierarchy")}>
           Hierarchy{" "}

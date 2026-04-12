@@ -632,23 +632,54 @@ export default function ConfluenceIndex() {
                       </div>
                     )}
                   </td>
-                  {/* Applications — inline [id] name · [id] name format */}
-                  <td>
-                    <span style={{ fontSize: 12 }}>
-                      {(r.project_apps && r.project_apps.length > 0
-                        ? r.project_apps
-                        : [{ app_id: r.app_id, app_name: r.app_name, app_in_cmdb: r.app_in_cmdb }]
-                      ).map((app, ai) => {
-                        const isStdId = app.app_id && /^A\d{5,7}$/.test(app.app_id);
-                        const idPart = app.app_id
-                          ? isStdId && app.app_in_cmdb
-                            ? `[${app.app_id}]`
-                            : `[${app.app_id}]`
-                          : "";
-                        const namePart = app.app_name || "—";
-                        return (ai > 0 ? " · " : "") + (idPart ? idPart + " " : "") + namePart;
-                      }).join("")}
-                    </span>
+                  {/* Applications — inline [id] name · [id] name format
+                      APP ID → /apps/{id} (CMDB application detail page)
+                      APP NAME → /admin/confluence/{page_id}?tab=extracted */}
+                  <td style={{ fontSize: 12 }}>
+                    {(r.project_apps && r.project_apps.length > 0
+                      ? r.project_apps
+                      : [{ app_id: r.app_id, app_name: r.app_name, app_in_cmdb: r.app_in_cmdb }]
+                    ).map((app, ai) => {
+                      const isStdId = app.app_id && /^A\d{5,7}$/.test(app.app_id);
+                      return (
+                        <React.Fragment key={ai}>
+                          {ai > 0 && <span style={{ color: "var(--text-dim)" }}> · </span>}
+                          {app.app_id && (
+                            isStdId && app.app_in_cmdb ? (
+                              <Link
+                                href={`/apps/${app.app_id}`}
+                                style={{
+                                  color: "var(--accent)",
+                                  fontFamily: "var(--font-mono)",
+                                  fontSize: 11,
+                                }}
+                                title={`View ${app.app_id} in CMDB`}
+                              >
+                                [{app.app_id}]
+                              </Link>
+                            ) : (
+                              <span
+                                style={{
+                                  color: "var(--text-muted)",
+                                  fontFamily: "var(--font-mono)",
+                                  fontSize: 11,
+                                }}
+                              >
+                                [{app.app_id}]
+                              </span>
+                            )
+                          )}
+                          {app.app_id && " "}
+                          <Link
+                            href={`/admin/confluence/${r.page_id}?tab=extracted`}
+                            style={{ color: "var(--text)" }}
+                            title="View extracted applications"
+                          >
+                            {app.app_name || "—"}
+                          </Link>
+                        </React.Fragment>
+                      );
+                    })}
                   </td>
                   {/* Attach count */}
                   <td
