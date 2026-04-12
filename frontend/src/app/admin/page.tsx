@@ -30,10 +30,10 @@ export default function AdminOverview() {
 
   return (
     <div>
-      <h1>Master Data Overview</h1>
+      <h1>Reference Data Overview</h1>
       <p className="subtitle">
-        Raw master data for review. Click a card to drill into the table, or jump to
-        Confluence Raw to inspect the source files.
+        Reference data from Confluence ARD, CMDB, and MSPO. Click a card to drill into
+        the table, or jump to Confluence Raw to inspect the source files.
       </p>
 
       {err && <div className="panel" style={{ borderColor: "#5b1f1f" }}>Error: {err}</div>}

@@ -42,7 +42,7 @@ export default function RootLayout({
               <Link href="/graph">Graph</Link>
               <Link href="/whats-new">What&apos;s New</Link>
               <Link href="/ingestion">Ingestion</Link>
-              <Link href="/admin">Admin</Link>
+              <Link href="/admin">Reference Data</Link>
             </nav>
           </div>
         </header>

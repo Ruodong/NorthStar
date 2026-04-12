@@ -12,7 +12,6 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
   useEffect(() => {
     (async () => {
       try {
-        // Apps count: use the same source as /admin/applications (TCO-driven)
         const [appsRes, projRes] = await Promise.all([
           fetch("/api/masters/applications?limit=1", { cache: "no-store" }).then((r) => r.json()),
           fetch("/api/masters/projects?limit=1", { cache: "no-store" }).then((r) => r.json()),
@@ -43,29 +42,54 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
             textTransform: "uppercase",
             letterSpacing: 0.7,
             color: "var(--accent)",
-            marginBottom: 8,
+            marginBottom: 12,
           }}
         >
-          Admin — Raw Data
+          Reference Data
         </div>
-        <nav
+
+        {/* Overview link — standalone above the grouped sections */}
+        <div style={{ marginBottom: 12 }}>
+          <NavLink href="/admin">Overview</NavLink>
+        </div>
+
+        {/* Three-column grouped sections */}
+        <div
           style={{
             display: "flex",
-            gap: 4,
-            fontSize: 13,
+            gap: 32,
             flexWrap: "wrap",
           }}
         >
-          <AdminLink href="/admin">Overview</AdminLink>
-          <AdminLink href="/admin/applications">
-            Applications <Tag>{fmt(counts.apps)}</Tag>
-          </AdminLink>
-          <AdminLink href="/admin/projects">
-            Projects <Tag>{fmt(counts.projects)}</Tag>
-          </AdminLink>
-          <AdminLink href="/admin/confluence">Confluence Raw</AdminLink>
-          <AdminLink href="/admin/aliases">App Aliases</AdminLink>
-        </nav>
+          {/* Confluence for ARD */}
+          <div>
+            <SectionLabel>Confluence for ARD</SectionLabel>
+            <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+              <NavLink href="/admin/confluence">Confluence Raw Data</NavLink>
+            </div>
+          </div>
+
+          {/* CMDB */}
+          <div>
+            <SectionLabel>CMDB</SectionLabel>
+            <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+              <NavLink href="/admin/applications">
+                Applications <Tag>{fmt(counts.apps)}</Tag>
+              </NavLink>
+              <NavLink href="/admin/aliases">App Aliases</NavLink>
+            </div>
+          </div>
+
+          {/* Project Information */}
+          <div>
+            <SectionLabel>Project Information</SectionLabel>
+            <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+              <NavLink href="/admin/projects">
+                Projects <Tag>{fmt(counts.projects)}</Tag>
+              </NavLink>
+            </div>
+          </div>
+        </div>
       </div>
       {children}
     </div>
@@ -77,15 +101,32 @@ function fmt(n: number | null): string {
   return n.toLocaleString();
 }
 
-function AdminLink({ href, children }: { href: string; children: ReactNode }) {
+function SectionLabel({ children }: { children: ReactNode }) {
+  return (
+    <div
+      style={{
+        fontSize: 10,
+        fontWeight: 600,
+        textTransform: "uppercase",
+        letterSpacing: 0.6,
+        color: "var(--text-dim)",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function NavLink({ href, children }: { href: string; children: ReactNode }) {
   return (
     <Link
       href={href}
       style={{
         color: "var(--text-muted)",
-        padding: "8px 14px",
+        padding: "6px 12px",
         borderRadius: "var(--radius-md)",
         fontWeight: 500,
+        fontSize: 13,
       }}
     >
       {children}
