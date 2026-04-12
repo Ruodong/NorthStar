@@ -279,6 +279,37 @@ def _parse_drawio_refs(inclusion_page_id: str, body_html: str) -> list[dict]:
     return refs
 
 
+# Questionnaire / body page link extraction — captures Confluence internal
+# links (viewpage.action?pageId=NNN) that architects use in the "Your Pages"
+# column of the Scope of Change questionnaire table. These linked pages
+# often hold the actual drawio architecture diagrams.
+# Spec: .specify/features/questionnaire-page-links/spec.md
+_PAGE_LINK_RE = re.compile(r'pageId=(\d+)')
+
+
+def _parse_page_links(inclusion_page_id: str, body_html: str) -> list[dict]:
+    """Extract Confluence page links from body HTML for drawio_reference.
+
+    Returns list of dicts with the same shape as _parse_drawio_refs() output,
+    using macro_kind='page_link'. Deduplicates and excludes self-links.
+    """
+    refs: list[dict] = []
+    seen: set[str] = set()
+    for m in _PAGE_LINK_RE.finditer(body_html or ""):
+        target = m.group(1)
+        if target == inclusion_page_id or target in seen:
+            continue
+        seen.add(target)
+        refs.append({
+            "inclusion_page_id": inclusion_page_id,
+            "source_page_id": target,
+            "macro_kind": "page_link",
+            "diagram_name": "",
+            "template_filename": None,
+        })
+    return refs
+
+
 # Recursion cap. FY parent (depth=0) → project page (depth=1) →
 # "* Application Architecture" / "* Technical Architecture" child (depth=2)
 # → sub-page (depth=3) → solution/tech-design detail (depth=4). The depth=4
@@ -515,7 +546,9 @@ def process_page(
     # by scripts/backfill_drawio_sources.py. We still record the pointer
     # on every scan so the table doesn't drift.
     if body_html:
+        # Drawio macro refs (inc-drawio, templateUrl) + questionnaire page links
         refs = _parse_drawio_refs(page_id, body_html)
+        refs.extend(_parse_page_links(page_id, body_html))
         if refs:
             with pg.cursor() as rcur:
                 for ref in refs:
@@ -547,6 +580,9 @@ def process_page(
                         pg.rollback()
                         break
             totals["drawio_refs"] = totals.get("drawio_refs", 0) + len(refs)
+            totals["page_link_refs"] = totals.get("page_link_refs", 0) + sum(
+                1 for r in refs if r["macro_kind"] == "page_link"
+            )
 
     # Attachments
     try:
