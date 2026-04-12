@@ -309,6 +309,7 @@ export default function ConfluencePageDetail() {
   const previewable = detail.attachments.filter(
     (a) => !a.title.startsWith("drawio-backup") && !a.title.startsWith("~")
   );
+  const imageCount = previewable.filter((a) => a.file_kind === "image").length;
   const questionnaire = detail.page.questionnaire;
   const qRowCount =
     questionnaire?.sections.reduce((n, s) => n + s.rows.length, 0) ?? 0;
@@ -436,9 +437,9 @@ export default function ConfluencePageDetail() {
         <TabButton
           active={tab === "extracted"}
           onClick={() => setTab("extracted")}
-          disabled={!extracted || extracted.apps.length === 0}
+          disabled={!extracted || (extracted.apps.length === 0 && imageCount === 0)}
         >
-          Extracted <Chip>{extracted?.apps.length ?? 0}</Chip>
+          Extracted <Chip>{(extracted?.apps.length ?? 0) || (imageCount > 0 ? `${imageCount} img` : 0)}</Chip>
         </TabButton>
         <TabButton active={tab === "hierarchy"} onClick={() => setTab("hierarchy")}>
           Hierarchy{" "}
