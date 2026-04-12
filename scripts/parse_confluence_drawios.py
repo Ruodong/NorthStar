@@ -14,18 +14,28 @@ For each file, calls `parse_drawio_xml(xml, "App_Arch")` and upserts:
 
 Idempotent: ON CONFLICT DO UPDATE with a refreshed `last_seen_at`.
 
+After parsing, automatically invokes `scripts/resolve_confluence_drawio_apps.py`
+to repopulate `match_type` / `resolved_app_id` / `name_similarity`. This is
+necessary because process_one() does a DELETE+INSERT per attachment (atomic
+rebuild, see EC-8), which wipes the resolver's output columns. Without the
+auto-resolver step the admin UI falls back to "NO CMDB" for every row that
+was just parsed. Pass --no-resolve to skip this step (e.g. when chaining
+parse+resolve manually).
+
 Runs on 71 against the host PG + local attachments dir:
 
     set -a && source .env && set +a
     .venv-ingest/bin/python scripts/parse_confluence_drawios.py            # full run
     .venv-ingest/bin/python scripts/parse_confluence_drawios.py --limit 20 # smoke
     .venv-ingest/bin/python scripts/parse_confluence_drawios.py --attachment-id 517769868
+    .venv-ingest/bin/python scripts/parse_confluence_drawios.py --no-resolve
 """
 from __future__ import annotations
 
 import argparse
 import logging
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -197,6 +207,12 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--attachment-id", help="Process only this attachment (debug)")
     ap.add_argument("--limit", type=int, default=None, help="Process at most N files")
+    ap.add_argument(
+        "--no-resolve",
+        action="store_true",
+        help="Skip the post-parse resolve_confluence_drawio_apps.py run. "
+             "Only use this when you plan to run the resolver manually.",
+    )
     args = ap.parse_args()
 
     conn = psycopg.connect(pg_dsn(), row_factory=dict_row)
@@ -265,6 +281,30 @@ def main() -> int:
     logger.info("DONE:")
     for k, v in stats.items():
         logger.info("  %-24s %d", k, v)
+
+    # EC-8: process_one() wipes resolved_app_id / match_type / name_similarity
+    # on every parsed attachment (DELETE+INSERT). Re-run the resolver so the
+    # admin UI doesn't show "NO CMDB" for rows we just touched. The resolver
+    # has a no-change fast path, so re-running it on the whole table is still
+    # O(rows) and finishes in < 30s per NFR-1 of drawio-name-id-reconciliation.
+    if args.no_resolve:
+        logger.info("--no-resolve: skipping post-parse resolver run")
+    elif stats["files_parsed"] == 0:
+        logger.info("no files parsed; skipping resolver run")
+    else:
+        resolver = REPO_ROOT / "scripts" / "resolve_confluence_drawio_apps.py"
+        logger.info("invoking %s to repopulate match_type …", resolver.name)
+        rc = subprocess.run(
+            [sys.executable, str(resolver)],
+            env=os.environ.copy(),
+        ).returncode
+        if rc != 0:
+            logger.warning(
+                "resolver exited with code %d — match_type will be NULL "
+                "for rows just parsed; re-run the resolver manually",
+                rc,
+            )
+            return rc
     return 0
 
 

@@ -129,6 +129,40 @@ async def test_neo4j_includes_confluence_extracted_app(api):
 
 
 # ---------------------------------------------------------------------------
+# EC-8: parse must leave zero rows with NULL match_type
+# ---------------------------------------------------------------------------
+
+def test_no_null_match_type_after_parse(pg):
+    """Spec EC-8. `process_one()` in parse_confluence_drawios.py wipes
+    `match_type` to NULL on every re-parse of an attachment (atomic rebuild).
+    The parse script MUST auto-invoke the resolver at end of `main()` so the
+    admin UI doesn't fall back to "NO CMDB" for every row it just parsed.
+
+    Regression for the post-rebuild state where 14,709 / 48,709 rows (30%)
+    had `match_type IS NULL` because the resolver was an orphan manual step.
+
+    The resolver always writes a concrete match_type (even `no_cmdb` is
+    written as a string, never left as NULL). So after a successful parse,
+    ALL rows must have a non-null match_type.
+    """
+    with pg.cursor() as cur:
+        cur.execute(
+            """
+            SELECT count(*) AS n
+            FROM northstar.confluence_diagram_app
+            WHERE match_type IS NULL
+            """
+        )
+        n = cur.fetchone()["n"]
+    assert n == 0, (
+        f"{n} rows have match_type IS NULL — the parser did not run the "
+        "resolver at end of main(). Re-run "
+        "scripts/resolve_confluence_drawio_apps.py and verify "
+        "scripts/parse_confluence_drawios.py main() still invokes it."
+    )
+
+
+# ---------------------------------------------------------------------------
 # AC-5: re-running the parser is idempotent
 # ---------------------------------------------------------------------------
 
