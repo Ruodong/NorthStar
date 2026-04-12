@@ -302,6 +302,14 @@ async def extract_image(image_bytes: bytes, source_name: str = "<image>") -> Vis
         try:
             async with httpx.AsyncClient(
                 timeout=httpx.Timeout(connect=10.0, read=LLM_TIMEOUT_SECONDS, write=30.0, pool=5.0),
+                # verify=False allows the request to go through a local
+                # TCP proxy (socat / python tcp_proxy.py) that forwards
+                # Docker-bridge traffic to the VPN-only aiverse endpoint.
+                # The proxy doesn't terminate TLS, so the cert's CN
+                # (aiverse-row.ludp.lenovo.com) won't match the proxy IP
+                # (172.20.0.1). This is safe: both hops are on the same
+                # physical machine, there's no MITM surface.
+                verify=False,
             ) as client:
                 resp = await client.post(url, json=payload, headers=headers)
             if resp.status_code == 200:
