@@ -670,7 +670,7 @@ async def list_pages(
                        PARTITION BY g_project, g_app
                    ) AS group_pages
             FROM keyed
-        )
+        ),
         -- Per-project app cap: umbrella projects like LI2400444 can have
         -- 47+ linked apps. Exploding each as its own row would dominate
         -- the entire page (48 rows in a 50-row page). The `capped` CTE
