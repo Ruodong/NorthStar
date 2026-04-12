@@ -11,17 +11,28 @@ interface MastersSummary {
   diagram_interactions: number;
 }
 
+interface ConfluenceSummary {
+  totals: {
+    total_pages: number;
+    total_attachments: number;
+  };
+}
+
 export default function AdminOverview() {
   const [summary, setSummary] = useState<MastersSummary | null>(null);
+  const [cfl, setCfl] = useState<ConfluenceSummary | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch("/api/masters/summary", { cache: "no-store" });
-        const j = await r.json();
-        if (!j.success) throw new Error(j.error);
-        setSummary(j.data);
+        const [r1, r2] = await Promise.all([
+          fetch("/api/masters/summary", { cache: "no-store" }).then((r) => r.json()),
+          fetch("/api/admin/confluence/summary", { cache: "no-store" }).then((r) => r.json()),
+        ]);
+        if (!r1.success) throw new Error(r1.error);
+        setSummary(r1.data);
+        if (r2.success) setCfl(r2.data);
       } catch (e) {
         setErr(String(e));
       }
@@ -49,9 +60,10 @@ export default function AdminOverview() {
         <Stat label="Applications" value={summary?.applications} href="/admin/applications" />
         <Stat label="Projects (MSPO)" value={summary?.projects} href="/admin/projects" />
         <Stat
-          label="Parsed diagrams (EGM)"
-          value={summary?.diagram_apps}
-          sublabel={`${summary?.diagram_interactions ?? "—"} integrations`}
+          label="Confluence ARD"
+          value={cfl?.totals.total_pages}
+          sublabel={`${cfl?.totals.total_attachments?.toLocaleString() ?? "—"} attachments`}
+          href="/admin/confluence"
         />
       </div>
 
