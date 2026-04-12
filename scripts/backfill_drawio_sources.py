@@ -397,6 +397,25 @@ def main() -> int:
     unique_sources = sorted({r.source_page_id for r in all_refs})
     logger.info("  unique source page_ids: %d", len(unique_sources))
 
+    # Stage 1b: also include source pages from page_link refs already in
+    # drawio_reference (inserted by scan_confluence.py or SQL backfill).
+    # These were NOT discovered by parse_drawio_refs() but still need their
+    # source pages fetched if they're missing from confluence_page.
+    with pg.cursor() as cur:
+        cur.execute(
+            """
+            SELECT DISTINCT source_page_id
+            FROM northstar.drawio_reference
+            WHERE macro_kind = 'page_link'
+            """
+        )
+        page_link_sources = sorted({r["source_page_id"] for r in cur.fetchall()})
+    extra = set(page_link_sources) - set(unique_sources)
+    if extra:
+        logger.info("  stage 1b: %d additional source pages from page_link refs", len(extra))
+        unique_sources = sorted(set(unique_sources) | extra)
+        logger.info("  total unique source page_ids: %d", len(unique_sources))
+
     # --- Stage 2: for each source page, check if we already have it ---------
     with pg.cursor() as cur:
         cur.execute(
