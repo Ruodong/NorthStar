@@ -64,8 +64,16 @@ def _build_cql(app_name: str) -> str:
 
 
 def _search_sync(app_name: str) -> list[dict]:
-    """Execute CQL search against Confluence (blocking)."""
-    base = settings.confluence_base_url.rstrip("/")
+    """Execute CQL search against Confluence (blocking).
+
+    Uses CONFLUENCE_SEARCH_BASE_URL if set (for Docker→host TCP proxy),
+    otherwise falls back to CONFLUENCE_BASE_URL.  The public_base is always
+    the original URL — used to construct full page links.
+    """
+    import os
+    search_base = os.environ.get("CONFLUENCE_SEARCH_BASE_URL", "").rstrip("/")
+    public_base = settings.confluence_base_url.rstrip("/")
+    base = search_base or public_base
     token = settings.confluence_token
     if not base or not token:
         logger.warning("Confluence not configured — returning empty knowledge base")
@@ -75,6 +83,7 @@ def _search_sync(app_name: str) -> list[dict]:
         base_url=base,
         timeout=30.0,
         follow_redirects=True,
+        verify=False,  # TCP proxy uses host IP, cert won't match
         headers={
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
@@ -103,7 +112,7 @@ def _search_sync(app_name: str) -> list[dict]:
             hist = p.get("history", {})
             last_upd = hist.get("lastUpdated", {})
             web_ui = p.get("_links", {}).get("webui", "")
-            page_url = f"{base}{web_ui}" if web_ui else ""
+            page_url = f"{public_base}{web_ui}" if web_ui else ""
 
             pages.append({
                 "page_id": p.get("id", ""),
