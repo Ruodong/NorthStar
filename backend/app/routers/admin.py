@@ -736,7 +736,10 @@ async def list_pages(
                c.group_dr::int   AS drawio_count,
                c.group_size::int AS group_size,
                c.group_pages     AS group_page_ids,
-               c.project_app_total::int AS project_app_total
+               c.project_app_total::int AS project_app_total,
+               -- Inline total: cheaper than a second query and guaranteed
+               -- consistent with the actual row set after all filters + cap.
+               COUNT(*) OVER () AS _total
         FROM capped c
         LEFT JOIN northstar.ref_project rp    ON rp.project_id = c.group_project_id
         LEFT JOIN northstar.ref_application ra
@@ -760,81 +763,17 @@ async def list_pages(
         """,
         *args,
     )
-    total_na_fallback_sql = (
-        "'PAGE:' || p.page_id" if not include_deep else "'NA'"
-    )
-    # `where_clause` is either empty or begins with "WHERE ..."; for branches
-    # 2 and 3 below we need to append "AND ..." conditions, so normalize to
-    # "WHERE true" when no filters are set.
-    where_or_true = where_clause if where_clause else "WHERE true"
-    # Mirror the list-query exploded CTE so the count matches the rendered
-    # rows exactly. See the `exploded AS (...)` comment above for why the
-    # effective_app_id branch exists.
-    total = await pg_client.fetchval(
-        f"""
-        SELECT count(*) FROM (
-            SELECT DISTINCT g_project, g_app FROM (
-                SELECT COALESCE(
-                         p.root_project_id, p.project_id, 'PG:' || p.page_id
-                       ) AS g_project,
-                       l.app_id AS g_app
-                FROM northstar.confluence_page p
-                JOIN northstar.confluence_page_app_link l ON l.page_id = p.page_id
-                {where_clause}
-                UNION ALL
-                SELECT COALESCE(
-                         p.root_project_id, p.project_id, 'PG:' || p.page_id
-                       ) AS g_project,
-                       COALESCE(
-                         p.effective_app_id,
-                         'HINT:' || COALESCE(p.app_hint, p.effective_app_hint),
-                         {total_na_fallback_sql}
-                       ) AS g_app
-                FROM northstar.confluence_page p
-                {where_or_true}
-                  AND NOT EXISTS (
-                    SELECT 1 FROM northstar.confluence_page_app_link l0
-                    WHERE l0.page_id = p.page_id
-                  )
-                  -- Mirror the phantom-root filter from the list query:
-                  -- exclude pages with no app signal AND no own content.
-                  AND (
-                    p.effective_app_id IS NOT NULL
-                    OR p.app_hint IS NOT NULL
-                    OR p.effective_app_hint IS NOT NULL
-                    OR EXISTS (
-                      SELECT 1 FROM northstar.confluence_attachment a
-                      WHERE a.page_id = p.page_id
-                        AND a.title NOT LIKE 'drawio-backup%'
-                        AND a.title NOT LIKE '~%'
-                    )
-                  )
-                UNION ALL
-                SELECT COALESCE(
-                         p.root_project_id, p.project_id, 'PG:' || p.page_id
-                       ) AS g_project,
-                       p.effective_app_id AS g_app
-                FROM northstar.confluence_page p
-                {where_or_true}
-                  AND p.effective_app_id IS NOT NULL
-                  AND EXISTS (
-                    SELECT 1 FROM northstar.confluence_page_app_link l1
-                    WHERE l1.page_id = p.page_id
-                  )
-                  AND NOT EXISTS (
-                    SELECT 1 FROM northstar.confluence_page_app_link l2
-                    WHERE l2.page_id = p.page_id
-                      AND l2.app_id = p.effective_app_id
-                  )
-            ) u
-        ) sub
-        """,
-        *args[:-2],
-    )
+    # Total is computed inline via COUNT(*) OVER() in the main query —
+    # guaranteed consistent with the actual row set after all filters +
+    # per-project app cap. Read from the first row; 0 if no rows returned.
+    total = rows[0]["_total"] if rows else 0
     return ApiResponse(
         data={
             "total": total,
-            "rows": [dict(r) for r in rows],
+            "rows": [
+                {k: v for k, v in dict(r).items() if k != "_total"}
+                for r in rows
+            ],
             "grouped": True,
         }
     )
