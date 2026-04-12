@@ -1337,6 +1337,90 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
         page_id,
     )
 
+    # Vision-extracted data (Phase 2): query the image extract tables for
+    # any PNG/JPEG attachments on this page that have been processed by
+    # scripts/run_vision_batch.py.
+    vision_apps = await pg_client.fetch(
+        """
+        SELECT
+            via.attachment_id,
+            att.title AS attachment_title,
+            'vision' AS source_kind,
+            via.cell_id,
+            via.app_name,
+            via.standard_id,
+            (via.standard_id IS NOT NULL) AS id_is_standard,
+            via.application_status,
+            via.functions,
+            via.fill_color,
+            via.resolved_app_id,
+            via.match_type,
+            via.name_similarity,
+            via.diagram_type,
+            ra_by_id.name AS cmdb_name_for_drawio_id,
+            ra_by_resolved.name AS cmdb_name_for_resolved,
+            COALESCE(ra_by_resolved.name, ra_by_id.name) AS cmdb_name
+        FROM northstar.confluence_image_extract_app via
+        JOIN northstar.confluence_attachment att
+          ON att.attachment_id = via.attachment_id
+         AND att.page_id = $1
+        LEFT JOIN northstar.ref_application ra_by_id
+               ON ra_by_id.app_id = via.standard_id
+        LEFT JOIN northstar.ref_application ra_by_resolved
+               ON ra_by_resolved.app_id = via.resolved_app_id
+        ORDER BY att.title, via.cell_id
+        """,
+        page_id,
+    )
+
+    vision_interactions = await pg_client.fetch(
+        """
+        SELECT
+            vii.attachment_id,
+            att.title AS attachment_title,
+            'vision' AS source_kind,
+            vii.edge_cell_id,
+            vii.source_cell_id,
+            vii.target_cell_id,
+            vii.interaction_type,
+            vii.direction,
+            vii.interface_status AS interaction_status,
+            vii.business_object,
+            vii.source_app_name,
+            vii.target_app_name
+        FROM northstar.confluence_image_extract_interaction vii
+        JOIN northstar.confluence_attachment att
+          ON att.attachment_id = vii.attachment_id
+         AND att.page_id = $1
+        ORDER BY att.title, vii.edge_cell_id
+        """,
+        page_id,
+    )
+
+    vision_by_attachment = await pg_client.fetch(
+        """
+        SELECT
+            att.attachment_id,
+            att.title AS attachment_title,
+            'vision' AS source_kind,
+            (SELECT count(*) FROM northstar.confluence_image_extract_app via
+               WHERE via.attachment_id = att.attachment_id) AS app_count,
+            (SELECT count(*) FROM northstar.confluence_image_extract_app via
+               WHERE via.attachment_id = att.attachment_id
+                 AND via.standard_id IS NOT NULL) AS app_with_std_id_count,
+            (SELECT count(*) FROM northstar.confluence_image_extract_interaction vii
+               WHERE vii.attachment_id = att.attachment_id) AS interaction_count
+        FROM northstar.confluence_attachment att
+        WHERE att.page_id = $1
+          AND EXISTS (
+              SELECT 1 FROM northstar.confluence_image_extract_app via
+              WHERE via.attachment_id = att.attachment_id
+          )
+        ORDER BY att.title
+        """,
+        page_id,
+    )
+
     # Python-side arch-bucket sort so the Extracted tab mirrors the same
     # "App Arch first → Tech Arch second → other" ordering as the
     # Attachments tab. The row_to_bucket helper reuses the exact same
@@ -1401,6 +1485,9 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
             "interactions": interactions_sorted,
             "by_attachment": by_attachment_sorted,
             "major_apps": [dict(r) for r in major_apps],
+            "vision_apps": [dict(r) for r in vision_apps],
+            "vision_interactions": [dict(r) for r in vision_interactions],
+            "vision_by_attachment": [dict(r) for r in vision_by_attachment],
         }
     )
 

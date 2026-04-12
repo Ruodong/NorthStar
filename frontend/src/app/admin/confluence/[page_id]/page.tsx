@@ -1732,16 +1732,34 @@ function ExtractedView({
 
   const hasDrawio = data.by_attachment.length > 0;
 
+  // Vision persisted data (Phase 2)
+  const visionApps = data.vision_apps ?? [];
+  const visionInters = data.vision_interactions ?? [];
+  const visionByAtt = data.vision_by_attachment ?? [];
+  const hasVision = visionByAtt.length > 0;
+
+  const visionAppsByAtt = new Map<string, ExtractedApp[]>();
+  for (const a of visionApps) {
+    const list = visionAppsByAtt.get(a.attachment_id) || [];
+    list.push(a);
+    visionAppsByAtt.set(a.attachment_id, list);
+  }
+  const visionIntersByAtt = new Map<string, ExtractedInteraction[]>();
+  for (const i of visionInters) {
+    const list = visionIntersByAtt.get(i.attachment_id) || [];
+    list.push(i);
+    visionIntersByAtt.set(i.attachment_id, list);
+  }
+
+  // Images without persisted vision results — show "Run Vision" fallback
+  const extractedImageIds = new Set(visionByAtt.map((v) => v.attachment_id));
+  const unextractedImages = imageAttachments.filter(
+    (a) => !extractedImageIds.has(a.attachment_id)
+  );
+
   return (
     <div>
-      {/* Vision section first when it's the only content — no need to
-          scroll past an empty drawio panel to find "Run Vision". */}
-      {!hasDrawio && imageAttachments.length > 0 && (
-        <div className="panel" style={{ padding: 0 }}>
-          <VisionExtractSection images={imageAttachments} />
-        </div>
-      )}
-
+      {/* Drawio section */}
       {hasDrawio && (
         <div className="panel" style={{ padding: 0 }}>
           <div
@@ -1757,22 +1775,10 @@ function ExtractedView({
           >
             <span>Extracted from drawio diagrams</span>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <SummaryChip
-                label="apps"
-                value={totalApps}
-                color="var(--text-muted)"
-              />
+              <SummaryChip label="apps" value={totalApps} color="var(--text-muted)" />
               <SummaryChip label="A-id" value={totalStd} color="var(--accent)" />
-              <SummaryChip
-                label="edges"
-                value={totalInters}
-                color="var(--text-muted)"
-              />
-              <SummaryChip
-                label="files"
-                value={data.by_attachment.length}
-                color="var(--text-muted)"
-              />
+              <SummaryChip label="edges" value={totalInters} color="var(--text-muted)" />
+              <SummaryChip label="files" value={data.by_attachment.length} color="var(--text-muted)" />
             </div>
           </div>
 
@@ -1784,18 +1790,60 @@ function ExtractedView({
             const apps = appsByAttachment.get(f.attachment_id) || [];
             const inters = intersByAttachment.get(f.attachment_id) || [];
             return (
-              <ExtractedFileCard
-                key={f.attachment_id}
-                file={f}
-                apps={apps}
-                interactions={inters}
-              />
+              <ExtractedFileCard key={f.attachment_id} file={f} apps={apps} interactions={inters} />
             );
           })}
+        </div>
+      )}
 
-          {imageAttachments.length > 0 && (
-            <VisionExtractSection images={imageAttachments} />
-          )}
+      {/* Persisted vision results (Phase 2) */}
+      {hasVision && (
+        <div className="panel" style={{ padding: 0, marginTop: hasDrawio ? 16 : 0 }}>
+          <div
+            className="panel-title"
+            style={{
+              padding: "18px 18px 12px",
+              display: "flex",
+              gap: 16,
+              alignItems: "baseline",
+              justifyContent: "space-between",
+              flexWrap: "wrap",
+            }}
+          >
+            <span>
+              Extracted from images
+              <span style={{
+                fontSize: 10,
+                color: "var(--text-dim)",
+                fontFamily: "var(--font-mono)",
+                marginLeft: 8,
+                textTransform: "uppercase",
+              }}>
+                AI vision
+              </span>
+            </span>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <SummaryChip label="apps" value={visionApps.length} color="var(--text-muted)" />
+              <SummaryChip label="A-id" value={visionApps.filter((a) => a.standard_id).length} color="var(--accent)" />
+              <SummaryChip label="edges" value={visionInters.length} color="var(--text-muted)" />
+              <SummaryChip label="files" value={visionByAtt.length} color="var(--text-muted)" />
+            </div>
+          </div>
+
+          {visionByAtt.map((f) => {
+            const apps = visionAppsByAtt.get(f.attachment_id) || [];
+            const inters = visionIntersByAtt.get(f.attachment_id) || [];
+            return (
+              <ExtractedFileCard key={`v-${f.attachment_id}`} file={f} apps={apps} interactions={inters} />
+            );
+          })}
+        </div>
+      )}
+
+      {/* Unextracted images: "Run Vision" fallback for images not yet batch-processed */}
+      {unextractedImages.length > 0 && (
+        <div className="panel" style={{ padding: 0, marginTop: (hasDrawio || hasVision) ? 16 : 0 }}>
+          <VisionExtractSection images={unextractedImages} />
         </div>
       )}
     </div>
