@@ -415,10 +415,10 @@ async def list_pages(
             f"""
             SELECT p.page_id, p.fiscal_year, p.title, p.page_url, p.page_type,
                    p.project_id,
-                   COALESCE(p.q_project_name, rp.project_name) AS project_name,
+                   COALESCE(rp.project_name, p.q_project_name) AS project_name,
                    CASE
-                     WHEN p.q_project_name IS NOT NULL THEN 'questionnaire'
                      WHEN rp.project_name IS NOT NULL THEN 'mspo'
+                     WHEN p.q_project_name IS NOT NULL THEN 'questionnaire'
                      ELSE 'none'
                    END AS project_name_source,
                    p.q_app_id      AS app_id,
@@ -713,15 +713,13 @@ async def list_pages(
                    THEN c.project_id
                  ELSE NULL
                END AS sub_project_id,
-               -- Page's own questionnaire name wins over MSPO master data,
-               -- because the same project_id (e.g. LI2400132) may have
-               -- multiple depth=1 sub-initiative pages, each with its own
-               -- name ("AI Transformation-Email Bot" vs "ISS eService AI
-               -- Innovation"). MSPO only has one name per project_id.
-               COALESCE(c.q_project_name, rp.project_name) AS project_name,
+               -- MSPO master data is the authoritative source for project names.
+               -- Questionnaire name is a fallback only when the project_id
+               -- is not in ref_project (e.g. orphan pages, pre-MSPO projects).
+               COALESCE(rp.project_name, c.q_project_name) AS project_name,
                CASE
-                 WHEN c.q_project_name IS NOT NULL THEN 'questionnaire'
                  WHEN rp.project_name IS NOT NULL THEN 'mspo'
+                 WHEN c.q_project_name IS NOT NULL THEN 'questionnaire'
                  ELSE 'none'
                END AS project_name_source,
                CASE
