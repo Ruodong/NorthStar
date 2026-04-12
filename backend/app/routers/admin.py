@@ -1269,6 +1269,7 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
     major_apps = await pg_client.fetch(
         _EXTRACTED_SOURCES_CTE + """,
         raw_majors AS (
+            -- Drawio-extracted majors
             SELECT
                 COALESCE(cda.resolved_app_id, cda.standard_id) AS app_id,
                 cda.app_name AS drawio_name,
@@ -1283,6 +1284,21 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
               ON cda.attachment_id = att.attachment_id
             WHERE cda.application_status IN ('New', 'Change', 'Sunset')
               AND COALESCE(cda.resolved_app_id, cda.standard_id) IS NOT NULL
+            UNION ALL
+            -- Vision-extracted majors (Phase 2)
+            SELECT
+                COALESCE(via.resolved_app_id, via.standard_id) AS app_id,
+                via.app_name AS drawio_name,
+                via.application_status,
+                via.attachment_id,
+                att2.title AS attachment_title,
+                NULL AS source_page_title
+            FROM northstar.confluence_image_extract_app via
+            JOIN northstar.confluence_attachment att2
+              ON att2.attachment_id = via.attachment_id
+             AND att2.page_id = $1
+            WHERE via.application_status IN ('New', 'Change', 'Sunset')
+              AND COALESCE(via.resolved_app_id, via.standard_id) IS NOT NULL
         ),
         collapsed AS (
             -- Collapse all rows for the same effective app_id into one,
