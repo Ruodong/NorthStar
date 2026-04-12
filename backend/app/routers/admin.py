@@ -594,18 +594,62 @@ async def list_pages(
         -- Effective grouping key per exploded row: link_app_id > effective_app_id
         -- > [hint] > NA. The same physical page_id may end up in multiple
         -- partitions, which is what Pattern D wants.
+        -- Resolve each page to its depth=1 tree root page_id.
+        -- Depth=1 pages are their own root. Depth=2 pages' root is
+        -- their parent. Depth=3+ we walk up via parent_id chain
+        -- (max 2 hops since MAX_DEPTH=5 in practice, and we only
+        -- show depth<=2 by default).
+        --
+        -- This is needed so two depth=1 pages sharing the same
+        -- project_id (e.g. LI2400132 has "ISS eService AI Innovation"
+        -- AND "ISS FY2425 AI Transformation") produce SEPARATE
+        -- groups in the list, each showing only their own subtree's
+        -- major apps. Without this, g_project = project_id merges
+        -- them and the user sees 9 apps when they expect 4 + 5.
+        with_root_page AS (
+            SELECT e.*,
+                   CASE
+                     WHEN e.depth = 1 THEN e.page_id
+                     WHEN e.depth = 2 THEN e.parent_id
+                     ELSE (
+                       -- depth >= 3: walk up to find the depth=1 ancestor.
+                       -- Most pages are depth<=2 in the default view, so
+                       -- this subquery fires rarely.
+                       SELECT anc.page_id
+                       FROM northstar.confluence_page anc
+                       WHERE anc.depth = 1
+                         AND anc.page_id IN (
+                           -- Walk: parent, grandparent, great-grandparent
+                           SELECT e.parent_id
+                           UNION
+                           SELECT p2.parent_id FROM northstar.confluence_page p2 WHERE p2.page_id = e.parent_id
+                           UNION
+                           SELECT p3.parent_id FROM northstar.confluence_page p3
+                             JOIN northstar.confluence_page p2 ON p3.page_id = p2.parent_id
+                             WHERE p2.page_id = e.parent_id
+                         )
+                       LIMIT 1
+                     )
+                   END AS tree_root_page
+            FROM exploded e
+        ),
         keyed AS (
             SELECT e.*,
-                   -- Group by the Confluence tree root (depth=1 ancestor's
-                   -- project_id) so sub-initiative pages fold up correctly.
-                   COALESCE(e.group_project_id, 'PG:' || e.page_id) AS g_project,
+                   -- Group by project_id + tree root page so two depth=1
+                   -- pages under the same project form separate groups.
+                   -- The tree_root_page suffix is only appended when the
+                   -- project has multiple depth=1 pages; for the common
+                   -- case (one depth=1 page per project) it's redundant
+                   -- but harmless — the grouping is identical.
+                   COALESCE(e.group_project_id, 'PG:' || e.page_id)
+                     || ':' || COALESCE(e.tree_root_page, e.page_id) AS g_project,
                    COALESCE(
                      e.link_app_id,
                      e.effective_app_id,
                      'HINT:' || COALESCE(e.app_hint, e.effective_app_hint),
                      {na_fallback_sql}
                    ) AS g_app
-            FROM exploded e
+            FROM with_root_page e
         ),
         grouped AS (
             SELECT *,
