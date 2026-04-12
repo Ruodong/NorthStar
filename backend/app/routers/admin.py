@@ -749,9 +749,12 @@ async def list_pages(
                -- Internal fields for Python post-processing (stripped before response)
                c.g_project       AS _g_project,
                root_p.title      AS _root_title,
-               -- Inline total: cheaper than a second query and guaranteed
-               -- consistent with the actual row set after all filters + cap.
-               COUNT(*) OVER () AS _total
+               -- Inline total: count of distinct projects (post-collapse)
+               -- rather than raw row count. The Python side collapses
+               -- multi-app rows into one row per project, so the total
+               -- must reflect collapsed count for correct pagination.
+               (SELECT count(DISTINCT g_project) FROM capped
+                WHERE project_app_rank <= 10) AS _total
         FROM capped c
         LEFT JOIN northstar.ref_project rp    ON rp.project_id = c.group_project_id
         LEFT JOIN northstar.ref_application ra
