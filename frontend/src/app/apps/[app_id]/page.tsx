@@ -1125,73 +1125,55 @@ function DiagramsTab({ diagrams }: { diagrams: DiagramRef[] }) {
   if (diagrams.length === 0) {
     return (
       <Panel title="Diagrams describing this app">
-        <EmptyState>
-          No diagrams linked yet. Diagrams are attached via DESCRIBED_BY edges from the loader.
-        </EmptyState>
+        <EmptyState>No diagrams found for this application.</EmptyState>
       </Panel>
     );
   }
   return (
-    <Panel title={`Diagrams describing this app (${diagrams.length})`}>
+    <Panel title={`Diagrams (${diagrams.length})`}>
       <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
-        {diagrams.map((d) => (
+        {diagrams.map((d, idx) => (
           <li
-            key={d.diagram_id}
+            key={d.diagram_id || d.attachment_id || idx}
             style={{
               padding: "10px 0",
               borderBottom: "1px solid var(--border)",
               display: "flex",
               gap: 14,
               alignItems: "center",
+              flexWrap: "wrap",
             }}
           >
-            <span
-              style={{
-                fontSize: 10,
-                padding: "2px 8px",
-                background: "var(--bg-elevated)",
-                border: "1px solid var(--border-strong)",
-                borderRadius: "var(--radius-sm)",
-                color: "var(--text-muted)",
-                fontFamily: "var(--font-mono)",
-                textTransform: "uppercase",
-              }}
-            >
-              {d.diagram_type}
+            <span style={{
+              fontSize: 10, padding: "2px 8px",
+              background: "var(--bg-elevated)", border: "1px solid var(--border-strong)",
+              borderRadius: "var(--radius-sm)", color: "var(--text-muted)",
+              fontFamily: "var(--font-mono)", textTransform: "uppercase",
+            }}>
+              {d.diagram_type || d.file_kind || "drawio"}
             </span>
-            <span
-              style={{
-                fontSize: 10,
-                padding: "2px 8px",
-                color: "var(--text-dim)",
-                fontFamily: "var(--font-mono)",
-              }}
-            >
-              {d.file_kind}
-            </span>
-            <span style={{ flex: 1, fontSize: 13 }}>{d.file_name || "(unnamed)"}</span>
-            {d.source_systems && d.source_systems.length > 0 && (
-              <span
-                style={{
-                  fontSize: 10,
-                  color: "var(--text-dim)",
-                  fontFamily: "var(--font-mono)",
-                }}
-              >
-                {d.source_systems.join("+")}
+            {d.fiscal_year && (
+              <span style={{ fontSize: 10, padding: "2px 8px", color: "var(--accent)", fontFamily: "var(--font-mono)" }}>
+                {d.fiscal_year}
               </span>
             )}
-            {!d.has_graph_data && (
-              <span
-                style={{
-                  fontSize: 10,
-                  padding: "2px 6px",
-                  color: "var(--text-dim)",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius-sm)",
-                }}
+            {d.page_id ? (
+              <Link
+                href={`/admin/confluence/${d.page_id}`}
+                style={{ flex: 1, fontSize: 13, color: "var(--text)" }}
+                title={d.page_title || ""}
               >
-                no graph data
+                {d.file_name || "(unnamed)"}
+              </Link>
+            ) : (
+              <span style={{ flex: 1, fontSize: 13 }}>{d.file_name || "(unnamed)"}</span>
+            )}
+            {d.page_title && (
+              <span style={{ fontSize: 11, color: "var(--text-dim)" }}>{d.page_title}</span>
+            )}
+            {d.source_systems && d.source_systems.length > 0 && (
+              <span style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
+                {d.source_systems.join("+")}
               </span>
             )}
           </li>
