@@ -27,8 +27,8 @@ import time
 from pathlib import Path
 
 import httpx
-import psycopg2
-import psycopg2.extras
+import psycopg
+from psycopg.rows import dict_row
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,13 +38,13 @@ logger = logging.getLogger("vision-batch")
 
 
 def get_pg_conn():
-    return psycopg2.connect(
+    return psycopg.connect(
         host=os.environ.get("POSTGRES_HOST", "localhost"),
         port=int(os.environ.get("POSTGRES_PORT", "5434")),
         dbname=os.environ.get("POSTGRES_DB", "northstar"),
         user=os.environ.get("POSTGRES_USER", "northstar"),
         password=os.environ.get("POSTGRES_PASSWORD", "northstar"),
-        cursor_factory=psycopg2.extras.RealDictCursor,
+        row_factory=dict_row,
     )
 
 
