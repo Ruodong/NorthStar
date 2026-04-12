@@ -671,86 +671,87 @@ async def list_pages(
                    ) AS group_pages
             FROM keyed
         )
-        SELECT g.page_id, g.fiscal_year, g.title, g.page_url, g.page_type,
-               -- project_id returned to the client IS the tree root, so
-               -- sub-initiative pages (e.g. FY2526-063 under LI2500067)
-               -- display under their LI2500067 parent in the admin list.
-               -- The original sub-initiative id is still available to clients
-               -- as `sub_project_id` for future UI pills.
-               g.group_project_id AS project_id,
+        -- Per-project app cap: umbrella projects like LI2400444 can have
+        -- 47+ linked apps. Exploding each as its own row would dominate
+        -- the entire page (48 rows in a 50-row page). The `capped` CTE
+        -- ranks distinct g_app values within each project by total
+        -- attachment count and only lets the top 5 through. The 5th row
+        -- carries `project_app_total` so the frontend can render a
+        -- "+N more apps" badge. The full breakdown lives on the detail
+        -- page (/admin/confluence/<page_id>).
+        capped AS (
+            SELECT g.*,
+                   DENSE_RANK() OVER (
+                       PARTITION BY g_project
+                       ORDER BY group_att DESC, g_app ASC
+                   ) AS project_app_rank,
+                   COUNT(DISTINCT g_app) OVER (
+                       PARTITION BY g_project
+                   ) AS project_app_total
+            FROM grouped g
+            WHERE g.rn = 1
+              AND NOT (
+                  g.link_app_id IS NULL
+                  AND COALESCE(g.effective_app_id, g.q_app_id) IS NULL
+                  AND COALESCE(g.app_hint, g.effective_app_hint) IS NULL
+                  AND g.group_att = 0
+                  AND g.group_dr = 0
+              )
+        )
+        SELECT c.page_id, c.fiscal_year, c.title, c.page_url, c.page_type,
+               c.group_project_id AS project_id,
                CASE
-                 WHEN g.project_id <> g.group_project_id
-                   THEN g.project_id
+                 WHEN c.project_id <> c.group_project_id
+                   THEN c.project_id
                  ELSE NULL
                END AS sub_project_id,
-               COALESCE(rp.project_name, g.q_project_name) AS project_name,
+               COALESCE(rp.project_name, c.q_project_name) AS project_name,
                CASE
                  WHEN rp.project_name IS NOT NULL THEN 'mspo'
-                 WHEN g.q_project_name IS NOT NULL THEN 'questionnaire'
+                 WHEN c.q_project_name IS NOT NULL THEN 'questionnaire'
                  ELSE 'none'
                END AS project_name_source,
-               -- app_id precedence: exploded link > effective > [hint] > NULL.
-               -- Use effective_app_hint (ancestor-inherited) as a fallback so
-               -- descendant pages whose own app_hint is NULL still render
-               -- under the parent's [hint] tag.
                CASE
-                 WHEN g.link_app_id IS NOT NULL THEN g.link_app_id
-                 WHEN COALESCE(g.effective_app_id, g.q_app_id) IS NOT NULL
-                   THEN COALESCE(g.effective_app_id, g.q_app_id)
-                 WHEN COALESCE(g.app_hint, g.effective_app_hint) IS NOT NULL
-                   THEN '[' || COALESCE(g.app_hint, g.effective_app_hint) || ']'
+                 WHEN c.link_app_id IS NOT NULL THEN c.link_app_id
+                 WHEN COALESCE(c.effective_app_id, c.q_app_id) IS NOT NULL
+                   THEN COALESCE(c.effective_app_id, c.q_app_id)
+                 WHEN COALESCE(c.app_hint, c.effective_app_hint) IS NOT NULL
+                   THEN '[' || COALESCE(c.app_hint, c.effective_app_hint) || ']'
                  ELSE NULL
                END AS app_id,
-               COALESCE(g.app_hint, g.effective_app_hint) AS app_hint,
+               COALESCE(c.app_hint, c.effective_app_hint) AS app_hint,
                ra.name                                    AS app_name,
                CASE
                  WHEN ra.name IS NOT NULL THEN 'cmdb'
-                 WHEN COALESCE(g.app_hint, g.effective_app_hint) IS NOT NULL
-                      AND g.link_app_id IS NULL THEN 'hint_unresolved'
+                 WHEN COALESCE(c.app_hint, c.effective_app_hint) IS NOT NULL
+                      AND c.link_app_id IS NULL THEN 'hint_unresolved'
                  ELSE 'none'
                END AS app_name_source,
                (rp.project_id IS NOT NULL) AS project_in_mspo,
                (ra.app_id IS NOT NULL)     AS app_in_cmdb,
-               g.q_pm, g.q_it_lead, g.q_dt_lead,
-               g.group_att::int  AS attachment_count,
-               g.group_dr::int   AS drawio_count,
-               g.group_size::int AS group_size,
-               g.group_pages     AS group_page_ids
-        FROM grouped g
-        -- JOIN ref_project on the group root so the project name comes from
-        -- the real top-level project (LI2500067), not a sub-initiative id
-        -- that happens to be in a child page title (FY2526-063).
-        LEFT JOIN northstar.ref_project rp    ON rp.project_id = g.group_project_id
+               c.q_pm, c.q_it_lead, c.q_dt_lead,
+               c.group_att::int  AS attachment_count,
+               c.group_dr::int   AS drawio_count,
+               c.group_size::int AS group_size,
+               c.group_pages     AS group_page_ids,
+               c.project_app_total::int AS project_app_total
+        FROM capped c
+        LEFT JOIN northstar.ref_project rp    ON rp.project_id = c.group_project_id
         LEFT JOIN northstar.ref_application ra
-               ON ra.app_id = COALESCE(g.link_app_id, g.effective_app_id, g.q_app_id)
-        WHERE g.rn = 1
-          -- Drop phantom root rows: project-folder pages (depth=1) that
-          -- pass hide_empty because their children have content, but
-          -- contribute nothing themselves — no app signal, no own
-          -- attachments. Their children already appear as sibling rows
-          -- with real content. Example: "FY2526-169 - E-security
-          -- Optimization" (0 attachments, no app_id) would produce an
-          -- empty "—/—/0/0" row alongside the child "A000514 e-security
-          -- 6/2" row.
-          AND NOT (
-              g.link_app_id IS NULL
-              AND COALESCE(g.effective_app_id, g.q_app_id) IS NULL
-              AND COALESCE(g.app_hint, g.effective_app_hint) IS NULL
-              AND g.group_att = 0
-              AND g.group_dr = 0
-          )
+               ON ra.app_id = COALESCE(c.link_app_id, c.effective_app_id, c.q_app_id)
+        WHERE c.project_app_rank <= 5
         -- Ontology fix (2026-04-10): sort so that all rows sharing the same
         -- group_project_id are strictly adjacent, with orphan rows sinking
         -- to the tail of each FY bucket. Secondary sorts by title, then
         -- app_id so the order is stable and pagination-friendly. The
         -- frontend relies on this adjacency for rowspan-style group folding.
-        ORDER BY g.fiscal_year DESC,
-                 g.group_project_id ASC NULLS LAST,
-                 g.title ASC,
+        ORDER BY c.fiscal_year DESC,
+                 c.group_project_id ASC NULLS LAST,
+                 c.title ASC,
                  COALESCE(
-                     g.link_app_id,
-                     g.effective_app_id,
-                     g.q_app_id,
+                     c.link_app_id,
+                     c.effective_app_id,
+                     c.q_app_id,
                      ''
                  ) ASC
         LIMIT ${len(args) - 1} OFFSET ${len(args)}

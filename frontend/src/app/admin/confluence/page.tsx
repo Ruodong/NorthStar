@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Pager } from "@/components/Pager";
 
 interface PageRow {
@@ -24,6 +24,7 @@ interface PageRow {
   page_url: string;
   attachment_count: number;
   drawio_count: number;
+  project_app_total?: number;
 }
 
 interface ListResult {
@@ -561,8 +562,22 @@ export default function ConfluenceIndex() {
                 ? "2px solid var(--accent-dim)"
                 : undefined;
 
-              return (
-                <tr key={r.page_id}>
+              // "+N more apps" badge: show after the last row of a group
+              // when the backend capped the explosion. The badge row
+              // inherits the amber binding border and links to the detail
+              // page so the user can see the full app breakdown.
+              const isLastInGroup =
+                idx === (data?.rows.length ?? 0) - 1 ||
+                !groupInfo.positions[idx + 1] ||
+                groupInfo.positions[idx + 1] === "solo" ||
+                groupInfo.positions[idx + 1] === "first";
+              const hiddenApps =
+                isLastInGroup && r.project_app_total && r.project_app_total > 5
+                  ? r.project_app_total - 5
+                  : 0;
+
+              return (<React.Fragment key={r.page_id}>
+                <tr>
                   {/* FY */}
                   <td>{isSibling ? null : <code>{r.fiscal_year}</code>}</td>
                   {/* Project ID — sibling rows get the 2px amber-dim left
@@ -676,6 +691,25 @@ export default function ConfluenceIndex() {
                     </a>
                   </td>
                 </tr>
+                {hiddenApps > 0 && (
+                  <tr key={`${r.page_id}-more`}>
+                    <td />
+                    <td style={{ borderLeft: "2px solid var(--accent-dim)" }} />
+                    <td />
+                    <td
+                      colSpan={5}
+                      style={{
+                        padding: "4px 16px",
+                        fontSize: 11,
+                        fontFamily: "var(--font-mono)",
+                        color: "var(--text-dim)",
+                      }}
+                    >
+                      +{hiddenApps} more apps — see detail page
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
               );
             })}
             {!loading && data?.rows.length === 0 && (
