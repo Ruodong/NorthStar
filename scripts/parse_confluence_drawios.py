@@ -139,13 +139,12 @@ def process_one(
         logger.debug("  %s: local file missing %s", att_id, local_abs)
         return
 
-    # Some pages store the same drawio content in a .png preview (drawio
-    # writer's companion export). Those are image mimetype and will fail the
-    # parser — skip based on extension + mimetype.
-    if not local_abs.name.endswith((".drawio", ".xml", ".bak")):
-        # Not a drawio XML file; skip silently.
-        stats["skipped_not_drawio_xml"] += 1
-        return
+    # EC-10: The SQL query already gates on file_kind='drawio', so file
+    # extension is not a reliable signal. The scanner saves files as bare
+    # numeric attachment IDs (e.g. "530874374" with no extension), and an
+    # extension check here silently skipped 222 valid drawio files. The
+    # parse_drawio_xml() call below already catches malformed XML
+    # gracefully, so there is no need for a pre-filter.
 
     try:
         with open(local_abs, "r", encoding="utf-8", errors="replace") as f:
@@ -228,7 +227,6 @@ def main() -> int:
         "read_errors": 0,
         "parse_errors": 0,
         "empty_results": 0,
-        "skipped_not_drawio_xml": 0,
     }
 
     try:
