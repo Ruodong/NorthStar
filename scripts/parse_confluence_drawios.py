@@ -159,6 +159,27 @@ def process_one(
         stats["empty_results"] += 1
         return
 
+    # Atomic rebuild per attachment: delete any existing rows for this
+    # attachment_id before inserting the new parser output. Without this
+    # step, cells that were dropped from the new parse (e.g. sub-modules
+    # merged into a container by the frame-promotion pre-pass) remain in
+    # confluence_diagram_app as stale orphans, double-counting apps in
+    # the admin list.
+    cur.execute(
+        "DELETE FROM northstar.confluence_diagram_app WHERE attachment_id = %s",
+        (att_id,),
+    )
+    stats["apps_deleted_before_reinsert"] = (
+        stats.get("apps_deleted_before_reinsert", 0) + cur.rowcount
+    )
+    cur.execute(
+        "DELETE FROM northstar.confluence_diagram_interaction WHERE attachment_id = %s",
+        (att_id,),
+    )
+    stats["interactions_deleted_before_reinsert"] = (
+        stats.get("interactions_deleted_before_reinsert", 0) + cur.rowcount
+    )
+
     for app in apps:
         upsert_app(cur, att_id, app)
         stats["apps_upserted"] += 1
