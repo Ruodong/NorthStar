@@ -839,7 +839,7 @@ function OverviewTab({
         <CmdbField label="Status" value={app.status} pill />
         <CmdbField label="Description" value={app.short_description} wide />
         <CmdbField label="Service Area" value={app.u_service_area} />
-        <CmdbField label="Classification" value={app.app_classification} />
+        <CmdbField label="Classification" value={app.app_classification?.replace(/^\{|\}$/g, "")} />
         <CmdbField label="Solution Type" value={app.app_solution_type} />
         <CmdbField label="Ownership" value={app.app_ownership} />
         <CmdbField label="Portfolio" value={app.portfolio_mgt} />
@@ -867,7 +867,7 @@ function OverviewTab({
 
       {tco && (
         <Panel title="TCO / Financials">
-          <CmdbField label="Classification" value={tco.application_classification} />
+          <CmdbField label="Classification" value={tco.application_classification?.replace(/^\{|\}$/g, "")} />
           <CmdbField label="Stamp (K$)" value={tco.stamp_k != null ? tco.stamp_k.toFixed(1) : null} mono />
           <CmdbField label="Budget (K$)" value={tco.budget_k != null ? tco.budget_k.toFixed(1) : null} mono />
           <CmdbField label="Actual (K$)" value={tco.actual_k != null ? tco.actual_k.toFixed(1) : null} mono />
