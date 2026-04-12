@@ -445,7 +445,7 @@ export default function ConfluenceIndex() {
         />
         <select value={fy} onChange={(e) => { setFy(e.target.value); setPage(0); }}>
           <option value="">All fiscal years</option>
-          {summary?.by_fy.map((f) => (
+          {summary?.by_fy.slice().reverse().map((f) => (
             <option key={f.fiscal_year} value={f.fiscal_year}>
               {f.fiscal_year} ({f.pages})
             </option>
