@@ -229,6 +229,45 @@ def main() -> int:
                     if wcur.rowcount == 1:
                         stats["inherited_link_rows_inserted"] += 1
 
+            # ==== THIRD PASS: drop hint-derived title_extract shadows ====
+            # title_extract links come from two sources in
+            # backfill_page_app_link.py:
+            #   (a) extract_app_ids_multi(title) — Pattern D "multi A-id in
+            #       title" like "A000090,A000432,A003974- Architecture".
+            #       The app_id is literally a substring of the title.
+            #   (b) q_app_id / effective_app_id fallback — pages like
+            #       "LUDP IoT Application Architecture" whose app_hint
+            #       ("LUDP IoT") fuzzy-resolved to A000427. The app_id is
+            #       NOT a substring of the title.
+            #
+            # When (b) produces a row for an app that is NOT in the page's
+            # major_app set, it's a redundant "identity shadow" — it shows
+            # up as an extra admin-list row for an app the drawio marks as
+            # Keep (not actively changing), contradicting MAJOR APPLICATIONS.
+            # This cleanup drops those shadows but leaves Pattern D
+            # substring matches intact.
+            wcur.execute(
+                """
+                DELETE FROM northstar.confluence_page_app_link l
+                USING northstar.confluence_page p
+                WHERE l.page_id = p.page_id
+                  AND l.source  = 'title_extract'
+                  AND p.title NOT LIKE '%' || l.app_id || '%'
+                  AND EXISTS (
+                      SELECT 1 FROM northstar.confluence_page_app_link m
+                      WHERE m.page_id = l.page_id
+                        AND m.source  = 'major_app'
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM northstar.confluence_page_app_link m2
+                      WHERE m2.page_id = l.page_id
+                        AND m2.source  = 'major_app'
+                        AND m2.app_id  = l.app_id
+                  )
+                """,
+            )
+            stats["title_extract_shadows_dropped"] = wcur.rowcount
+
         if not args.dry_run:
             conn.commit()
     finally:
