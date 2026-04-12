@@ -66,11 +66,11 @@ async def get_knowledge_base(app_id: str) -> ApiResponse:
     """
     # Resolve app_id → app_name from PG (CMDB first, then Neo4j app node)
     row = await pg_client.fetchrow(
-        "SELECT app_name FROM northstar.ref_application WHERE app_id = $1",
+        "SELECT name FROM northstar.ref_application WHERE app_id = $1",
         app_id,
     )
     if row:
-        app_name = row["app_name"]
+        app_name = row["name"]
     else:
         # Non-CMDB app — try Neo4j node name via graph_query
         app_data = await graph_query.get_application(app_id)
