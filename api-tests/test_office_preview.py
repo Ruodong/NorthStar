@@ -133,8 +133,16 @@ async def test_preview_pptx_first_view(api: httpx.AsyncClient, small_pptx, pg):
         f"response is not a PDF: first_bytes={resp.content[:20]!r}"
     )
     assert len(resp.content) > 1024, f"PDF suspiciously small: {len(resp.content)} bytes"
-    # Cache-control header per FR-17
-    assert "immutable" in (resp.headers.get("cache-control") or "").lower()
+    # Cache-Control must allow revalidation (see _pdf_inline_headers
+    # docstring): `immutable` would trap browsers on a stale header.
+    cc = (resp.headers.get("cache-control") or "").lower()
+    assert "immutable" not in cc, (
+        f"Cache-Control must NOT contain 'immutable' — browsers would "
+        f"trap any header bug for the full max-age window. Got: {cc!r}"
+    )
+    assert "must-revalidate" in cc, (
+        f"expected must-revalidate in Cache-Control, got {cc!r}"
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -949,6 +949,18 @@ function officeMode(mediaType: string): OfficeMode {
   return "unsupported";
 }
 
+// Bump this token any time the preview endpoint's RESPONSE HEADERS
+// change in a way that would trap a cached browser response. Body
+// changes (e.g. re-conversion) don't need a bump — ETag + max-age
+// handle that. But header changes DO: browsers cache headers along
+// with the body and serve the pair as a unit, so an old cached
+// response can keep force-downloading for as long as the previous
+// Cache-Control allowed, regardless of what the server returns now.
+//
+// v2 shipped when we fixed Content-Disposition: attachment →
+// inline (PDF preview force-downloading in Chrome/Firefox).
+const PREVIEW_CACHE_BUST = "v2";
+
 function OfficePreview({
   attachment,
   rawSrc,
@@ -957,7 +969,7 @@ function OfficePreview({
   rawSrc: string;
 }) {
   const mode = officeMode(attachment.media_type);
-  const previewSrc = `/api/admin/confluence/attachments/${attachment.attachment_id}/preview`;
+  const previewSrc = `/api/admin/confluence/attachments/${attachment.attachment_id}/preview?${PREVIEW_CACHE_BUST}`;
 
   if (mode === "unsupported") {
     return (

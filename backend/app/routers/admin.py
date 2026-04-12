@@ -158,14 +158,28 @@ def _pdf_inline_headers(title: str) -> dict[str, str]:
     disposition is `inline` because this endpoint feeds an iframe's
     built-in PDF viewer; `attachment` would force Chrome / Firefox to
     download the file instead of rendering it, which is what FastAPI's
-    plain FileResponse(filename=...) does by default (that's the bug
-    we're fixing here). Cache-Control immutable per FR-17.
+    plain FileResponse(filename=...) does by default.
+
+    NOTE on Cache-Control: we deliberately AVOID the `immutable`
+    directive even though the PDF body itself is stable (keyed by
+    attachment_id). `immutable` locks the ENTIRE cached response —
+    headers AND body — for the full max-age window with zero chance
+    of revalidation. An earlier version of this function used
+    `max-age=31536000, immutable` and it trapped every user who had
+    ever hit the endpoint while it (incorrectly) returned
+    Content-Disposition: attachment: Chrome silently served the stale
+    cached response for 1 year with no way to recover short of a
+    manual hard-reload. Lesson learned: never use `immutable` on a
+    response whose headers might be part of the bug you're debugging.
+    Now: 1-hour freshness + must-revalidate. Starlette attaches an
+    auto-generated ETag to FileResponse, so repeat hits within or
+    after the window still get 304s — still fast, not trap-prone.
     """
     from urllib.parse import quote
     stem = Path(title).stem or "preview"
     encoded = quote(f"{stem}.pdf")
     return {
-        "Cache-Control": "public, max-age=31536000, immutable",
+        "Cache-Control": "public, max-age=3600, must-revalidate",
         "Content-Disposition": f"inline; filename*=utf-8''{encoded}",
     }
 
