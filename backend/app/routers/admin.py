@@ -685,7 +685,9 @@ async def list_pages(
                        PARTITION BY g_project
                        ORDER BY group_att DESC, g_app ASC
                    ) AS project_app_rank,
-                   COUNT(DISTINCT g_app) OVER (
+                   -- rn=1 already deduplicates to one row per g_app,
+                   -- so COUNT(*) = count of distinct apps in this project.
+                   COUNT(*) OVER (
                        PARTITION BY g_project
                    ) AS project_app_total
             FROM grouped g
