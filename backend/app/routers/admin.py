@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from app.models.schemas import ApiResponse
 from app.services import converter_client, pg_client
@@ -148,6 +148,26 @@ def _preview_error(status: int, error_code: str, detail: str = "") -> JSONRespon
         status_code=status,
         content={"error": error_code, "detail": detail},
     )
+
+
+def _pdf_inline_headers(title: str) -> dict[str, str]:
+    """HTTP headers for serving a converted PDF preview.
+
+    Uses RFC 5987 encoding for the filename so non-ASCII titles (the
+    common case — many PPT titles are Chinese) survive intact. The
+    disposition is `inline` because this endpoint feeds an iframe's
+    built-in PDF viewer; `attachment` would force Chrome / Firefox to
+    download the file instead of rendering it, which is what FastAPI's
+    plain FileResponse(filename=...) does by default (that's the bug
+    we're fixing here). Cache-Control immutable per FR-17.
+    """
+    from urllib.parse import quote
+    stem = Path(title).stem or "preview"
+    encoded = quote(f"{stem}.pdf")
+    return {
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "Content-Disposition": f"inline; filename*=utf-8''{encoded}",
+    }
 
 
 # Backup / tmp attachment noise pattern — shared by summary and list endpoints.
@@ -1701,8 +1721,7 @@ async def preview_attachment(attachment_id: str):
         return FileResponse(
             str(pdf_path),
             media_type="application/pdf",
-            filename=f"{Path(title).stem}.pdf",
-            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+            headers=_pdf_inline_headers(title),
         )
 
     # Cache miss — call the converter. We load the source bytes into
@@ -1760,17 +1779,15 @@ async def preview_attachment(attachment_id: str):
             return FileResponse(
                 str(pdf_path),
                 media_type="application/pdf",
-                filename=f"{Path(title).stem}.pdf",
-                headers={"Cache-Control": "public, max-age=31536000, immutable"},
+                headers=_pdf_inline_headers(title),
             )
         # Race winner hasn't materialized the final file yet — return
         # our bytes directly, unpersisted. Next request will populate
         # the cache properly.
-        from fastapi.responses import Response as _Response
-        return _Response(
+        return Response(
             content=pdf_bytes,
             media_type="application/pdf",
-            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+            headers=_pdf_inline_headers(title),
         )
     except OSError as exc:
         # Disk full, permission denied, etc. We still have the bytes —
@@ -1784,16 +1801,14 @@ async def preview_attachment(attachment_id: str):
             tmp_path.unlink(missing_ok=True)
         except OSError:
             pass
-        from fastapi.responses import Response as _Response
-        return _Response(
+        return Response(
             content=pdf_bytes,
             media_type="application/pdf",
-            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+            headers=_pdf_inline_headers(title),
         )
 
     return FileResponse(
         str(pdf_path),
         media_type="application/pdf",
-        filename=f"{Path(title).stem}.pdf",
-        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        headers=_pdf_inline_headers(title),
     )

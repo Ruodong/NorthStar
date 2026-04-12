@@ -257,6 +257,55 @@ async def test_preview_concurrent_no_corruption(api: httpx.AsyncClient, small_pp
 
 
 # ---------------------------------------------------------------------------
+# Regression: Content-Disposition must be "inline" for PDF preview
+#
+# Chrome/Firefox force-download any response with Content-Disposition:
+# attachment, even when loaded inside an <iframe>. FastAPI's plain
+# FileResponse(filename=...) defaults to attachment, which makes the
+# whole preview feature useless — the iframe stays blank and the file
+# downloads instead. Must be "inline" for the browser's built-in PDF
+# viewer to render it in place.
+#
+# XLSX keeps the default attachment disposition because SheetJS loads
+# the XLSX via fetch() (Content-Disposition is irrelevant there), and
+# if the user opens the URL in a new tab we want a clean download —
+# browsers can't natively render XLSX inline anyway.
+# ---------------------------------------------------------------------------
+
+async def test_preview_pptx_disposition_inline(api: httpx.AsyncClient, small_pptx):
+    """Spec FR-19..FR-22. PDF preview response must carry
+    Content-Disposition: inline so the iframe renders it instead of
+    downloading. Regression for the blank-preview / auto-download bug."""
+    att_id = small_pptx["attachment_id"]
+    resp = await api.get(
+        f"/api/admin/confluence/attachments/{att_id}/preview",
+        timeout=130.0,
+    )
+    assert resp.status_code == 200
+    disp = resp.headers.get("content-disposition", "")
+    assert disp.lower().startswith("inline"), (
+        f"expected Content-Disposition: inline, got {disp!r}"
+    )
+    # Filename is still useful for the PDF viewer's own Download button.
+    assert "filename" in disp.lower(), f"expected filename in disposition, got {disp!r}"
+
+
+async def test_preview_xlsx_disposition_attachment(api: httpx.AsyncClient, any_xlsx):
+    """XLSX keeps attachment disposition since browsers can't render
+    it inline and SheetJS uses fetch() (which ignores the header)."""
+    att_id = any_xlsx["attachment_id"]
+    resp = await api.get(f"/api/admin/confluence/attachments/{att_id}/preview")
+    assert resp.status_code == 200
+    disp = resp.headers.get("content-disposition", "")
+    # Passthrough retains whatever FastAPI's FileResponse defaulted to,
+    # which is 'attachment'. Accept either that or unset (older
+    # Starlettes), but not 'inline'.
+    assert not disp.lower().startswith("inline"), (
+        f"XLSX should not be inline (no native browser renderer), got {disp!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Regression: HEAD must return the same status as GET (not 405)
 #
 # The frontend OfficePdfPreview component uses HEAD to probe the endpoint
