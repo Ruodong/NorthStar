@@ -893,8 +893,13 @@ def _parse_app_arch(root: ET.Element) -> dict:
         if cell.get("edge", "0") == "1":
             continue
         value = cell.get("value", "") or ""
-        if value.strip():
-            # Cell has text — not an anonymous frame
+        # Strip HTML tags before deciding "has text" — many drawio
+        # cells contain "<div><br/></div>" which is visually empty
+        # but passes a bare `.strip()` check, causing the frame
+        # detection to skip real containers. (A002530 case.)
+        value_text = _clean_html(value).strip() if value else ""
+        if value_text:
+            # Cell has real visible text — not an anonymous frame
             continue
         style = cell.get("style", "") or ""
         if "edgeLabel" in style:
@@ -902,9 +907,21 @@ def _parse_app_arch(root: ET.Element) -> dict:
         fill = _get_fill_color(style)
         if not fill or fill.lower() in ("none",):
             continue
-        # Only treat legend-colored frames as containers. Custom colors
-        # (borders, unrelated decorations) are skipped.
-        if fill.lower() not in LEGEND_FILL_COLORS and fill.lower() not in FILL_COLOR_MAP:
+        # Accept frames with either (a) a known status color from the
+        # legend/fallback map, or (b) white/near-white fills. White
+        # containers are extremely common in Lenovo templates — the
+        # architect draws a white rectangle, drops a text label at the
+        # top with the app name + A-id, and puts coloured sub-modules
+        # inside. Without accepting white frames here, the label cell
+        # never gets promoted and the container merge pass never runs,
+        # so the app's status stays Unknown even though its children
+        # have clear Keep/Change/New signals. (Fix for A002530 case.)
+        _WHITE_FILLS = {"#ffffff", "#fff", "#fefefe", "#fdfdfd"}
+        fill_lower = fill.lower()
+        is_known_color = fill_lower in FILL_COLOR_MAP
+        is_legend_color = fill_lower in LEGEND_FILL_COLORS
+        is_white = fill_lower in _WHITE_FILLS
+        if not (is_known_color or is_legend_color or is_white):
             continue
         geom = cell.find("mxGeometry")
         if geom is None:
@@ -935,22 +952,39 @@ def _parse_app_arch(root: ET.Element) -> dict:
             # own container and shouldn't be overridden.
             if aw >= 300 or ah >= 200:
                 continue
-            # Find a frame whose bounds (a) contain the label cell and
-            # (b) have the label near the top edge (within 60 pixels).
+            # Find a frame whose bounds (a) contain the label cell (with
+            # tolerance for labels that sit slightly above the frame's
+            # top edge — a common pattern where architects drag the
+            # title text above the container rectangle) and (b) have
+            # the label near the top edge.
+            #
+            # Tolerance: label's top may be up to 30px above frame's
+            # top, label's left/right must be within the frame's x-range,
+            # and label's bottom must be within the frame's bottom edge.
+            _LABEL_Y_TOLERANCE = 30
             for fx, fy, fw, fh, fill in frame_rects:
-                if not (fx <= ax and fy <= ay and
-                        fx + fw >= ax + aw and fy + fh >= ay + ah):
+                if not (fx <= ax and
+                        fy - _LABEL_Y_TOLERANCE <= ay and
+                        fx + fw >= ax + aw and
+                        fy + fh >= ay + ah):
                     continue
                 if ay - fy > 60:
-                    # Label is not near the top — likely coincidental
+                    # Label is way below the top — likely coincidental
                     # geometric containment, don't promote
                     continue
-                # Promote: label now reports the frame's geometry + fill.
+                # Promote: label now reports the frame's geometry so the
+                # containment merge pass treats it as the container.
                 app["_geom"] = (fx, fy, fw, fh)
-                app["fill_color"] = fill
-                app["application_status"] = _fill_to_status(
-                    fill, legend_colors
-                )
+                # Only inherit the frame's fill if it carries a real
+                # status colour. White / near-white frames are neutral
+                # containers — their status should come from the rollup
+                # of their children's colours, not from the frame's own
+                # (non-semantic) fill.
+                if fill and fill.lower() not in _WHITE_FILLS:
+                    app["fill_color"] = fill
+                    app["application_status"] = _fill_to_status(
+                        fill, legend_colors
+                    )
                 break
 
     # --- Merge child apps into parent containers ---
@@ -1008,6 +1042,22 @@ def _parse_app_arch(root: ET.Element) -> dict:
                     parent_app["application_status"] = "Keep"
                 # Otherwise leave as Unknown (shouldn't normally happen)
 
+    # Build a remap table: merged child cell_id → parent container
+    # cell_id, so edges connecting to merged children are re-pointed
+    # to the parent container instead of being silently dropped.
+    merged_child_to_parent: dict[str, str] = {}
+    for parent_app in applications:
+        px, py, pw, ph = parent_app.get("_geom", (0, 0, 0, 0))
+        if pw < 150 or ph < 100:
+            continue
+        for child_app in applications:
+            if child_app is parent_app:
+                continue
+            if child_app["cell_id"] in merged_ids:
+                cx, cy, cw, ch = child_app.get("_geom", (0, 0, 0, 0))
+                if (cx >= px and cy >= py and cx + cw <= px + pw and cy + ch <= py + ph):
+                    merged_child_to_parent[child_app["cell_id"]] = parent_app["cell_id"]
+
     # Remove merged children from applications list
     if merged_ids:
         skipped_cell_ids.update(merged_ids)
@@ -1030,6 +1080,11 @@ def _parse_app_arch(root: ET.Element) -> dict:
         if aid:
             child_to_app[aid] = aid
             app_id_to_name[aid] = app.get("app_name", "")
+
+    # Remap merged children → parent container so edges that connect
+    # to a merged child cell are re-pointed to the parent app.
+    for child_cid, parent_cid in merged_child_to_parent.items():
+        child_to_app[child_cid] = parent_cid
 
     # For C4 <object> elements, the child <mxCell> id differs from the <object> id
     for obj in root.iter("object"):
@@ -1119,7 +1174,14 @@ def _parse_app_arch(root: ET.Element) -> dict:
         if clean_label and _is_legend(clean_label):
             continue
         # Skip interactions connecting to filtered cells (legend/role items)
-        if raw_source in skipped_cell_ids or raw_target in skipped_cell_ids:
+        # but NOT merged children — those get remapped to their parent
+        # container via merged_child_to_parent, which is already in
+        # child_to_app. Without this carve-out, every edge connecting
+        # to a sub-module inside a container would be silently dropped
+        # after the merge pass (A002530 regression).
+        if raw_source and raw_source in skipped_cell_ids and raw_source not in merged_child_to_parent:
+            continue
+        if raw_target and raw_target in skipped_cell_ids and raw_target not in merged_child_to_parent:
             continue
 
         # Resolve edge endpoints to application cell_ids and names
