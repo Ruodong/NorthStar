@@ -1710,59 +1710,73 @@ function ExtractedView({
   const totalStd = data.apps.filter((a) => a.standard_id).length;
   const totalInters = data.interactions.length;
 
-  return (
-    <div className="panel" style={{ padding: 0 }}>
-      <div
-        className="panel-title"
-        style={{
-          padding: "18px 18px 12px",
-          display: "flex",
-          gap: 16,
-          alignItems: "baseline",
-          justifyContent: "space-between",
-          flexWrap: "wrap",
-        }}
-      >
-        <span>Extracted from drawio diagrams</span>
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <SummaryChip
-            label="apps"
-            value={totalApps}
-            color="var(--text-muted)"
-          />
-          <SummaryChip label="A-id" value={totalStd} color="var(--accent)" />
-          <SummaryChip
-            label="edges"
-            value={totalInters}
-            color="var(--text-muted)"
-          />
-          <SummaryChip
-            label="files"
-            value={data.by_attachment.length}
-            color="var(--text-muted)"
-          />
-        </div>
-      </div>
+  const hasDrawio = data.by_attachment.length > 0;
 
-      {data.major_apps && data.major_apps.length > 0 && (
-        <MajorAppsSection majors={data.major_apps} />
+  return (
+    <div>
+      {/* Vision section first when it's the only content — no need to
+          scroll past an empty drawio panel to find "Run Vision". */}
+      {!hasDrawio && imageAttachments.length > 0 && (
+        <div className="panel" style={{ padding: 0 }}>
+          <VisionExtractSection images={imageAttachments} />
+        </div>
       )}
 
-      {data.by_attachment.map((f) => {
-        const apps = appsByAttachment.get(f.attachment_id) || [];
-        const inters = intersByAttachment.get(f.attachment_id) || [];
-        return (
-          <ExtractedFileCard
-            key={f.attachment_id}
-            file={f}
-            apps={apps}
-            interactions={inters}
-          />
-        );
-      })}
+      {hasDrawio && (
+        <div className="panel" style={{ padding: 0 }}>
+          <div
+            className="panel-title"
+            style={{
+              padding: "18px 18px 12px",
+              display: "flex",
+              gap: 16,
+              alignItems: "baseline",
+              justifyContent: "space-between",
+              flexWrap: "wrap",
+            }}
+          >
+            <span>Extracted from drawio diagrams</span>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <SummaryChip
+                label="apps"
+                value={totalApps}
+                color="var(--text-muted)"
+              />
+              <SummaryChip label="A-id" value={totalStd} color="var(--accent)" />
+              <SummaryChip
+                label="edges"
+                value={totalInters}
+                color="var(--text-muted)"
+              />
+              <SummaryChip
+                label="files"
+                value={data.by_attachment.length}
+                color="var(--text-muted)"
+              />
+            </div>
+          </div>
 
-      {imageAttachments.length > 0 && (
-        <VisionExtractSection images={imageAttachments} />
+          {data.major_apps && data.major_apps.length > 0 && (
+            <MajorAppsSection majors={data.major_apps} />
+          )}
+
+          {data.by_attachment.map((f) => {
+            const apps = appsByAttachment.get(f.attachment_id) || [];
+            const inters = intersByAttachment.get(f.attachment_id) || [];
+            return (
+              <ExtractedFileCard
+                key={f.attachment_id}
+                file={f}
+                apps={apps}
+                interactions={inters}
+              />
+            );
+          })}
+
+          {imageAttachments.length > 0 && (
+            <VisionExtractSection images={imageAttachments} />
+          )}
+        </div>
       )}
     </div>
   );
