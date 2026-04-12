@@ -508,6 +508,15 @@ export default function ConfluenceIndex() {
 
       {err && <div className="panel" style={{ borderColor: "#5b1f1f" }}>Error: {err}</div>}
 
+      <Pager
+        page={page}
+        maxPage={maxPage}
+        total={total}
+        pageSize={PAGE_SIZE}
+        loading={loading}
+        onPageChange={setPage}
+      />
+
       <div className="panel" style={{ padding: 0, overflow: "hidden" }}>
         <table>
           <thead>
