@@ -985,10 +985,82 @@ async def get_page(page_id: str) -> ApiResponse:
     )
 
 
+# Shared CTE for /extracted queries: combines page subtree (own/descendant)
+# with drawio_reference links (referenced). This is the single source of
+# truth for "which drawio attachments are relevant to this page" — used by
+# all four SQL queries in get_page_extracted().
+_EXTRACTED_SOURCES_CTE = """
+    WITH RECURSIVE subtree AS (
+        SELECT page_id, title, 0 AS lvl
+        FROM northstar.confluence_page
+        WHERE page_id = $1
+        UNION ALL
+        SELECT c.page_id, c.title, s.lvl + 1
+        FROM northstar.confluence_page c
+        JOIN subtree s ON c.parent_id = s.page_id
+        WHERE s.lvl < 5
+    ),
+    -- Pages that may embed drawio references (this page + direct children,
+    -- matching the Attachments tab scope from the detail endpoint)
+    incl AS (
+        SELECT page_id FROM northstar.confluence_page WHERE page_id = $1
+        UNION
+        SELECT page_id FROM northstar.confluence_page WHERE parent_id = $1
+    ),
+    -- Attachments reached via drawio_reference from any inclusion page
+    ref_att AS (
+        SELECT DISTINCT
+            sa.attachment_id,
+            sp.page_id   AS source_page_id,
+            sp.title     AS source_page_title
+        FROM incl
+        JOIN northstar.drawio_reference dr
+          ON dr.inclusion_page_id = incl.page_id
+        JOIN northstar.confluence_page sp
+          ON sp.page_id = dr.source_page_id
+        JOIN northstar.confluence_attachment sa
+          ON sa.page_id = dr.source_page_id
+         AND sa.file_kind = 'drawio'
+         AND sa.title NOT LIKE 'drawio-backup%%'
+         AND sa.title NOT LIKE '~%%'
+         AND (dr.diagram_name = ''
+              OR sa.title = dr.diagram_name
+              OR sa.title = dr.diagram_name || '.drawio')
+    ),
+    -- Unified source: own/descendant from subtree + referenced via drawio_reference
+    all_sources AS (
+        SELECT
+            att.attachment_id,
+            s.page_id  AS source_page_id,
+            s.title    AS source_page_title,
+            CASE WHEN s.lvl = 0 THEN 'own' ELSE 'descendant' END AS source_kind
+        FROM subtree s
+        JOIN northstar.confluence_attachment att ON att.page_id = s.page_id
+        WHERE att.file_kind = 'drawio'
+          AND att.title NOT LIKE 'drawio-backup%%'
+          AND att.title NOT LIKE '~%%'
+
+        UNION
+
+        SELECT
+            r.attachment_id,
+            r.source_page_id,
+            r.source_page_title,
+            'referenced' AS source_kind
+        FROM ref_att r
+        WHERE NOT EXISTS (
+            SELECT 1 FROM subtree s2
+            JOIN northstar.confluence_attachment att2 ON att2.page_id = s2.page_id
+            WHERE att2.attachment_id = r.attachment_id
+        )
+    )
+"""
+
+
 @router.get("/confluence/pages/{page_id}/extracted")
 async def get_page_extracted(page_id: str) -> ApiResponse:
-    """Return drawio parser output for every drawio attachment on this page
-    and its descendant pages.
+    """Return drawio parser output for every drawio attachment on this page,
+    its descendant pages, and cross-page referenced drawios (via drawio_reference).
 
     Spec: confluence-drawio-extract § 7. Reads from the confluence_diagram_app
     + confluence_diagram_interaction tables populated by
@@ -998,7 +1070,7 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
         {
             "apps": [{
                 attachment_id, attachment_title, source_page_id,
-                source_page_title, source_kind ('own'|'descendant'),
+                source_page_title, source_kind ('own'|'descendant'|'referenced'),
                 cell_id, app_name, standard_id, id_is_standard,
                 application_status, functions, cmdb_name (or null if not in
                 CMDB — the frontend will fall back to app_name)
@@ -1023,23 +1095,13 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
         raise HTTPException(status_code=404, detail=f"Page {page_id} not found")
 
     apps = await pg_client.fetch(
-        """
-        WITH RECURSIVE subtree AS (
-            SELECT page_id, title, 0 AS lvl
-            FROM northstar.confluence_page
-            WHERE page_id = $1
-            UNION ALL
-            SELECT c.page_id, c.title, s.lvl + 1
-            FROM northstar.confluence_page c
-            JOIN subtree s ON c.parent_id = s.page_id
-            WHERE s.lvl < 5
-        )
+        _EXTRACTED_SOURCES_CTE + """
         SELECT
             cda.attachment_id,
             att.title AS attachment_title,
-            s.page_id AS source_page_id,
-            s.title   AS source_page_title,
-            CASE WHEN s.lvl = 0 THEN 'own' ELSE 'descendant' END AS source_kind,
+            src.source_page_id,
+            src.source_page_title,
+            src.source_kind,
             cda.cell_id,
             cda.app_name,
             cda.standard_id,
@@ -1047,35 +1109,25 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
             cda.application_status,
             cda.functions,
             cda.fill_color,
-            -- Name-id reconciliation fields (spec: drawio-name-id-reconciliation)
             cda.resolved_app_id,
             cda.match_type,
             cda.name_similarity,
-            -- CMDB name looked up by the DRAWIO's original std_id — used by the
-            -- UI to render "CMDB: ECC" context when the drawio mis-IDed a cell
             ra_by_id.name AS cmdb_name_for_drawio_id,
-            -- CMDB name looked up by the RESOLVED id (could be same as
-            -- cmdb_name_for_drawio_id if match_type=direct, or different if
-            -- auto_corrected / fuzzy_by_name)
             ra_by_resolved.name AS cmdb_name_for_resolved,
-            -- Back-compat: cmdb_name = the resolved cmdb_name if we have one,
-            -- otherwise the drawio-id lookup. Existing UI code that only
-            -- reads this field still works.
             COALESCE(ra_by_resolved.name, ra_by_id.name) AS cmdb_name
-        FROM subtree s
-        JOIN northstar.confluence_attachment att ON att.page_id = s.page_id
-        JOIN northstar.confluence_diagram_app cda ON cda.attachment_id = att.attachment_id
+        FROM all_sources src
+        JOIN northstar.confluence_attachment att
+          ON att.attachment_id = src.attachment_id
+        JOIN northstar.confluence_diagram_app cda
+          ON cda.attachment_id = att.attachment_id
         LEFT JOIN northstar.ref_application ra_by_id
                ON ra_by_id.app_id = cda.standard_id
         LEFT JOIN northstar.ref_application ra_by_resolved
                ON ra_by_resolved.app_id = cda.resolved_app_id
-        WHERE att.file_kind = 'drawio'
-          AND att.title NOT LIKE 'drawio-backup%'
-          AND att.title NOT LIKE '~%'
         ORDER BY
-            s.lvl,
+            CASE src.source_kind
+                WHEN 'own' THEN 0 WHEN 'descendant' THEN 1 ELSE 2 END,
             att.title,
-            -- Standard-id apps first, then alphabetic by app_name
             CASE WHEN cda.standard_id IS NOT NULL THEN 0 ELSE 1 END,
             cda.app_name
         """,
@@ -1083,23 +1135,13 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
     )
 
     interactions = await pg_client.fetch(
-        """
-        WITH RECURSIVE subtree AS (
-            SELECT page_id, title, 0 AS lvl
-            FROM northstar.confluence_page
-            WHERE page_id = $1
-            UNION ALL
-            SELECT c.page_id, c.title, s.lvl + 1
-            FROM northstar.confluence_page c
-            JOIN subtree s ON c.parent_id = s.page_id
-            WHERE s.lvl < 5
-        )
+        _EXTRACTED_SOURCES_CTE + """
         SELECT
             cdi.attachment_id,
             att.title AS attachment_title,
-            s.page_id AS source_page_id,
-            s.title   AS source_page_title,
-            CASE WHEN s.lvl = 0 THEN 'own' ELSE 'descendant' END AS source_kind,
+            src.source_page_id,
+            src.source_page_title,
+            src.source_kind,
             cdi.edge_cell_id,
             cdi.source_cell_id,
             cdi.target_cell_id,
@@ -1107,13 +1149,6 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
             cdi.direction,
             cdi.interaction_status,
             cdi.business_object,
-            -- Resolve endpoint app_name + standard_id via the app table.
-            -- Also surface the CMDB canonical name for the resolved app
-            -- (post-reconciliation) so the UI can render names — not raw
-            -- A-ids — in the From/To columns. Priority:
-            --   1) CMDB name of the resolved app (auto-corrected id)
-            --   2) CMDB name of the drawio's own std_id
-            --   3) The raw drawio label (app_name)
             src_app.app_name        AS source_app_name,
             src_app.standard_id     AS source_standard_id,
             src_app.resolved_app_id AS source_resolved_id,
@@ -1126,8 +1161,9 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
             tgt_app.match_type      AS target_match_type,
             tgt_cmdb_res.name       AS target_cmdb_name_resolved,
             tgt_cmdb_orig.name      AS target_cmdb_name_orig
-        FROM subtree s
-        JOIN northstar.confluence_attachment att ON att.page_id = s.page_id
+        FROM all_sources src
+        JOIN northstar.confluence_attachment att
+          ON att.attachment_id = src.attachment_id
         JOIN northstar.confluence_diagram_interaction cdi
           ON cdi.attachment_id = att.attachment_id
         LEFT JOIN northstar.confluence_diagram_app src_app
@@ -1144,31 +1180,21 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
           ON tgt_cmdb_res.app_id = tgt_app.resolved_app_id
         LEFT JOIN northstar.ref_application tgt_cmdb_orig
           ON tgt_cmdb_orig.app_id = tgt_app.standard_id
-        WHERE att.file_kind = 'drawio'
-          AND att.title NOT LIKE 'drawio-backup%'
-          AND att.title NOT LIKE '~%'
-        ORDER BY s.lvl, att.title, cdi.edge_cell_id
+        ORDER BY
+            CASE src.source_kind
+                WHEN 'own' THEN 0 WHEN 'descendant' THEN 1 ELSE 2 END,
+            att.title, cdi.edge_cell_id
         """,
         page_id,
     )
 
     by_attachment = await pg_client.fetch(
-        """
-        WITH RECURSIVE subtree AS (
-            SELECT page_id, title, 0 AS lvl
-            FROM northstar.confluence_page
-            WHERE page_id = $1
-            UNION ALL
-            SELECT c.page_id, c.title, s.lvl + 1
-            FROM northstar.confluence_page c
-            JOIN subtree s ON c.parent_id = s.page_id
-            WHERE s.lvl < 5
-        )
+        _EXTRACTED_SOURCES_CTE + """
         SELECT
             att.attachment_id,
             att.title AS attachment_title,
-            s.title   AS source_page_title,
-            CASE WHEN s.lvl = 0 THEN 'own' ELSE 'descendant' END AS source_kind,
+            src.source_page_title,
+            src.source_kind,
             (SELECT count(*) FROM northstar.confluence_diagram_app cda
                WHERE cda.attachment_id = att.attachment_id) AS app_count,
             (SELECT count(*) FROM northstar.confluence_diagram_app cda
@@ -1176,16 +1202,17 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
                  AND cda.standard_id IS NOT NULL) AS app_with_std_id_count,
             (SELECT count(*) FROM northstar.confluence_diagram_interaction cdi
                WHERE cdi.attachment_id = att.attachment_id) AS interaction_count
-        FROM subtree s
-        JOIN northstar.confluence_attachment att ON att.page_id = s.page_id
-        WHERE att.file_kind = 'drawio'
-          AND att.title NOT LIKE 'drawio-backup%'
-          AND att.title NOT LIKE '~%'
-          AND EXISTS (
-              SELECT 1 FROM northstar.confluence_diagram_app cda
-              WHERE cda.attachment_id = att.attachment_id
-          )
-        ORDER BY s.lvl, att.title
+        FROM all_sources src
+        JOIN northstar.confluence_attachment att
+          ON att.attachment_id = src.attachment_id
+        WHERE EXISTS (
+            SELECT 1 FROM northstar.confluence_diagram_app cda
+            WHERE cda.attachment_id = att.attachment_id
+        )
+        ORDER BY
+            CASE src.source_kind
+                WHEN 'own' THEN 0 WHEN 'descendant' THEN 1 ELSE 2 END,
+            att.title
         """,
         page_id,
     )
@@ -1194,17 +1221,7 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
     # Aggregates across the whole subtree, dedupes by effective app_id,
     # sorts by Change > New > Sunset > occurrence_count > cmdb name.
     major_apps = await pg_client.fetch(
-        """
-        WITH RECURSIVE subtree AS (
-            SELECT page_id, title, 0 AS lvl
-            FROM northstar.confluence_page
-            WHERE page_id = $1
-            UNION ALL
-            SELECT c.page_id, c.title, s.lvl + 1
-            FROM northstar.confluence_page c
-            JOIN subtree s ON c.parent_id = s.page_id
-            WHERE s.lvl < 5
-        ),
+        _EXTRACTED_SOURCES_CTE + """,
         raw_majors AS (
             SELECT
                 COALESCE(cda.resolved_app_id, cda.standard_id) AS app_id,
@@ -1212,16 +1229,14 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
                 cda.application_status,
                 att.attachment_id,
                 att.title AS attachment_title,
-                s.title   AS source_page_title
-            FROM subtree s
-            JOIN northstar.confluence_attachment att ON att.page_id = s.page_id
+                src.source_page_title
+            FROM all_sources src
+            JOIN northstar.confluence_attachment att
+              ON att.attachment_id = src.attachment_id
             JOIN northstar.confluence_diagram_app cda
               ON cda.attachment_id = att.attachment_id
             WHERE cda.application_status IN ('New', 'Change', 'Sunset')
               AND COALESCE(cda.resolved_app_id, cda.standard_id) IS NOT NULL
-              AND att.file_kind = 'drawio'
-              AND att.title NOT LIKE 'drawio-backup%'
-              AND att.title NOT LIKE '~%'
         ),
         collapsed AS (
             -- Collapse all rows for the same effective app_id into one,

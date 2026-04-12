@@ -105,7 +105,7 @@ interface ExtractedApp {
   attachment_title: string;
   source_page_id: string;
   source_page_title: string;
-  source_kind: "own" | "descendant";
+  source_kind: "own" | "descendant" | "referenced";
   cell_id: string;
   app_name: string;
   standard_id: string | null;
@@ -135,7 +135,7 @@ interface ExtractedInteraction {
   attachment_title: string;
   source_page_id: string;
   source_page_title: string;
-  source_kind: "own" | "descendant";
+  source_kind: "own" | "descendant" | "referenced";
   edge_cell_id: string;
   source_cell_id: string | null;
   target_cell_id: string | null;
@@ -161,7 +161,7 @@ interface ExtractedByAttachment {
   attachment_id: string;
   attachment_title: string;
   source_page_title: string;
-  source_kind: "own" | "descendant";
+  source_kind: "own" | "descendant" | "referenced";
   app_count: number;
   app_with_std_id_count: number;
   interaction_count: number;
@@ -2578,7 +2578,9 @@ function ExtractedFileCard({
               marginTop: 2,
             }}
           >
-            {file.source_kind === "descendant"
+            {file.source_kind === "referenced"
+              ? `ref: ${file.source_page_title}`
+              : file.source_kind === "descendant"
               ? `from child: ${file.source_page_title}`
               : "this page"}
           </div>
