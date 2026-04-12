@@ -58,11 +58,18 @@ interface InboundEdge {
   protocol: string;
 }
 
+interface MajorApp {
+  app_id: string;
+  app_name: string;
+  status: string;
+}
+
 interface Investment {
   project_id: string;
   project_name: string;
   fiscal_year: string;
   root_page_id: string | null;
+  major_apps: MajorApp[];
 }
 
 interface DiagramRef {
@@ -1096,14 +1103,17 @@ function InvestmentsTab({ investments }: { investments: Investment[] }) {
       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
         <thead>
           <tr style={{ color: "var(--text-dim)", textTransform: "uppercase", fontSize: 10 }}>
-            <th style={{ textAlign: "left", padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
+            <th style={{ textAlign: "left", padding: "8px 12px", borderBottom: "1px solid var(--border)", width: 110 }}>
               Project ID
             </th>
             <th style={{ textAlign: "left", padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
               Project Name
             </th>
             <th style={{ textAlign: "left", padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
-              Fiscal Year
+              Major Applications
+            </th>
+            <th style={{ textAlign: "left", padding: "8px 12px", borderBottom: "1px solid var(--border)", width: 80 }}>
+              FY
             </th>
           </tr>
         </thead>
@@ -1146,6 +1156,43 @@ function InvestmentsTab({ investments }: { investments: Investment[] }) {
                   <span style={{ color: "var(--text-muted)" }}>
                     {inv.project_name || "—"}
                   </span>
+                )}
+              </td>
+              <td
+                style={{
+                  padding: "8px 12px",
+                  borderBottom: "1px solid var(--border)",
+                  fontSize: 11,
+                  lineHeight: 1.8,
+                }}
+              >
+                {inv.major_apps && inv.major_apps.length > 0 ? (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                    {inv.major_apps.map((ma, mi) => (
+                      <Link
+                        key={`${ma.app_id}-${mi}`}
+                        href={`/apps/${ma.app_id}`}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          padding: "1px 8px",
+                          borderRadius: "var(--radius-sm)",
+                          border: `1px solid ${STATUS_COLORS[ma.status] || "var(--border)"}`,
+                          color: STATUS_COLORS[ma.status] || "var(--text-muted)",
+                          textDecoration: "none",
+                          fontSize: 10,
+                          whiteSpace: "nowrap",
+                        }}
+                        title={`${ma.app_id} — ${ma.app_name} (${ma.status})`}
+                      >
+                        <span style={{ fontWeight: 600 }}>{ma.status?.[0]}</span>
+                        {ma.app_name}
+                      </Link>
+                    ))}
+                  </div>
+                ) : (
+                  <span style={{ color: "var(--text-dim)" }}>—</span>
                 )}
               </td>
               <td

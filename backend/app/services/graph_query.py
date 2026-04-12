@@ -260,8 +260,8 @@ async def _fetch_investments_from_pg(app_id: str) -> list[dict]:
     """Query Postgres for projects that reference this app via drawio diagrams.
 
     Returns one row per project_id with {project_id, project_name, fiscal_year,
-    root_page_id}.  project_name comes from ref_project.  root_page_id is the
-    depth-1 Confluence page for the project (used for the detail link).
+    root_page_id, major_apps[]}.  major_apps lists the Change/New/Sunset
+    applications extracted from that project's diagrams (CMDB-linked only).
     """
     sql = """
     SELECT DISTINCT ON (cp.project_id)
@@ -282,10 +282,53 @@ async def _fetch_investments_from_pg(app_id: str) -> list[dict]:
     ORDER BY cp.project_id, cp.fiscal_year DESC
     """
     rows = await pg_client.fetch(sql, app_id)
-    # Re-sort by fiscal_year DESC for display
     result = [dict(r) for r in rows]
     result.sort(key=lambda r: (r.get("fiscal_year") or "", r.get("project_id") or ""), reverse=True)
+
+    # Fetch major apps (Change/New/Sunset, CMDB-linked) for all projects
+    project_ids = [r["project_id"] for r in result]
+    if project_ids:
+        major = await _fetch_major_apps_by_projects(project_ids)
+        for r in result:
+            r["major_apps"] = major.get(r["project_id"], [])
+    else:
+        for r in result:
+            r["major_apps"] = []
+
     return result
+
+
+async def _fetch_major_apps_by_projects(project_ids: list[str]) -> dict[str, list[dict]]:
+    """For a list of project_ids, return their major apps (Change/New/Sunset).
+
+    Only includes CMDB-linked apps (resolved_app_id like 'A%') to filter
+    out noise entries like region names or diagram labels.
+    Returns {project_id: [{app_id, app_name, status}, ...]}.
+    """
+    sql = """
+    SELECT DISTINCT
+        cp.project_id,
+        COALESCE(cda.resolved_app_id, cda.standard_id) AS app_id,
+        cda.app_name,
+        cda.application_status AS status
+    FROM northstar.confluence_diagram_app cda
+    JOIN northstar.confluence_attachment ca ON ca.attachment_id = cda.attachment_id
+    JOIN northstar.confluence_page cp ON cp.page_id = ca.page_id
+    WHERE cp.project_id = ANY($1)
+      AND cda.application_status IN ('Change', 'New', 'Sunset')
+      AND COALESCE(cda.resolved_app_id, cda.standard_id) ~ '^A\\d'
+    ORDER BY cp.project_id, cda.application_status, cda.app_name
+    """
+    rows = await pg_client.fetch(sql, project_ids)
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        pid = r["project_id"]
+        out.setdefault(pid, []).append({
+            "app_id": r["app_id"],
+            "app_name": r["app_name"],
+            "status": r["status"],
+        })
+    return out
 
 
 async def get_neighbors(app_id: str, depth: int = 1) -> dict:
