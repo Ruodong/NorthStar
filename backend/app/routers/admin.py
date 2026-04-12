@@ -1890,7 +1890,7 @@ async def serve_attachment(attachment_id: str):
         return FileResponse(
             str(full_path),
             media_type=media_type,
-            content_disposition_type="inline",
+            headers={"Content-Disposition": "inline"},
         )
     return FileResponse(str(full_path), media_type=media_type, filename=row["title"])
 

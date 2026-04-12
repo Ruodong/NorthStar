@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from app.models.schemas import ApiResponse
-from app.services import graph_query
+from app.services import confluence_search, graph_query, pg_client
 
 router = APIRouter(prefix="/api/graph", tags=["graph"])
 
@@ -53,6 +53,36 @@ async def get_impact(
         raise HTTPException(
             status_code=404, detail=f"Application {app_id} not found"
         )
+    return ApiResponse(data=data)
+
+
+@router.get("/nodes/{app_id}/knowledge")
+async def get_knowledge_base(app_id: str) -> ApiResponse:
+    """Cross-space Confluence knowledge base for an application.
+
+    Looks up the app name from PG (CMDB or Neo4j), then queries Confluence
+    CQL for pages whose title mentions that name outside the ARD space.
+    Results are grouped by space and cached for 5 minutes.
+    """
+    # Resolve app_id → app_name from PG (CMDB first, then Neo4j app node)
+    row = await pg_client.fetchrow(
+        "SELECT app_name FROM northstar.ref_application WHERE app_id = $1",
+        app_id,
+    )
+    if row:
+        app_name = row["app_name"]
+    else:
+        # Non-CMDB app — try Neo4j node name via graph_query
+        app_data = await graph_query.get_application(app_id)
+        if app_data and app_data.get("app"):
+            app_name = app_data["app"].get("name", "")
+        else:
+            raise HTTPException(status_code=404, detail=f"Application {app_id} not found")
+
+    if not app_name:
+        return ApiResponse(data={"total": 0, "app_name": "", "spaces": []})
+
+    data = await confluence_search.search_knowledge_base(app_name)
     return ApiResponse(data=data)
 
 

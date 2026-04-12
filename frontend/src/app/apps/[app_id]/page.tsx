@@ -149,7 +149,7 @@ interface ImpactResponse {
   fan_out_cap: number;
 }
 
-type Tab = "overview" | "integrations" | "investments" | "diagrams" | "impact" | "confluence";
+type Tab = "overview" | "integrations" | "investments" | "diagrams" | "impact" | "confluence" | "knowledge";
 
 const STATUS_COLORS: Record<string, string> = {
   Keep: "var(--status-keep)",
@@ -317,6 +317,9 @@ export default function AppDetailPage({ params }: { params: { app_id: string } }
         <TabButton current={tab} value="confluence" onClick={setTab} count={reviewCount}>
           Confluence
         </TabButton>
+        <TabButton current={tab} value="knowledge" onClick={setTab}>
+          Knowledge Base
+        </TabButton>
       </div>
 
       {/* ---------------- Tab content ---------------- */}
@@ -336,6 +339,7 @@ export default function AppDetailPage({ params }: { params: { app_id: string } }
       {tab === "investments" && <InvestmentsTab investments={investments} />}
       {tab === "diagrams" && <DiagramsTab diagrams={diagrams} />}
       {tab === "confluence" && <ConfluenceTab pages={review_pages || []} />}
+      {tab === "knowledge" && <KnowledgeBaseTab appId={app.app_id} />}
     </div>
   );
 }
@@ -1324,5 +1328,284 @@ function ConfluenceTab({ pages }: { pages: ReviewPage[] }) {
         </Panel>
       ))}
     </div>
+  );
+}
+
+// ---------------- Knowledge Base (Cross-Space CQL) ----------------
+interface KBPage {
+  page_id: string;
+  title: string;
+  last_modified: string;
+  updater: string;
+  page_url: string;
+}
+
+interface KBSpace {
+  space_key: string;
+  space_name: string;
+  page_count: number;
+  pages: KBPage[];
+}
+
+interface KBResponse {
+  total: number;
+  app_name: string;
+  spaces: KBSpace[];
+}
+
+function KnowledgeBaseTab({ appId }: { appId: string }) {
+  const [data, setData] = useState<KBResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState("");
+  const [showAll, setShowAll] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setErr(null);
+      try {
+        const res = await fetch(
+          `/api/graph/nodes/${encodeURIComponent(appId)}/knowledge`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) throw new Error(`${res.status}`);
+        const j = await res.json();
+        if (!j.success) throw new Error(j.error || "API error");
+        const kb = j.data as KBResponse;
+        if (!cancelled) {
+          setData(kb);
+          // Auto-expand top 2 spaces
+          const topKeys = kb.spaces.slice(0, 2).map((s) => s.space_key);
+          setExpanded(new Set(topKeys));
+        }
+      } catch (e) {
+        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [appId]);
+
+  if (loading) {
+    return (
+      <Panel title="Knowledge Base">
+        <div style={{ color: "var(--text-dim)", fontSize: 13, padding: 20, textAlign: "center" }}>
+          Searching Confluence...
+        </div>
+      </Panel>
+    );
+  }
+  if (err) {
+    return (
+      <Panel title="Knowledge Base">
+        <div style={{ color: "var(--error)", fontSize: 13 }}>Failed: {err}</div>
+      </Panel>
+    );
+  }
+  if (!data || data.total === 0) {
+    return (
+      <Panel title="Knowledge Base — Cross-Space References">
+        <EmptyState>No pages found mentioning this application in other Confluence spaces.</EmptyState>
+      </Panel>
+    );
+  }
+
+  const lowerFilter = filter.toLowerCase();
+  const filtered = data.spaces
+    .map((s) => ({
+      ...s,
+      pages: s.pages.filter(
+        (p) =>
+          !lowerFilter ||
+          p.title.toLowerCase().includes(lowerFilter) ||
+          p.updater.toLowerCase().includes(lowerFilter)
+      ),
+    }))
+    .filter((s) => s.pages.length > 0);
+
+  const INITIAL_SPACES = 5;
+  const visible = showAll ? filtered : filtered.slice(0, INITIAL_SPACES);
+  const remaining = filtered.length - INITIAL_SPACES;
+
+  const toggle = (key: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const totalSpaces = data.spaces.length;
+
+  return (
+    <Panel
+      title={`Knowledge Base — ${data.total} pages across ${totalSpaces} spaces mention "${data.app_name}"`}
+    >
+      {/* Filter bar */}
+      <div style={{ marginBottom: 16, display: "flex", gap: 12, alignItems: "center" }}>
+        <input
+          type="text"
+          placeholder="Filter by title or author..."
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          style={{
+            flex: 1,
+            maxWidth: 360,
+            padding: "6px 12px",
+            fontSize: 12,
+            background: "var(--bg-elevated)",
+            border: "1px solid var(--border-strong)",
+            borderRadius: "var(--radius-sm)",
+            color: "var(--text)",
+            outline: "none",
+          }}
+        />
+        <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+          {filtered.reduce((a, s) => a + s.pages.length, 0)} results
+        </span>
+      </div>
+
+      {/* Space groups */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {visible.map((space) => {
+          const isOpen = expanded.has(space.space_key);
+          return (
+            <div
+              key={space.space_key}
+              style={{
+                border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)",
+                overflow: "hidden",
+              }}
+            >
+              {/* Space header — clickable */}
+              <div
+                onClick={() => toggle(space.space_key)}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "10px 14px",
+                  background: "var(--bg-elevated)",
+                  cursor: "pointer",
+                  userSelect: "none",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 11, color: "var(--text-dim)", width: 12 }}>
+                    {isOpen ? "▾" : "▸"}
+                  </span>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>
+                    {space.space_name}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: 10,
+                      fontFamily: "var(--font-mono)",
+                      color: "var(--text-dim)",
+                      padding: "1px 6px",
+                      background: "var(--surface)",
+                      borderRadius: "var(--radius-sm)",
+                    }}
+                  >
+                    {space.space_key}
+                  </span>
+                </div>
+                <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+                  {space.pages.length} {space.pages.length === 1 ? "page" : "pages"}
+                </span>
+              </div>
+
+              {/* Pages list */}
+              {isOpen && (
+                <div>
+                  {space.pages.map((pg) => (
+                    <div
+                      key={pg.page_id}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        padding: "8px 14px 8px 34px",
+                        borderTop: "1px solid var(--border)",
+                        fontSize: 12,
+                      }}
+                    >
+                      <a
+                        href={pg.page_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          color: "var(--accent)",
+                          textDecoration: "none",
+                          flex: 1,
+                          marginRight: 16,
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                        title={pg.title}
+                      >
+                        {pg.title}
+                        <span style={{ fontSize: 10, marginLeft: 4, opacity: 0.5 }}>↗</span>
+                      </a>
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: 16,
+                          flexShrink: 0,
+                          color: "var(--text-dim)",
+                          fontSize: 11,
+                        }}
+                      >
+                        <span style={{ fontFamily: "var(--font-mono)", width: 80 }}>
+                          {pg.last_modified}
+                        </span>
+                        <span
+                          style={{
+                            width: 120,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                          title={pg.updater}
+                        >
+                          {pg.updater}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Load more */}
+      {!showAll && remaining > 0 && (
+        <div style={{ textAlign: "center", marginTop: 16 }}>
+          <button
+            onClick={() => setShowAll(true)}
+            style={{
+              background: "var(--bg-elevated)",
+              border: "1px solid var(--border-strong)",
+              borderRadius: "var(--radius-sm)",
+              color: "var(--text)",
+              padding: "8px 24px",
+              fontSize: 12,
+              cursor: "pointer",
+            }}
+          >
+            Load more spaces ({remaining} remaining)
+          </button>
+        </div>
+      )}
+    </Panel>
   );
 }
