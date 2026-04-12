@@ -183,6 +183,47 @@ interface ExtractedData {
   major_apps: ExtractedMajorApp[];
 }
 
+// Image vision extract (Phase 1 PoC) — the `/vision-extract` endpoint
+// returns this shape. Architects click a per-image button to trigger
+// the call. Spec: .specify/features/image-vision-extract/spec.md FR-16
+interface VisionExtractResponse {
+  diagram_type: "app_arch" | "tech_arch" | "unknown";
+  applications: {
+    app_id: string;
+    id_is_standard: boolean;
+    standard_id: string;
+    name: string;
+    functions: string[];
+    application_status: string;
+    source: "vision";
+  }[];
+  interactions: {
+    source_app_id: string;
+    target_app_id: string;
+    interaction_type: string;
+    direction: string;
+    business_object: string;
+    interface_status: string;
+    status_inferred_from_endpoints: boolean;
+    source: "vision";
+  }[];
+  tech_components: {
+    name: string;
+    component_type: string;
+    layer: string;
+    deploy_mode: string;
+    runtime: string;
+    source: "vision";
+  }[];
+  meta: {
+    model: string;
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    wall_ms: number;
+  };
+}
+
 const KIND_LABEL: Record<string, string> = {
   drawio: "draw.io",
   image: "Image",
@@ -511,7 +552,12 @@ export default function ConfluencePageDetail() {
         </div>
       )}
 
-      {tab === "extracted" && <ExtractedView data={extracted} />}
+      {tab === "extracted" && (
+        <ExtractedView
+          data={extracted}
+          imageAttachments={previewable.filter((a) => a.file_kind === "image")}
+        />
+      )}
 
       {tab === "hierarchy" && (
         <HierarchyView
@@ -1609,7 +1655,13 @@ function CountChip({
 // by source drawio file. Apps with A-ids link into the CMDB application detail
 // page when available.
 // ---------------------------------------------------------------------------
-function ExtractedView({ data }: { data: ExtractedData | null }) {
+function ExtractedView({
+  data,
+  imageAttachments,
+}: {
+  data: ExtractedData | null;
+  imageAttachments: Attachment[];
+}) {
   if (!data) {
     return (
       <div className="empty" style={{ padding: 40 }}>
@@ -1617,7 +1669,14 @@ function ExtractedView({ data }: { data: ExtractedData | null }) {
       </div>
     );
   }
-  if (data.apps.length === 0 && data.by_attachment.length === 0) {
+  // If neither drawio extracts nor images exist, show the empty state.
+  // If there ARE images (but no drawio), still render so the vision
+  // section shows up as a runnable PoC.
+  if (
+    data.apps.length === 0
+    && data.by_attachment.length === 0
+    && imageAttachments.length === 0
+  ) {
     return (
       <div className="empty" style={{ padding: 40 }}>
         No apps extracted yet from drawios on this page.
@@ -1700,6 +1759,563 @@ function ExtractedView({ data }: { data: ExtractedData | null }) {
           />
         );
       })}
+
+      {imageAttachments.length > 0 && (
+        <VisionExtractSection images={imageAttachments} />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// VisionExtractSection — Phase 1 PoC for image-vision-extract.
+//
+// One card per PNG/JPEG attachment on this page. Each card has a
+// "Run Vision" button that calls the backend endpoint. Results
+// render in-place using the same status-pill and summary-chip
+// styles as the drawio cards above, with an AI-EXTRACTED warning
+// badge so architects can't confuse the two sources.
+//
+// Spec: .specify/features/image-vision-extract/spec.md FR-20..FR-26
+// ---------------------------------------------------------------------------
+function VisionExtractSection({ images }: { images: Attachment[] }) {
+  return (
+    <div
+      style={{
+        borderTop: "2px solid var(--border)",
+        padding: "16px 18px 12px",
+        background: "rgba(107, 166, 232, 0.03)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 12,
+          marginBottom: 4,
+        }}
+      >
+        <span
+          style={{
+            fontSize: 11,
+            fontFamily: "var(--font-mono)",
+            color: "var(--text-muted)",
+            textTransform: "uppercase",
+            letterSpacing: 0.6,
+          }}
+        >
+          From images (vision, PoC)
+        </span>
+        <span
+          style={{
+            fontSize: 9,
+            fontFamily: "var(--font-mono)",
+            color: "#e8b458",
+            textTransform: "uppercase",
+            letterSpacing: 0.6,
+            padding: "1px 5px",
+            border: "1px solid #e8b45844",
+            borderRadius: "var(--radius-sm)",
+          }}
+          title="Phase 1 PoC — results are not persisted and not yet in Neo4j"
+        >
+          ⚠ PoC · not persisted
+        </span>
+      </div>
+      <div
+        style={{
+          fontSize: 11,
+          color: "var(--text-dim)",
+          marginBottom: 12,
+          lineHeight: 1.5,
+        }}
+      >
+        Click Run Vision on any image below to send it through the
+        LLM pipeline and see what applications + interactions it
+        extracts. Results are ephemeral — they vanish on reload.
+      </div>
+      {images.map((img) => (
+        <VisionExtractCard key={img.attachment_id} attachment={img} />
+      ))}
+    </div>
+  );
+}
+
+function VisionExtractCard({ attachment }: { attachment: Attachment }) {
+  const [state, setState] = useState<"idle" | "running" | "success" | "error">("idle");
+  const [result, setResult] = useState<VisionExtractResponse | null>(null);
+  const [errorCode, setErrorCode] = useState<string>("");
+  const [errorDetail, setErrorDetail] = useState<string>("");
+
+  async function runVision() {
+    setState("running");
+    setResult(null);
+    setErrorCode("");
+    setErrorDetail("");
+    try {
+      const resp = await fetch(
+        `/api/admin/confluence/attachments/${attachment.attachment_id}/vision-extract`,
+        { method: "GET", cache: "no-store" },
+      );
+      const body = await resp.json().catch(() => null);
+      if (!resp.ok) {
+        setState("error");
+        setErrorCode(body?.error || `http_${resp.status}`);
+        setErrorDetail(body?.detail || `HTTP ${resp.status}`);
+        return;
+      }
+      setResult(body as VisionExtractResponse);
+      setState("success");
+    } catch (e) {
+      setState("error");
+      setErrorCode("network_error");
+      setErrorDetail(String(e));
+    }
+  }
+
+  const isDerived = attachment.title.startsWith("drawio-backup") || false;
+
+  return (
+    <div
+      style={{
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-sm)",
+        padding: "12px 14px",
+        marginBottom: 10,
+        background: "var(--bg-elevated)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          gap: 12,
+          marginBottom: state === "idle" ? 0 : 10,
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div
+            style={{
+              fontSize: 13,
+              color: "var(--text)",
+              wordBreak: "break-word",
+            }}
+          >
+            {attachment.title}
+          </div>
+          <div
+            style={{
+              fontSize: 10,
+              color: "var(--text-dim)",
+              fontFamily: "var(--font-mono)",
+              marginTop: 2,
+            }}
+          >
+            {attachment.media_type} · {humanSize(attachment.file_size)}
+          </div>
+        </div>
+        <button
+          onClick={runVision}
+          disabled={state === "running" || isDerived}
+          style={{
+            fontSize: 11,
+            padding: "5px 12px",
+            fontFamily: "var(--font-mono)",
+            background: state === "running" ? "transparent" : "var(--accent)",
+            color: state === "running" ? "var(--text-dim)" : "var(--bg)",
+            border: state === "running" ? "1px solid var(--border)" : "none",
+            borderRadius: "var(--radius-sm)",
+            cursor: state === "running" ? "wait" : "pointer",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {state === "running"
+            ? "Extracting… (up to 60s)"
+            : state === "success"
+            ? "Re-run"
+            : "Run Vision"}
+        </button>
+      </div>
+
+      {state === "error" && (
+        <div
+          style={{
+            marginTop: 8,
+            padding: "8px 10px",
+            border: "1px solid #5b1f1f",
+            borderRadius: "var(--radius-sm)",
+            fontSize: 11,
+            color: "var(--text-muted)",
+          }}
+        >
+          <div style={{ fontFamily: "var(--font-mono)", color: "#e8716b" }}>
+            {errorCode}
+          </div>
+          <div style={{ marginTop: 4 }}>{errorDetail}</div>
+        </div>
+      )}
+
+      {state === "success" && result && (
+        <VisionExtractResult result={result} />
+      )}
+    </div>
+  );
+}
+
+function VisionExtractResult({ result }: { result: VisionExtractResponse }) {
+  const [showRaw, setShowRaw] = useState(false);
+  return (
+    <div>
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
+          flexWrap: "wrap",
+          marginBottom: 10,
+          alignItems: "center",
+        }}
+      >
+        <span
+          style={{
+            fontSize: 9,
+            fontFamily: "var(--font-mono)",
+            color: "var(--accent)",
+            textTransform: "uppercase",
+            letterSpacing: 0.6,
+            padding: "1px 5px",
+            border: "1px solid var(--accent)44",
+            borderRadius: "var(--radius-sm)",
+          }}
+          title="AI-extracted output — review carefully before trusting"
+        >
+          ⚠ AI-extracted
+        </span>
+        <span
+          style={{
+            fontSize: 9,
+            fontFamily: "var(--font-mono)",
+            color: "var(--text-muted)",
+            textTransform: "uppercase",
+            letterSpacing: 0.6,
+          }}
+        >
+          {result.diagram_type}
+        </span>
+        <SummaryChip
+          label="apps"
+          value={result.applications.length}
+          color="var(--text-muted)"
+        />
+        <SummaryChip
+          label="edges"
+          value={result.interactions.length}
+          color="var(--text-muted)"
+        />
+        {result.tech_components.length > 0 && (
+          <SummaryChip
+            label="tech"
+            value={result.tech_components.length}
+            color="var(--text-muted)"
+          />
+        )}
+        <span
+          style={{
+            fontSize: 10,
+            color: "var(--text-dim)",
+            fontFamily: "var(--font-mono)",
+            marginLeft: "auto",
+          }}
+        >
+          {result.meta.model} · {result.meta.total_tokens.toLocaleString()} tok ·{" "}
+          {(result.meta.wall_ms / 1000).toFixed(1)}s
+        </span>
+      </div>
+
+      {result.applications.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div
+            style={{
+              fontSize: 10,
+              color: "var(--text-dim)",
+              letterSpacing: 0.6,
+              textTransform: "uppercase",
+              fontFamily: "var(--font-mono)",
+              marginBottom: 6,
+            }}
+          >
+            Applications ({result.applications.length})
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr
+                style={{
+                  fontSize: 10,
+                  color: "var(--text-dim)",
+                  textTransform: "uppercase",
+                  letterSpacing: 0.6,
+                  fontFamily: "var(--font-mono)",
+                  textAlign: "left",
+                }}
+              >
+                <th style={{ padding: "6px 8px", width: 110 }}>App ID</th>
+                <th style={{ padding: "6px 8px" }}>Name</th>
+                <th style={{ padding: "6px 8px", width: 80 }}>Status</th>
+                <th style={{ padding: "6px 8px" }}>Functions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.applications.map((a, idx) => (
+                <tr
+                  key={`${a.app_id}-${idx}`}
+                  style={{
+                    fontSize: 12,
+                    borderTop: "1px solid var(--border)",
+                  }}
+                >
+                  <td
+                    style={{
+                      padding: "6px 8px",
+                      fontFamily: "var(--font-mono)",
+                      color: a.id_is_standard
+                        ? "var(--accent)"
+                        : "var(--text-dim)",
+                    }}
+                  >
+                    {a.id_is_standard ? a.standard_id : "—"}
+                  </td>
+                  <td style={{ padding: "6px 8px" }}>{a.name || "—"}</td>
+                  <td style={{ padding: "6px 8px" }}>
+                    <StatusPill status={a.application_status || null} />
+                  </td>
+                  <td
+                    style={{
+                      padding: "6px 8px",
+                      fontSize: 11,
+                      color: "var(--text-muted)",
+                    }}
+                  >
+                    {a.functions.slice(0, 3).join(", ")}
+                    {a.functions.length > 3
+                      ? ` … +${a.functions.length - 3}`
+                      : ""}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {result.interactions.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div
+            style={{
+              fontSize: 10,
+              color: "var(--text-dim)",
+              letterSpacing: 0.6,
+              textTransform: "uppercase",
+              fontFamily: "var(--font-mono)",
+              marginBottom: 6,
+            }}
+          >
+            Interactions ({result.interactions.length})
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr
+                style={{
+                  fontSize: 10,
+                  color: "var(--text-dim)",
+                  textTransform: "uppercase",
+                  letterSpacing: 0.6,
+                  fontFamily: "var(--font-mono)",
+                  textAlign: "left",
+                }}
+              >
+                <th style={{ padding: "6px 8px" }}>Source → Target</th>
+                <th style={{ padding: "6px 8px", width: 90 }}>Type</th>
+                <th style={{ padding: "6px 8px", width: 80 }}>Status</th>
+                <th style={{ padding: "6px 8px" }}>Business object</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.interactions.map((i, idx) => (
+                <tr
+                  key={idx}
+                  style={{
+                    fontSize: 12,
+                    borderTop: "1px solid var(--border)",
+                  }}
+                >
+                  <td
+                    style={{
+                      padding: "6px 8px",
+                      fontFamily: "var(--font-mono)",
+                      color: "var(--text-muted)",
+                    }}
+                  >
+                    {i.source_app_id} → {i.target_app_id}
+                  </td>
+                  <td
+                    style={{
+                      padding: "6px 8px",
+                      fontFamily: "var(--font-mono)",
+                      color: "var(--text-muted)",
+                    }}
+                  >
+                    {i.interaction_type || "—"}
+                  </td>
+                  <td style={{ padding: "6px 8px" }}>
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                      }}
+                      title={
+                        i.status_inferred_from_endpoints
+                          ? "Inferred from endpoint status, not directly read from the line color"
+                          : ""
+                      }
+                    >
+                      <StatusPill status={i.interface_status || null} />
+                      {i.status_inferred_from_endpoints && (
+                        <span
+                          style={{ color: "var(--text-dim)", fontSize: 10 }}
+                        >
+                          *
+                        </span>
+                      )}
+                    </span>
+                  </td>
+                  <td
+                    style={{
+                      padding: "6px 8px",
+                      fontSize: 11,
+                      color: "var(--text-muted)",
+                    }}
+                  >
+                    {i.business_object || "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {result.tech_components.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <div
+            style={{
+              fontSize: 10,
+              color: "var(--text-dim)",
+              letterSpacing: 0.6,
+              textTransform: "uppercase",
+              fontFamily: "var(--font-mono)",
+              marginBottom: 6,
+            }}
+          >
+            Tech components ({result.tech_components.length})
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr
+                style={{
+                  fontSize: 10,
+                  color: "var(--text-dim)",
+                  textTransform: "uppercase",
+                  letterSpacing: 0.6,
+                  fontFamily: "var(--font-mono)",
+                  textAlign: "left",
+                }}
+              >
+                <th style={{ padding: "6px 8px" }}>Name</th>
+                <th style={{ padding: "6px 8px", width: 140 }}>Layer</th>
+                <th style={{ padding: "6px 8px", width: 100 }}>Deploy</th>
+                <th style={{ padding: "6px 8px" }}>Runtime</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.tech_components.map((t, idx) => (
+                <tr
+                  key={idx}
+                  style={{
+                    fontSize: 12,
+                    borderTop: "1px solid var(--border)",
+                  }}
+                >
+                  <td style={{ padding: "6px 8px" }}>{t.name || "—"}</td>
+                  <td
+                    style={{
+                      padding: "6px 8px",
+                      fontFamily: "var(--font-mono)",
+                      color: "var(--text-muted)",
+                    }}
+                  >
+                    {t.layer || "—"}
+                  </td>
+                  <td
+                    style={{
+                      padding: "6px 8px",
+                      fontFamily: "var(--font-mono)",
+                      color: "var(--text-muted)",
+                    }}
+                  >
+                    {t.deploy_mode || "—"}
+                  </td>
+                  <td
+                    style={{
+                      padding: "6px 8px",
+                      fontSize: 11,
+                      color: "var(--text-muted)",
+                    }}
+                  >
+                    {t.runtime || "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div>
+        <button
+          onClick={() => setShowRaw((v) => !v)}
+          style={{
+            fontSize: 10,
+            fontFamily: "var(--font-mono)",
+            color: "var(--text-dim)",
+            background: "transparent",
+            border: "none",
+            padding: 0,
+            cursor: "pointer",
+            textDecoration: "underline",
+          }}
+        >
+          {showRaw ? "▾ Hide" : "▸ Show"} raw JSON
+        </button>
+        {showRaw && (
+          <pre
+            style={{
+              marginTop: 6,
+              padding: 10,
+              fontSize: 10,
+              background: "var(--bg)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-sm)",
+              overflow: "auto",
+              maxHeight: 300,
+              fontFamily: "var(--font-mono)",
+              color: "var(--text-muted)",
+            }}
+          >
+            {JSON.stringify(result, null, 2)}
+          </pre>
+        )}
+      </div>
     </div>
   );
 }

@@ -15,10 +15,16 @@
       "api": ["api-tests/test_masters.py"]
     },
     "backend/app/routers/admin.py": {
-      "api": ["api-tests/test_admin_confluence.py", "api-tests/test_admin_applications.py", "api-tests/test_admin_projects.py", "api-tests/test_office_preview.py"]
+      "api": ["api-tests/test_admin_confluence.py", "api-tests/test_admin_applications.py", "api-tests/test_admin_projects.py", "api-tests/test_office_preview.py", "api-tests/test_image_vision.py"]
     },
     "backend/app/services/converter_client.py": {
       "api": ["api-tests/test_office_preview.py"]
+    },
+    "backend/app/services/image_vision.py": {
+      "api": ["api-tests/test_image_vision.py"]
+    },
+    "backend/app/services/image_vision_prompt.md": {
+      "api": ["api-tests/test_image_vision.py"]
     },
     "backend/app/routers/aliases.py": {
       "api": ["api-tests/test_aliases.py"]

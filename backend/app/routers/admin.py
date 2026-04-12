@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, Response
 
 from app.models.schemas import ApiResponse
-from app.services import converter_client, pg_client
+from app.services import converter_client, image_vision, pg_client
 
 logger = logging.getLogger(__name__)
 
@@ -1893,4 +1893,144 @@ async def preview_attachment(attachment_id: str):
         str(pdf_path),
         media_type="application/pdf",
         headers=_pdf_inline_headers(title),
+    )
+
+
+# ---------------------------------------------------------------------------
+# image-vision-extract (Phase 0 + Phase 1 PoC)
+# Spec: .specify/features/image-vision-extract/spec.md
+# ---------------------------------------------------------------------------
+
+_VISION_SUPPORTED_MEDIA_TYPES = {"image/png", "image/jpeg"}
+
+
+def _vision_error(status: int, error_code: str, detail: str = "") -> JSONResponse:
+    """Matches _preview_error shape but lives alongside the vision
+    endpoint to make the two concerns easy to reason about separately.
+    Raw JSON body, NOT ApiResponse envelope (spec NFR-3)."""
+    return JSONResponse(
+        status_code=status,
+        content={"error": error_code, "detail": detail},
+    )
+
+
+@router.get("/confluence/attachments/{attachment_id}/vision-extract")
+async def vision_extract_attachment(attachment_id: str):
+    """Read-only: run the current image through the LLM vision pipeline
+    and return structured applications/interactions/tech_components.
+
+    This is the Phase 1 PoC endpoint — it does NOT persist anything.
+    Architects click a button, see what the LLM produces for one
+    image, and that tells us (and them) whether Phase 2 persistence
+    is worth building. Re-running is idempotent and charges each
+    run to the LLM again; no caching on purpose (we're still tuning
+    the prompt).
+
+    Error codes: not_found | file_missing | unsupported_format |
+    file_too_large | image_decode_failed | llm_disabled | llm_timeout |
+    llm_upstream_error | malformed_llm_output
+    """
+    row = await pg_client.fetchrow(
+        """
+        SELECT attachment_id, title, media_type, file_kind, local_path
+        FROM northstar.confluence_attachment
+        WHERE attachment_id = $1
+        """,
+        attachment_id,
+    )
+    if row is None:
+        return _vision_error(404, "not_found", f"no row for {attachment_id}")
+
+    media_type = (row["media_type"] or "").strip().lower()
+    if media_type not in _VISION_SUPPORTED_MEDIA_TYPES:
+        return _vision_error(
+            415,
+            "unsupported_format",
+            f"vision extract only supports PNG/JPEG; got media_type={media_type!r} "
+            f"(file_kind={row['file_kind']!r})",
+        )
+
+    if not row["local_path"]:
+        return _vision_error(
+            404,
+            "file_missing",
+            "attachment not downloaded — run scripts/scan_confluence.py or "
+            "scripts/download_missing_attachments.py",
+        )
+
+    raw_path = ATTACHMENT_ROOT / Path(row["local_path"]).name
+    if not raw_path.exists():
+        return _vision_error(
+            404, "file_missing", f"expected at {raw_path}",
+        )
+
+    try:
+        raw_bytes = raw_path.read_bytes()
+    except OSError as exc:
+        logger.error(
+            "vision-extract io error att=%s path=%s err=%s",
+            attachment_id, raw_path, exc,
+        )
+        return _vision_error(500, "io_error", str(exc))
+
+    logger.info(
+        "vision-extract start att=%s title=%s bytes=%d",
+        attachment_id, row["title"], len(raw_bytes),
+    )
+
+    try:
+        result = await image_vision.extract_image(
+            raw_bytes,
+            source_name=row["title"] or attachment_id,
+        )
+    except image_vision.VisionExtractError as exc:
+        return _vision_error(exc.status, exc.error_code, exc.detail)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("vision-extract unexpected error att=%s", attachment_id)
+        return _vision_error(500, "unexpected_error", str(exc)[:400])
+
+    return JSONResponse(
+        status_code=200,
+        content=result.to_dict(),
+    )
+
+
+@router.get("/confluence/vision-queue")
+async def vision_queue(
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+) -> ApiResponse:
+    """Paginated list of PNG/JPEG attachments flagged as vision
+    candidates by scripts/mark_vision_candidates.py. This is the
+    backing data for the admin UI's "Vision queue: N pending" KPI.
+
+    Returns the ApiResponse envelope (unlike vision-extract which
+    returns raw JSON) because the frontend here is a plain table
+    view, not a direct binary/JSON consumer.
+    """
+    rows = await pg_client.fetch(
+        """
+        SELECT ca.attachment_id, ca.title, ca.page_id, ca.file_size, ca.media_type,
+               cp.title       AS page_title,
+               cp.fiscal_year AS fiscal_year,
+               cp.depth       AS page_depth,
+               cp.page_url    AS page_url
+        FROM northstar.confluence_attachment ca
+        JOIN northstar.confluence_page cp ON cp.page_id = ca.page_id
+        WHERE ca.vision_candidate = TRUE
+        ORDER BY cp.fiscal_year DESC, ca.file_size DESC NULLS LAST
+        LIMIT $1 OFFSET $2
+        """,
+        limit, offset,
+    )
+    total = await pg_client.fetchval(
+        "SELECT count(*) FROM northstar.confluence_attachment WHERE vision_candidate = TRUE"
+    )
+    return ApiResponse(
+        data={
+            "rows": [dict(r) for r in rows],
+            "total": int(total or 0),
+            "limit": limit,
+            "offset": offset,
+        }
     )
