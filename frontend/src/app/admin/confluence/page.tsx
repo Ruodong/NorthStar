@@ -868,7 +868,7 @@ function NameCell({
       title: "From Confluence page title (no master, no questionnaire match)",
     },
   };
-  const s = style[source];
+  const s = style[source] ?? style.none;
   return (
     <Link
       href={`/admin/confluence/${pageId}`}
