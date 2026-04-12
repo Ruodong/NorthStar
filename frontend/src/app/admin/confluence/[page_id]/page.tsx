@@ -1805,6 +1805,13 @@ function ExtractedView({
 
   return (
     <div>
+      {/* Major Applications — shared across drawio + vision sources */}
+      {data.major_apps && data.major_apps.length > 0 && (
+        <div className="panel" style={{ padding: 0, marginBottom: 16 }}>
+          <MajorAppsSection majors={data.major_apps} />
+        </div>
+      )}
+
       {/* Drawio section */}
       {hasDrawio && (
         <div className="panel" style={{ padding: 0 }}>
@@ -1827,10 +1834,6 @@ function ExtractedView({
               <SummaryChip label="files" value={data.by_attachment.length} color="var(--text-muted)" />
             </div>
           </div>
-
-          {data.major_apps && data.major_apps.length > 0 && (
-            <MajorAppsSection majors={data.major_apps} />
-          )}
 
           {data.by_attachment.map((f) => {
             const apps = appsByAttachment.get(f.attachment_id) || [];
