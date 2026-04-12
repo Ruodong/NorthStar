@@ -87,11 +87,16 @@ async def extract_one(
             )
             if r.status_code == 200:
                 body = r.json()
-                if body.get("success"):
+                # The /vision-extract endpoint returns the raw result
+                # (not wrapped in ApiResponse), so check for the expected
+                # top-level key instead of "success".
+                if "applications" in body or "diagram_type" in body:
+                    return body
+                # Fallback: wrapped in ApiResponse
+                if body.get("success") and body.get("data"):
                     return body["data"]
-                else:
-                    logger.warning("att=%s: API error: %s", attachment_id, body.get("error"))
-                    return None
+                logger.warning("att=%s: unexpected shape: %s", attachment_id, str(body)[:200])
+                return None
             else:
                 logger.warning("att=%s: HTTP %d: %s", attachment_id, r.status_code, r.text[:200])
                 return None
