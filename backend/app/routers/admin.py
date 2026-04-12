@@ -680,6 +680,21 @@ async def list_pages(
         LEFT JOIN northstar.ref_application ra
                ON ra.app_id = COALESCE(g.link_app_id, g.effective_app_id, g.q_app_id)
         WHERE g.rn = 1
+          -- Drop phantom root rows: project-folder pages (depth=1) that
+          -- pass hide_empty because their children have content, but
+          -- contribute nothing themselves — no app signal, no own
+          -- attachments. Their children already appear as sibling rows
+          -- with real content. Example: "FY2526-169 - E-security
+          -- Optimization" (0 attachments, no app_id) would produce an
+          -- empty "—/—/0/0" row alongside the child "A000514 e-security
+          -- 6/2" row.
+          AND NOT (
+              g.link_app_id IS NULL
+              AND COALESCE(g.effective_app_id, g.q_app_id) IS NULL
+              AND COALESCE(g.app_hint, g.effective_app_hint) IS NULL
+              AND g.group_att = 0
+              AND g.group_dr = 0
+          )
         -- Ontology fix (2026-04-10): sort so that all rows sharing the same
         -- group_project_id are strictly adjacent, with orphan rows sinking
         -- to the tail of each FY bucket. Secondary sorts by title, then
@@ -733,6 +748,19 @@ async def list_pages(
                   AND NOT EXISTS (
                     SELECT 1 FROM northstar.confluence_page_app_link l0
                     WHERE l0.page_id = p.page_id
+                  )
+                  -- Mirror the phantom-root filter from the list query:
+                  -- exclude pages with no app signal AND no own content.
+                  AND (
+                    p.effective_app_id IS NOT NULL
+                    OR p.app_hint IS NOT NULL
+                    OR p.effective_app_hint IS NOT NULL
+                    OR EXISTS (
+                      SELECT 1 FROM northstar.confluence_attachment a
+                      WHERE a.page_id = p.page_id
+                        AND a.title NOT LIKE 'drawio-backup%'
+                        AND a.title NOT LIKE '~%'
+                    )
                   )
                 UNION ALL
                 SELECT COALESCE(
