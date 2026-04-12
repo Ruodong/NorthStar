@@ -182,8 +182,8 @@ def mark_vision_candidates(conn: psycopg.Connection) -> tuple[int, int]:
             """
         )
         counts = cur.fetchone()
-        eligible = counts[0]
-        to_mark = counts[1]
+        eligible = counts["eligible"]
+        to_mark = counts["to_mark"]
 
         if to_mark > 0:
             cur.execute(
