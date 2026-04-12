@@ -838,6 +838,56 @@ function RawHtmlView({ pageId }: { pageId: string }) {
   );
 }
 
+// Chrome's built-in PDF viewer refuses to render PDFs inside iframes when
+// the src is a non-standard port URL (e.g. :3003). Workaround: fetch the
+// PDF as a blob, create an object URL, and use that as the iframe src.
+// Blob URLs work because Chrome treats them as same-origin trusted content.
+function PdfBlobPreview({ src, title }: { src: string; title: string }) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let revoke: string | null = null;
+    (async () => {
+      try {
+        const res = await fetch(src);
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        revoke = url;
+        setBlobUrl(url);
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => {
+      if (revoke) URL.revokeObjectURL(revoke);
+    };
+  }, [src]);
+
+  if (err) {
+    return (
+      <div style={{ padding: 32, color: "var(--error)", fontSize: 13 }}>
+        Failed to load PDF: {err}
+      </div>
+    );
+  }
+  if (!blobUrl) {
+    return (
+      <div style={{ padding: 32, color: "var(--text-dim)", fontSize: 13 }}>
+        Loading PDF…
+      </div>
+    );
+  }
+  return (
+    <iframe
+      src={blobUrl}
+      title={title}
+      style={{ flex: 1, border: 0, minHeight: 640 }}
+    />
+  );
+}
+
 function AttachmentPreview({ attachment }: { attachment: Attachment }) {
   const src = `/api/admin/confluence/attachments/${attachment.attachment_id}/raw`;
 
@@ -923,11 +973,7 @@ function AttachmentPreview({ attachment }: { attachment: Attachment }) {
     return (
       <div style={{ display: "flex", flexDirection: "column", flex: 1 }}>
         {header}
-        <iframe
-          src={`${src}#toolbar=1&navpanes=0`}
-          title={attachment.title}
-          style={{ flex: 1, border: 0, minHeight: 640 }}
-        />
+        <PdfBlobPreview src={src} title={attachment.title} />
       </div>
     );
   }
