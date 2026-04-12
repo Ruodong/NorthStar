@@ -14,10 +14,11 @@ interface PageRow {
   project_name_source: "mspo" | "questionnaire" | "none";
   app_id: string | null;
   app_name: string | null;
-  app_name_source: "cmdb" | "none";
+  app_name_source: "cmdb" | "none" | "hint_unresolved";
   page_type: string | null; // 'project' | 'application' | 'other'
   project_in_mspo: boolean;
   app_in_cmdb: boolean;
+  project_apps?: { app_id: string | null; app_name: string | null; app_in_cmdb: boolean }[];
   q_pm: string | null;
   q_it_lead: string | null;
   q_dt_lead: string | null;
@@ -530,8 +531,7 @@ export default function ConfluenceIndex() {
               <th style={{ width: 70 }}>FY</th>
               <th style={{ width: 110 }}>Project ID</th>
               <th>Project Name</th>
-              <th style={{ width: 100 }}>App ID</th>
-              <th>App Name</th>
+              <th>Applications</th>
               <th style={{ width: 80, textAlign: "right" }}>Attach.</th>
               <th style={{ width: 80, textAlign: "right" }}>Drawio</th>
               <th style={{ width: 90 }}></th>
@@ -632,40 +632,53 @@ export default function ConfluenceIndex() {
                       </div>
                     )}
                   </td>
-                  {/* App ID — narrow fixed width. Unresolved hint brackets
-                      (e.g. "[Robbie IT Service Agent]") get ellipsis truncation
-                      via the nested overflow container; clean CMDB ids like
-                      "A250197" fit comfortably in 100px. The tooltip on
-                      IdCell still shows the full id/hint on hover. */}
-                  <td style={{ maxWidth: 100, width: 100 }}>
-                    <div
-                      style={{
-                        maxWidth: "100%",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      <IdCell
-                        id={r.app_id}
-                        verified={r.app_in_cmdb}
-                        href={
-                          r.app_in_cmdb && r.app_id
-                            ? `/admin/applications/${encodeURIComponent(r.app_id)}`
-                            : undefined
-                        }
-                        kind="app"
-                      />
-                    </div>
-                  </td>
-                  {/* App name */}
+                  {/* Applications — inline [id] name · [id] name format */}
                   <td>
-                    <NameCell
-                      primary={r.app_name}
-                      source={r.app_name_source === "cmdb" ? "mspo" : "none"}
-                      fallback={r.page_type === "application" ? r.title : null}
-                      pageId={r.page_id}
-                    />
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 12px", alignItems: "baseline" }}>
+                      {(r.project_apps && r.project_apps.length > 0
+                        ? r.project_apps
+                        : [{ app_id: r.app_id, app_name: r.app_name, app_in_cmdb: r.app_in_cmdb }]
+                      ).map((app, ai) => {
+                        const isStdId = app.app_id && /^A\d{5,7}$/.test(app.app_id);
+                        return (
+                          <span key={app.app_id || ai} style={{ whiteSpace: "nowrap", fontSize: 12 }}>
+                            {ai > 0 && (
+                              <span style={{ color: "var(--text-dim)", margin: "0 2px" }}>·</span>
+                            )}
+                            {app.app_id && (
+                              isStdId && app.app_in_cmdb ? (
+                                <Link
+                                  href={`/admin/applications/${encodeURIComponent(app.app_id)}`}
+                                  style={{
+                                    color: "var(--accent)",
+                                    fontFamily: "var(--font-mono)",
+                                    fontSize: 11,
+                                    textDecoration: "none",
+                                    marginRight: 4,
+                                  }}
+                                >
+                                  [{app.app_id}]
+                                </Link>
+                              ) : (
+                                <span
+                                  style={{
+                                    color: "var(--text-dim)",
+                                    fontFamily: "var(--font-mono)",
+                                    fontSize: 11,
+                                    marginRight: 4,
+                                  }}
+                                >
+                                  [{app.app_id}]
+                                </span>
+                              )
+                            )}
+                            <span style={{ color: app.app_in_cmdb ? "var(--text)" : "var(--text-muted)" }}>
+                              {app.app_name || (r.page_type === "application" ? r.title : "—")}
+                            </span>
+                          </span>
+                        );
+                      })}
+                    </div>
                   </td>
                   {/* Attach count */}
                   <td

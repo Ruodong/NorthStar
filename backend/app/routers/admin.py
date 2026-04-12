@@ -641,7 +641,13 @@ async def list_pages(
                    -- project has multiple depth=1 pages; for the common
                    -- case (one depth=1 page per project) it's redundant
                    -- but harmless — the grouping is identical.
-                   COALESCE(e.group_project_id, 'PG:' || e.page_id)
+                   -- When group_project_id IS NULL (no project_id), fall
+                   -- back to tree_root_page so sibling application pages
+                   -- under the same parent group together (e.g. "A004446
+                   -- TDMS ROW 应用架构" + "A004447 TDMS PRC 技术架构图"
+                   -- both under "FY25 TDMS CMDB Applications").
+                   COALESCE(e.group_project_id,
+                            'PG:' || COALESCE(e.tree_root_page, e.page_id))
                      || ':' || COALESCE(e.tree_root_page, e.page_id) AS g_project,
                    COALESCE(
                      e.link_app_id,
@@ -742,6 +748,9 @@ async def list_pages(
                c.group_size::int AS group_size,
                c.group_pages     AS group_page_ids,
                c.project_app_total::int AS project_app_total,
+               -- Internal fields for Python post-processing (stripped before response)
+               c.g_project       AS _g_project,
+               root_p.title      AS _root_title,
                -- Inline total: cheaper than a second query and guaranteed
                -- consistent with the actual row set after all filters + cap.
                COUNT(*) OVER () AS _total
@@ -749,6 +758,8 @@ async def list_pages(
         LEFT JOIN northstar.ref_project rp    ON rp.project_id = c.group_project_id
         LEFT JOIN northstar.ref_application ra
                ON ra.app_id = COALESCE(c.link_app_id, c.effective_app_id, c.q_app_id)
+        LEFT JOIN northstar.confluence_page root_p
+               ON root_p.page_id = c.tree_root_page
         WHERE c.project_app_rank <= 10
         -- Ontology fix (2026-04-10): sort so that all rows sharing the same
         -- group_project_id are strictly adjacent, with orphan rows sinking
@@ -772,13 +783,59 @@ async def list_pages(
     # guaranteed consistent with the actual row set after all filters +
     # per-project app cap. Read from the first row; 0 if no rows returned.
     total = rows[0]["_total"] if rows else 0
+
+    # Collapse multi-app rows sharing the same g_project into a single row
+    # with a `project_apps` array. This makes the frontend render one row
+    # per project with inline `[A004446] TDMS ROW · [A004447] TDMS PRC`
+    # instead of N separate rows.
+    internal_keys = {"_total", "_g_project", "_root_title"}
+    collapsed: dict[str, dict] = {}
+    collapsed_order: list[str] = []
+    for r in rows:
+        row = dict(r)
+        gp = row["_g_project"]
+        app_entry = {
+            "app_id": row.get("app_id"),
+            "app_name": row.get("app_name"),
+            "app_in_cmdb": row.get("app_in_cmdb", False),
+            "app_name_source": row.get("app_name_source"),
+            "app_hint": row.get("app_hint"),
+        }
+        if gp not in collapsed:
+            collapsed_order.append(gp)
+            clean = {k: v for k, v in row.items() if k not in internal_keys}
+            # Use root page title as project_name fallback when project_id
+            # is missing (e.g. "FY25 TDMS CMDB Applications" parent page).
+            if not clean.get("project_name") and row.get("_root_title"):
+                clean["project_name"] = row["_root_title"]
+                clean["project_name_source"] = "parent_title"
+            clean["project_apps"] = [app_entry]
+            collapsed[gp] = clean
+        else:
+            existing = collapsed[gp]
+            # Accumulate unique apps (dedupe by app_id)
+            seen_ids = {a["app_id"] for a in existing["project_apps"]}
+            if app_entry["app_id"] not in seen_ids:
+                existing["project_apps"].append(app_entry)
+            # Sum counts across rows
+            existing["attachment_count"] = (
+                existing.get("attachment_count", 0) + row.get("attachment_count", 0)
+            )
+            existing["drawio_count"] = (
+                existing.get("drawio_count", 0) + row.get("drawio_count", 0)
+            )
+            # Merge group_page_ids
+            existing_pages = set(existing.get("group_page_ids") or [])
+            existing_pages.update(row.get("group_page_ids") or [])
+            existing["group_page_ids"] = sorted(existing_pages)
+            existing["group_size"] = len(existing["group_page_ids"])
+            existing["project_app_total"] = len(existing["project_apps"])
+
+    final_rows = [collapsed[gp] for gp in collapsed_order]
     return ApiResponse(
         data={
             "total": total,
-            "rows": [
-                {k: v for k, v in dict(r).items() if k != "_total"}
-                for r in rows
-            ],
+            "rows": final_rows,
             "grouped": True,
         }
     )
