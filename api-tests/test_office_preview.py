@@ -257,6 +257,48 @@ async def test_preview_concurrent_no_corruption(api: httpx.AsyncClient, small_pp
 
 
 # ---------------------------------------------------------------------------
+# Regression: HEAD must return the same status as GET (not 405)
+#
+# The frontend OfficePdfPreview component uses HEAD to probe the endpoint
+# before mounting its iframe. FastAPI's @router.get() does NOT auto-register
+# HEAD, so earlier versions returned 405 and the UI showed "Error: HTTP 405"
+# even though GET worked fine. Locking that behaviour in.
+# ---------------------------------------------------------------------------
+
+async def test_preview_head_xlsx_returns_200(api: httpx.AsyncClient, any_xlsx):
+    """HEAD on an XLSX attachment returns 200 with correct content-type
+    but empty body (Starlette strips body for HEAD)."""
+    att_id = any_xlsx["attachment_id"]
+    resp = await api.head(
+        f"/api/admin/confluence/attachments/{att_id}/preview",
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == _XLSX_MT
+
+
+async def test_preview_head_pptx_returns_200(api: httpx.AsyncClient, small_pptx):
+    """HEAD on a PPTX attachment returns 200 application/pdf. Starlette
+    runs the handler to compute the response (so the conversion still
+    happens on cold cache, priming it for the subsequent GET) but does
+    not write the body, matching Starlette's FileResponse HEAD semantics."""
+    att_id = small_pptx["attachment_id"]
+    resp = await api.head(
+        f"/api/admin/confluence/attachments/{att_id}/preview",
+        timeout=130.0,
+    )
+    assert resp.status_code == 200, f"body={resp.text[:400]}"
+    assert resp.headers["content-type"].startswith("application/pdf")
+
+
+async def test_preview_head_unknown_id_404(api: httpx.AsyncClient):
+    """HEAD on a missing row mirrors GET behaviour — 404 not 405."""
+    resp = await api.head(
+        "/api/admin/confluence/attachments/9999999999999999/preview",
+    )
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # Smoke: endpoint is registered and responds to OPTIONS / HEAD
 # ---------------------------------------------------------------------------
 

@@ -1612,7 +1612,10 @@ async def serve_attachment(attachment_id: str):
     return FileResponse(str(full_path), media_type=media_type, filename=row["title"])
 
 
-@router.get("/confluence/attachments/{attachment_id}/preview")
+@router.api_route(
+    "/confluence/attachments/{attachment_id}/preview",
+    methods=["GET", "HEAD"],
+)
 async def preview_attachment(attachment_id: str):
     """Browser-previewable response for an Office attachment.
 
@@ -1620,6 +1623,17 @@ async def preview_attachment(attachment_id: str):
       cached under PREVIEW_CACHE_ROOT/{id}.pdf, served as application/pdf
     * XLSX → served raw, so the client-side SheetJS renderer can parse it
     * Anything else → 415 unsupported_format
+
+    HEAD is registered explicitly because FastAPI's @router.get() does NOT
+    inherit Starlette's automatic HEAD-for-GET behaviour. The frontend
+    OfficePdfPreview component issues a HEAD probe before mounting its
+    iframe so it can surface a proper error panel on 415/404/502; without
+    HEAD support that probe always hit 405 and masked successful GETs
+    as failures (see office-preview spec FR-22, FR-23).
+
+    Starlette's FileResponse transparently discards the body for HEAD,
+    so HEAD + GET pay the same conversion cost on cold cache — the HEAD
+    effectively primes the cache and the subsequent GET is instant.
 
     Spec: .specify/features/office-preview/spec.md  (FR-8 … FR-18)
     """
