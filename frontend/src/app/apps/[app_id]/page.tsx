@@ -87,6 +87,27 @@ interface ConfluencePageRef {
   page_url: string;
 }
 
+interface TcoData {
+  application_classification?: string;
+  stamp_k?: number;
+  budget_k?: number;
+  actual_k?: number;
+  allocation_stamp_k?: number;
+  allocation_actual_k?: number;
+}
+
+interface ReviewPage {
+  page_id: string;
+  fiscal_year: string;
+  title: string;
+  page_url: string;
+  body_size_chars?: number;
+  q_pm?: string;
+  q_it_lead?: string;
+  q_dt_lead?: string;
+  questionnaire_sections?: { title: string; rows: { label: string; value: string }[] }[] | null;
+}
+
 interface AppDetailResponse {
   app: AppNode;
   outbound: OutboundEdge[];
@@ -94,6 +115,8 @@ interface AppDetailResponse {
   investments: Investment[];
   diagrams: DiagramRef[];
   confluence_pages: ConfluencePageRef[];
+  tco?: TcoData | null;
+  review_pages?: ReviewPage[];
 }
 
 // ---- Impact (reverse dependency) types ----
@@ -126,7 +149,7 @@ interface ImpactResponse {
   fan_out_cap: number;
 }
 
-type Tab = "overview" | "integrations" | "investments" | "diagrams" | "impact";
+type Tab = "overview" | "integrations" | "investments" | "diagrams" | "impact" | "confluence";
 
 const STATUS_COLORS: Record<string, string> = {
   Keep: "var(--status-keep)",
@@ -186,8 +209,9 @@ export default function AppDetailPage({ params }: { params: { app_id: string } }
     );
   }
 
-  const { app, outbound, inbound, investments, diagrams, confluence_pages } = data;
+  const { app, outbound, inbound, investments, diagrams, confluence_pages, tco, review_pages } = data;
   const totalIntegrations = outbound.length + inbound.length;
+  const reviewCount = (review_pages || []).length;
 
   return (
     <div>
@@ -290,6 +314,9 @@ export default function AppDetailPage({ params }: { params: { app_id: string } }
         <TabButton current={tab} value="diagrams" onClick={setTab} count={diagrams.length}>
           Diagrams
         </TabButton>
+        <TabButton current={tab} value="confluence" onClick={setTab} count={reviewCount}>
+          Confluence
+        </TabButton>
       </div>
 
       {/* ---------------- Tab content ---------------- */}
@@ -301,12 +328,14 @@ export default function AppDetailPage({ params }: { params: { app_id: string } }
           inbound={inbound}
           diagrams={diagrams}
           confluencePages={confluence_pages}
+          tco={tco}
         />
       )}
       {tab === "integrations" && <IntegrationsTab outbound={outbound} inbound={inbound} />}
       {tab === "impact" && <ImpactTab appId={app.app_id} />}
       {tab === "investments" && <InvestmentsTab investments={investments} />}
       {tab === "diagrams" && <DiagramsTab diagrams={diagrams} />}
+      {tab === "confluence" && <ConfluenceTab pages={review_pages || []} />}
     </div>
   );
 }
@@ -778,6 +807,7 @@ function OverviewTab({
   inbound,
   diagrams,
   confluencePages,
+  tco,
 }: {
   app: AppNode;
   investments: Investment[];
@@ -785,6 +815,7 @@ function OverviewTab({
   inbound: InboundEdge[];
   diagrams: DiagramRef[];
   confluencePages: ConfluencePageRef[];
+  tco?: TcoData | null;
 }) {
   const fyList = [...new Set(investments.map((i) => i.fiscal_year).filter(Boolean))].sort();
 
@@ -822,6 +853,17 @@ function OverviewTab({
         <CmdbField label="Support" value={app.support} />
         {app.decommissioned_at && <CmdbField label="Decommissioned" value={new Date(app.decommissioned_at).toISOString().slice(0, 10)} />}
       </Panel>
+
+      {tco && (
+        <Panel title="TCO / Financials">
+          <CmdbField label="Classification" value={tco.application_classification} />
+          <CmdbField label="Stamp (K$)" value={tco.stamp_k != null ? tco.stamp_k.toFixed(1) : null} mono />
+          <CmdbField label="Budget (K$)" value={tco.budget_k != null ? tco.budget_k.toFixed(1) : null} mono />
+          <CmdbField label="Actual (K$)" value={tco.actual_k != null ? tco.actual_k.toFixed(1) : null} mono />
+          <CmdbField label="Alloc Stamp (K$)" value={tco.allocation_stamp_k != null ? tco.allocation_stamp_k.toFixed(1) : null} mono />
+          <CmdbField label="Alloc Actual (K$)" value={tco.allocation_actual_k != null ? tco.allocation_actual_k.toFixed(1) : null} mono />
+        </Panel>
+      )}
 
       <Panel title="Fiscal year presence">
         {fyList.length === 0 ? (
@@ -1231,6 +1273,56 @@ function NotFoundState({ appId }: { appId: string }) {
       >
         Back to home
       </Link>
+    </div>
+  );
+}
+
+// ---------------- Confluence Review Pages ----------------
+function ConfluenceTab({ pages }: { pages: ReviewPage[] }) {
+  if (pages.length === 0) {
+    return (
+      <Panel title="Confluence Review Pages">
+        <EmptyState>No review pages found for this application.</EmptyState>
+      </Panel>
+    );
+  }
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+      {pages.map((p) => (
+        <Panel key={p.page_id} title={`${p.fiscal_year} — ${p.title}`}>
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap", fontSize: 12, color: "var(--text-dim)", marginBottom: 12 }}>
+            {p.q_pm && <span>PM: <strong style={{ color: "var(--text-muted)" }}>{p.q_pm}</strong></span>}
+            {p.q_it_lead && <span>IT Lead: <strong style={{ color: "var(--text-muted)" }}>{p.q_it_lead}</strong></span>}
+            {p.q_dt_lead && <span>DT Lead: <strong style={{ color: "var(--text-muted)" }}>{p.q_dt_lead}</strong></span>}
+            {p.body_size_chars != null && <span>{p.body_size_chars.toLocaleString()} chars</span>}
+            <a href={p.page_url} target="_blank" rel="noreferrer" style={{ color: "var(--accent)", fontSize: 11 }}>
+              Open in Confluence ↗
+            </a>
+          </div>
+          {p.questionnaire_sections && p.questionnaire_sections.length > 0 && (
+            <div style={{ display: "grid", gap: 10 }}>
+              {p.questionnaire_sections.map((sec, si) => (
+                <div key={si}>
+                  <div style={{
+                    fontSize: 10, fontWeight: 600, textTransform: "uppercase",
+                    letterSpacing: 0.5, color: "var(--text-dim)", marginBottom: 4,
+                  }}>
+                    {sec.title}
+                  </div>
+                  <dl style={{ margin: 0, fontSize: 12, lineHeight: 1.7 }}>
+                    {sec.rows.map((row, ri) => (
+                      <div key={ri} style={{ display: "flex", gap: 12, borderBottom: "1px solid var(--border)", padding: "3px 0" }}>
+                        <dt style={{ color: "var(--text-dim)", minWidth: 200, flexShrink: 0 }}>{row.label}</dt>
+                        <dd style={{ margin: 0, color: "var(--text-muted)", wordBreak: "break-word" }}>{row.value || "—"}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              ))}
+            </div>
+          )}
+        </Panel>
+      ))}
     </div>
   );
 }

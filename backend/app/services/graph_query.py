@@ -124,6 +124,12 @@ async def get_application(app_id: str) -> Optional[dict]:
         if pd["attachment_id"] not in seen_att_ids:
             neo4j_diagrams.append(pd)
 
+    # --- Postgres: TCO / financial data ---
+    tco = await _fetch_tco(app_id)
+
+    # --- Postgres: Confluence pages with questionnaire ---
+    conf_pages = await _fetch_confluence_pages(app_id)
+
     return {
         "app": app_dict,
         "outbound": [e for e in row["out_edges"] if e.get("target")],
@@ -131,6 +137,8 @@ async def get_application(app_id: str) -> Optional[dict]:
         "investments": investments,
         "diagrams": neo4j_diagrams,
         "confluence_pages": [c for c in row["confluence_pages"] if c.get("page_id")],
+        "tco": tco,
+        "review_pages": conf_pages,
     }
 
 
@@ -192,6 +200,60 @@ async def _fetch_diagram_refs_from_pg(app_id: str) -> list[dict]:
     """
     rows = await pg_client.fetch(sql, app_id)
     return [dict(r) for r in rows]
+
+
+async def _fetch_tco(app_id: str) -> Optional[dict]:
+    """Fetch TCO / financial data from ref_application_tco."""
+    from decimal import Decimal as _Decimal
+    row = await pg_client.fetchrow(
+        """
+        SELECT application_classification,
+               stamp_k, budget_k, actual_k,
+               allocation_stamp_k, allocation_actual_k
+        FROM northstar.ref_application_tco
+        WHERE app_id = $1
+        """,
+        app_id,
+    )
+    if row is None:
+        return None
+    # Convert Decimal to float for JSON serialization
+    return {k: float(v) if isinstance(v, _Decimal) else v for k, v in dict(row).items()}
+
+
+async def _fetch_confluence_pages(app_id: str) -> list[dict]:
+    """Fetch Confluence review pages for this app (matched via q_app_id).
+
+    Returns pages with fiscal_year, title, page_url, leads, and parsed
+    questionnaire sections for inline rendering.
+    """
+    import json as _json
+    rows = await pg_client.fetch(
+        """
+        SELECT page_id, fiscal_year, title, page_url, body_size_chars,
+               q_pm, q_it_lead, q_dt_lead,
+               body_questionnaire
+        FROM northstar.confluence_page
+        WHERE q_app_id = $1
+        ORDER BY fiscal_year DESC, title
+        """,
+        app_id,
+    )
+    result: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        q = d.pop("body_questionnaire", None)
+        if q:
+            try:
+                d["questionnaire_sections"] = (
+                    (q if isinstance(q, dict) else _json.loads(q)).get("sections", [])
+                )
+            except Exception:  # noqa: BLE001
+                d["questionnaire_sections"] = None
+        else:
+            d["questionnaire_sections"] = None
+        result.append(d)
+    return result
 
 
 async def _fetch_investments_from_pg(app_id: str) -> list[dict]:
