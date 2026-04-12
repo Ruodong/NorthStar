@@ -96,15 +96,117 @@ def derive_app_id(
 
     1. CMDB hit → use the standard_id directly. All projects that reference
        the same CMDB app collapse into one node.
-    2. Non-CMDB → start with a diagram-scoped hash (safe default, no auto
-       merging). Then check manual_app_aliases: if a human has confirmed that
-       this X-id should merge into another, follow the mapping.
+    2. Non-CMDB → NAME-scoped hash (cross-diagram dedup). All diagrams
+       that reference the same app name collapse into one node. This was
+       changed from diagram-scoped (f"{name}|{diagram_id}") in the Neo4j
+       cleanup of 2026-04-12. The old scheme produced 35k nodes for 3k
+       unique names because each attachment got its own hash. The new
+       scheme produces ~3-4k nodes. Existing manual_app_aliases that
+       reference old diagram-scoped X-ids will no longer match; those
+       entries are harmless (alias_map.get misses, falls through to the
+       new name-scoped id).
     """
     if std_id and cmdb_hit:
         return std_id
-    seed = f"{name}|{diagram_id}"
+    # Name-scoped hash: normalize to lowercase + strip whitespace so
+    # "Kafka" and "kafka" and " Kafka " all merge into one node.
+    norm = name.strip().lower()
+    seed = norm
     x_id = "X" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
     return alias_map.get(x_id, x_id)
+
+
+# Non-CMDB app names that should be excluded from Neo4j entirely.
+# These are template placeholders, generic labels, or infrastructure
+# annotations that architects draw on diagrams but are NOT real
+# application entities. Matched case-insensitively against the
+# stripped, lowercased app_name.
+_APP_NAME_BLACKLIST: set[str] = {
+    # Template placeholders (from Lenovo drawio templates)
+    "application",
+    "application name",
+    "system",
+    "system name",
+    "component",
+    "module",
+    "service",
+    # Parser artifacts (residual labels)
+    "id：",
+    "id:",
+    "id",
+    "",
+    # Generic infrastructure labels (not specific enough to be nodes)
+    "api",
+    "endpoint",
+    "database",
+    "db",
+    "cache",
+    "queue",
+    "message queue",
+    "load balancer",
+    "gateway",
+    "proxy",
+    "firewall",
+    "dns",
+    "cdn",
+    "storage",
+    "file storage",
+    "blob storage",
+    # Network equipment
+    "f5",
+    "switch",
+    "router",
+    "vpn",
+    "vpc",
+    # Overly generic
+    "frontend",
+    "backend",
+    "web",
+    "app",
+    "server",
+    "client",
+    "user",
+    "users",
+    "admin",
+    "test",
+    "demo",
+    "example",
+    "sample",
+    "temp",
+    "temporary",
+    "n/a",
+    "na",
+    "none",
+    "tbd",
+    "tbc",
+    "unknown",
+    # Chinese placeholders
+    "应用",
+    "系统",
+    "模块",
+    "组件",
+    "服务",
+    "数据库",
+    "示例",
+    "模板",
+}
+
+
+def _is_blacklisted_app_name(name: str) -> bool:
+    """Return True if this app name should be excluded from Neo4j."""
+    norm = name.strip().lower()
+    if not norm:
+        return True
+    if norm in _APP_NAME_BLACKLIST:
+        return True
+    # Skip names that are just an A-id with no real name
+    # (parser sometimes emits "ID: A000001" as the app_name)
+    if norm.startswith("id:") or norm.startswith("id："):
+        return True
+    # Skip single-character names
+    if len(norm) <= 1:
+        return True
+    return False
 
 
 def fy_from_date(date_str: str | None) -> str:
@@ -677,7 +779,9 @@ def main() -> int:
 
             # Build per-attachment cell_id → app_id map as we go, so
             # interactions can resolve endpoints back to the same app nodes.
-            conf_app_id_by_attachment_cell: dict[tuple[str, str], str] = {}
+            # Maps (attachment_id, cell_id) → app_id or None (if blacklisted).
+            # None entries silently suppress edges referencing that cell.
+            conf_app_id_by_attachment_cell: dict[tuple[str, str], str | None] = {}
 
             stats.setdefault("confluence_apps_merged", 0)
             stats.setdefault("confluence_integrations_merged", 0)
@@ -697,8 +801,20 @@ def main() -> int:
                     stats["cmdb_hits"] += 1
 
                 app_name = r["app_name"] or ""
-                # Use the attachment_id as the diagram scope for hash id
-                # derivation so non-CMDB apps get a stable per-file id.
+
+                # Skip blacklisted non-CMDB names — these are template
+                # placeholders, generic labels, or parser artifacts that
+                # would pollute the graph with meaningless nodes.
+                if not cmdb_hit and _is_blacklisted_app_name(app_name):
+                    stats["confluence_apps_blacklisted"] = stats.get("confluence_apps_blacklisted", 0) + 1
+                    # Still record the cell→app mapping as None so edges
+                    # referencing this cell are silently dropped.
+                    conf_app_id_by_attachment_cell[(att_id, cell_id)] = None
+                    continue
+
+                # Name-scoped hash for non-CMDB apps (cross-diagram dedup).
+                # The scope parameter is kept for signature compat but the
+                # hash now only uses the normalized name.
                 scope = f"conf:{att_id}"
                 pre_alias_id = derive_app_id(raw_std, app_name, scope, cmdb_hit, {})
                 app_id = derive_app_id(raw_std, app_name, scope, cmdb_hit, alias_map)
