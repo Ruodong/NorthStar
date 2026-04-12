@@ -1882,13 +1882,16 @@ async def serve_attachment(attachment_id: str):
         raise HTTPException(status_code=404, detail=f"file missing: {full_path}")
     media_type = row["media_type"] or mimetypes.guess_type(row["title"])[0] or "application/octet-stream"
     # PDFs and images should render inline in the browser (iframe / img tag),
-    # not trigger a download. FileResponse with filename= sets
-    # Content-Disposition: attachment, which forces download. Omit filename
-    # for inline-renderable types so the browser uses Content-Disposition:
-    # inline (Starlette's default when filename is None).
+    # not trigger a download. Starlette's FileResponse defaults to
+    # content_disposition_type="attachment" which forces download. We must
+    # explicitly set "inline" for browser-renderable types.
     inline_types = {"application/pdf", "image/png", "image/jpeg", "image/gif", "image/svg+xml", "image/webp"}
     if media_type in inline_types:
-        return FileResponse(str(full_path), media_type=media_type)
+        return FileResponse(
+            str(full_path),
+            media_type=media_type,
+            content_disposition_type="inline",
+        )
     return FileResponse(str(full_path), media_type=media_type, filename=row["title"])
 
 
