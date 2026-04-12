@@ -924,7 +924,7 @@ function AttachmentPreview({ attachment }: { attachment: Attachment }) {
       <div style={{ display: "flex", flexDirection: "column", flex: 1 }}>
         {header}
         <iframe
-          src={src}
+          src={`${src}#toolbar=1&navpanes=0`}
           title={attachment.title}
           style={{ flex: 1, border: 0, minHeight: 640 }}
         />
