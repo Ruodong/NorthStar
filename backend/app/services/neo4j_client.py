@@ -69,4 +69,5 @@ async def run_query(cypher: str, params: Optional[dict[str, Any]] = None) -> lis
 async def run_write(cypher: str, params: Optional[dict[str, Any]] = None) -> None:
     driver = await connect()
     async with driver.session() as session:
-        await session.run(cypher, params or {})
+        result = await session.run(cypher, params or {})
+        await result.consume()  # ensure write is committed before session closes

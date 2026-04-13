@@ -1258,14 +1258,20 @@ function OfficeXlsxPreview({
         setRowCount(actualRows);
         if (actualRows > MAX_ROWS) {
           setTruncated(true);
+          // Clone the range for truncation — do NOT mutate ws["!ref"]
+          // in place, otherwise switching sheet tabs and back permanently
+          // loses the original full range.
           const capped: typeof range = {
             s: { r: range.s.r, c: range.s.c },
             e: { r: range.s.r + MAX_ROWS - 1, c: range.e.c },
           };
-          ws["!ref"] = xlsxMod.utils.encode_range(capped);
-        } else {
-          setTruncated(false);
+          const cappedRef = xlsxMod.utils.encode_range(capped);
+          const wsCopy = { ...ws, "!ref": cappedRef };
+          const html = xlsxMod.utils.sheet_to_html(wsCopy, { editable: false });
+          setTableHtml(html);
+          return;
         }
+        setTruncated(false);
         const html = xlsxMod.utils.sheet_to_html(ws, { editable: false });
         setTableHtml(html);
       } catch (e) {

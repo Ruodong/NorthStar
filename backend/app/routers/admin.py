@@ -827,12 +827,14 @@ async def list_pages(
             seen_ids = {a["app_id"] for a in existing["project_apps"]}
             if app_entry["app_id"] not in seen_ids:
                 existing["project_apps"].append(app_entry)
-            # Sum counts across rows
-            existing["attachment_count"] = (
-                existing.get("attachment_count", 0) + row.get("attachment_count", 0)
+            # Take max, not sum: group_att/group_dr are already windowed
+            # SUMs across the group in SQL. Each row carries the same total.
+            # Summing them would inflate the count by the number of app rows.
+            existing["attachment_count"] = max(
+                existing.get("attachment_count", 0), row.get("attachment_count", 0)
             )
-            existing["drawio_count"] = (
-                existing.get("drawio_count", 0) + row.get("drawio_count", 0)
+            existing["drawio_count"] = max(
+                existing.get("drawio_count", 0), row.get("drawio_count", 0)
             )
             # Merge group_page_ids
             existing_pages = set(existing.get("group_page_ids") or [])
@@ -1148,7 +1150,12 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
     if exists is None:
         raise HTTPException(status_code=404, detail=f"Page {page_id} not found")
 
-    apps = await pg_client.fetch(
+    # Run all 4 queries concurrently — they share the same recursive CTE
+    # but are independent of each other. asyncio.gather avoids 4 sequential
+    # round-trips to Postgres.
+    import asyncio
+    apps, interactions, by_attachment, major_apps = await asyncio.gather(
+        pg_client.fetch(
         _EXTRACTED_SOURCES_CTE + """
         SELECT
             cda.attachment_id,
@@ -1186,9 +1193,8 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
             cda.app_name
         """,
         page_id,
-    )
-
-    interactions = await pg_client.fetch(
+    ),
+    pg_client.fetch(
         _EXTRACTED_SOURCES_CTE + """
         SELECT
             cdi.attachment_id,
@@ -1240,9 +1246,8 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
             att.title, cdi.edge_cell_id
         """,
         page_id,
-    )
-
-    by_attachment = await pg_client.fetch(
+    ),
+    pg_client.fetch(
         _EXTRACTED_SOURCES_CTE + """
         SELECT
             att.attachment_id,
@@ -1269,12 +1274,9 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
             att.title
         """,
         page_id,
-    )
-
+    ),
     # Major applications rollup (spec: confluence-major-apps § 5).
-    # Aggregates across the whole subtree, dedupes by effective app_id,
-    # sorts by Change > New > Sunset > occurrence_count > cmdb name.
-    major_apps = await pg_client.fetch(
+    pg_client.fetch(
         _EXTRACTED_SOURCES_CTE + """,
         raw_majors AS (
             -- Drawio-extracted majors
@@ -1357,7 +1359,8 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
             c.app_id
         """,
         page_id,
-    )
+    ),
+    )  # end asyncio.gather
 
     # Vision-extracted data (Phase 2): query the image extract tables for
     # any PNG/JPEG attachments on this page that have been processed by
@@ -1455,10 +1458,13 @@ async def get_page_extracted(page_id: str) -> ApiResponse:
                 row.get("source_page_title"),
             ) if s
         )
-        if _APP_ARCH_RE.search(haystack):
-            bucket = 0
-        elif _TECH_ARCH_RE.search(haystack):
+        # Tech must be checked BEFORE App so "Technical Architecture Diagram"
+        # wins the Tech bucket before _APP_ARCH_RE's broader "architecture"
+        # pattern claims it. Matches _arch_bucket() ordering.
+        if _TECH_ARCH_RE.search(haystack):
             bucket = 1
+        elif _APP_ARCH_RE.search(haystack):
+            bucket = 0
         else:
             bucket = 2
         # Within a bucket, sort by source_page_title (stable) then

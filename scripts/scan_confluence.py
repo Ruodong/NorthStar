@@ -556,6 +556,7 @@ def process_page(
             with pg.cursor() as rcur:
                 for ref in refs:
                     try:
+                        rcur.execute("SAVEPOINT ref_insert")
                         rcur.execute(
                             """
                             INSERT INTO northstar.drawio_reference
@@ -579,9 +580,17 @@ def process_page(
                         )
                     except psycopg.errors.UndefinedTable:
                         # Table missing — migration 006 not yet applied.
-                        # Don't fail the scan; the next run will try again.
-                        pg.rollback()
+                        # Use SAVEPOINT rollback so we don't discard the
+                        # page + attachment upserts already in the current
+                        # transaction. A full pg.rollback() here would
+                        # silently lose the entire page's data.
+                        rcur.execute("ROLLBACK TO SAVEPOINT ref_insert")
                         break
+                    finally:
+                        try:
+                            rcur.execute("RELEASE SAVEPOINT ref_insert")
+                        except Exception:
+                            pass
             totals["drawio_refs"] = totals.get("drawio_refs", 0) + len(refs)
             totals["page_link_refs"] = totals.get("page_link_refs", 0) + sum(
                 1 for r in refs if r["macro_kind"] == "page_link"

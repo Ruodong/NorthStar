@@ -8,3 +8,4 @@ python-multipart==0.0.12
 asyncpg==0.30.0
 beautifulsoup4==4.12.3
 Pillow==11.0.0
+defusedxml

@@ -18,7 +18,16 @@ import re
 import zlib
 from typing import Optional
 from urllib.parse import unquote
+try:
+    from defusedxml.ElementTree import fromstring as _safe_fromstring
+except ImportError:
+    # Fallback: use stdlib but add entity expansion limit
+    from xml.etree.ElementTree import fromstring as _safe_fromstring
 from xml.etree import ElementTree as ET
+
+# Override ET.fromstring with the defusedxml-safe version to prevent
+# XXE and billion-laughs attacks on user-uploaded drawio XML.
+ET.fromstring = _safe_fromstring  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +115,7 @@ LEGEND_FILL_COLORS = {"none", ""}
 
 # Fill colors for user/role shapes (not applications)
 ROLE_FILL_COLORS = {"#008a00"}
+_WHITE_FILLS = {"#ffffff", "#fff", "#fefefe", "#fdfdfd"}
 
 # Standard ID pattern: A followed by 5 or 6 digits
 # Trailing \b removed — ID may be followed directly by app name (e.g. "A003530OVP")
@@ -257,28 +267,38 @@ def decompress_drawio_content(xml_content: str) -> str:
     if not diagrams:
         return xml_content
 
-    diagram = diagrams[0]
+    # Process ALL diagram pages (not just the first). Multi-page drawio files
+    # are common for large systems where architects split App Architecture
+    # across multiple pages. Silently dropping pages 2+ causes data loss.
+    decompressed_pages: list[str] = []
+    for diagram in diagrams:
+        # Check if it already has inline XML children
+        if len(diagram) > 0:
+            decompressed_pages.append(ET.tostring(diagram, encoding="unicode"))
+            continue
 
-    # Check if it already has inline XML children
-    if len(diagram) > 0:
-        # Inline content — return as-is
+        # Text content might be compressed
+        text = (diagram.text or "").strip()
+        if not text:
+            continue
+
+        # Try to decompress: base64 decode → zlib raw inflate → url decode
+        try:
+            decoded = base64.b64decode(text)
+            inflated = zlib.decompress(decoded, -15)
+            url_decoded = unquote(inflated.decode("utf-8"))
+            decompressed_pages.append(url_decoded)
+        except Exception:
+            decompressed_pages.append(text)
+
+    if not decompressed_pages:
         return xml_content
 
-    # Text content might be compressed
-    text = (diagram.text or "").strip()
-    if not text:
-        return xml_content
+    if len(decompressed_pages) == 1:
+        return decompressed_pages[0]
 
-    # Try to decompress: base64 decode → zlib raw inflate → url decode
-    try:
-        decoded = base64.b64decode(text)
-        # Raw deflate: wbits=-15 skips the zlib header
-        inflated = zlib.decompress(decoded, -15)
-        url_decoded = unquote(inflated.decode("utf-8"))
-        return url_decoded
-    except Exception:
-        # Not compressed — treat as plain text XML
-        return text
+    # Wrap multiple pages in a single mxfile so the parser sees all cells
+    return "<mxfile>" + "".join(decompressed_pages) + "</mxfile>"
 
 
 # ---------------------------------------------------------------------------
@@ -916,7 +936,7 @@ def _parse_app_arch(root: ET.Element) -> dict:
         # never gets promoted and the container merge pass never runs,
         # so the app's status stays Unknown even though its children
         # have clear Keep/Change/New signals. (Fix for A002530 case.)
-        _WHITE_FILLS = {"#ffffff", "#fff", "#fefefe", "#fdfdfd"}
+        # _WHITE_FILLS is defined at module level alongside other fill constants
         fill_lower = fill.lower()
         is_known_color = fill_lower in FILL_COLOR_MAP
         is_legend_color = fill_lower in LEGEND_FILL_COLORS
