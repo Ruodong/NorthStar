@@ -111,10 +111,13 @@ def classify(media_type: str, title: str) -> str:
     """Map a mediaType / title to a coarse file_kind for preview routing."""
     mt = (media_type or "").lower()
     tl = title.lower()
-    if "mxfile" in mt or tl.endswith(".drawio") or ".drawio" in tl:
-        return "drawio"
+    # Check image BEFORE drawio so that .drawio.png (a PNG export of a
+    # drawio diagram) is classified as "image" (for vision extraction),
+    # not "drawio" (which would fail XML parsing).
     if mt.startswith("image/"):
         return "image"
+    if "mxfile" in mt or tl.endswith(".drawio"):
+        return "drawio"
     if mt == "application/pdf" or tl.endswith(".pdf"):
         return "pdf"
     if "presentation" in mt or tl.endswith((".ppt", ".pptx")):
