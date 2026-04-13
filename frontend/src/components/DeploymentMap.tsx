@@ -34,10 +34,12 @@ const VIEWPORTS: Record<string, { bounds: [number, number, number, number]; titl
 interface CityData {
   city: string;
   env: string;
-  servers: number;
-  containers: number;
-  databases: number;
-  object_storage: number;
+  // API returns pm/vm/k8s/db/oss/nas (resource-type counts per city+env)
+  pm: number;
+  vm: number;
+  k8s: number;
+  db: number;
+  oss: number;
   nas: number;
   total: number;
 }
@@ -276,10 +278,10 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
                   </td>
                   <td style={{ padding: "3px 4px", color: "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: 10, textAlign: "right" }}>
                     {[
-                      d.servers && `${d.servers} srv`,
-                      d.containers && `${d.containers} ctr`,
-                      d.databases && `${d.databases} db`,
-                      d.object_storage && `${d.object_storage} oss`,
+                      (d.pm || d.vm) && `${(d.pm || 0) + (d.vm || 0)} srv`,
+                      d.k8s && `${d.k8s} ctr`,
+                      d.db && `${d.db} db`,
+                      d.oss && `${d.oss} oss`,
                       d.nas && `${d.nas} nas`,
                     ].filter(Boolean).join(" · ")}
                   </td>
