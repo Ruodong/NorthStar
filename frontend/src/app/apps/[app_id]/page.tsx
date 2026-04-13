@@ -1475,12 +1475,16 @@ function DiagramsTab({ diagrams }: { diagrams: DiagramRef[] }) {
           if (!byProject.has(k)) byProject.set(k, []);
           byProject.get(k)!.push(d);
         }
+        // Named projects first, "Other Diagrams" last
         for (const [k, items] of byProject) {
+          if (k === "_none") continue;
           const first = items[0];
-          const label = k === "_none"
-            ? "Other Diagrams"
-            : `${first.project_id}${first.project_name ? " — " + first.project_name : ""}`;
+          const label = `${first.project_id}${first.project_name ? " — " + first.project_name : ""}`;
           groups.push({ key: k, label, items });
+        }
+        const noProject = byProject.get("_none");
+        if (noProject) {
+          groups.push({ key: "_none", label: "Other Diagrams", items: noProject });
         }
         return groups.map((g) => (
           <div key={g.key}>
