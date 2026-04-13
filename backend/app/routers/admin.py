@@ -492,60 +492,66 @@ async def list_pages(
     args.extend([limit, offset])
     rows = await pg_client.fetch(
         f"""
-        WITH base AS (
+        -- Pre-aggregate attachment counts per page in one pass (eliminates
+        -- per-row correlated subqueries that were O(N) × full-table scans).
+        WITH att_counts AS (
+            SELECT a.page_id,
+                   count(*) AS own_att,
+                   count(*) FILTER (
+                       WHERE a.file_kind = 'drawio'
+                         AND a.title NOT LIKE 'drawio-backup%'
+                         AND a.title NOT LIKE '~%'
+                   ) AS own_drawio
+            FROM northstar.confluence_attachment a
+            GROUP BY a.page_id
+        ),
+        -- Pre-aggregate referenced drawio counts per inclusion_page_id.
+        -- Materializes the drawio_reference join ONCE instead of per-row.
+        ref_counts AS (
+            SELECT dr.inclusion_page_id AS page_id,
+                   count(*) AS ref_drawio
+            FROM northstar.drawio_reference dr
+            JOIN northstar.confluence_attachment sa
+              ON sa.page_id = dr.source_page_id
+             AND sa.file_kind = 'drawio'
+             AND sa.title NOT LIKE 'drawio-backup%'
+             AND sa.title NOT LIKE '~%'
+             AND ((dr.diagram_name = '' AND dr.macro_kind = 'inc-drawio')
+                  OR sa.title = dr.diagram_name
+                  OR sa.title = dr.diagram_name || '.drawio')
+            GROUP BY dr.inclusion_page_id
+        ),
+        -- Fold ref_counts from child pages up to parent (depth-2 folders
+        -- reflecting drawios embedded on depth-3 children).
+        ref_with_children AS (
+            SELECT page_id, ref_drawio FROM ref_counts
+            UNION ALL
+            SELECT cp.parent_id AS page_id, rc.ref_drawio
+            FROM ref_counts rc
+            JOIN northstar.confluence_page cp ON cp.page_id = rc.page_id
+            WHERE cp.parent_id IS NOT NULL
+        ),
+        ref_totals AS (
+            SELECT page_id, sum(ref_drawio)::int AS ref_drawio
+            FROM ref_with_children
+            GROUP BY page_id
+        ),
+        base AS (
             SELECT p.page_id, p.fiscal_year, p.title, p.page_url, p.page_type,
                    p.project_id, p.q_app_id,
                    p.effective_app_id, p.app_hint, p.effective_app_hint,
-                   -- Confluence tree root fold-up: sub-initiative pages (e.g.
-                   -- FY2526-063 under LI2500067) group under their depth-1
-                   -- ancestor's project id instead of splitting off.
-                   -- See .specify/features/confluence-root-project-id/spec.md
                    COALESCE(p.root_project_id, p.project_id) AS group_project_id,
                    p.root_project_id,
                    p.depth, p.parent_id,
                    p.q_project_name, p.q_pm, p.q_it_lead, p.q_dt_lead,
-                   -- Own attachments on this page
-                   (SELECT count(*) FROM northstar.confluence_attachment a
-                      WHERE a.page_id = p.page_id) AS own_attachment_count,
-                   (SELECT count(*) FROM northstar.confluence_attachment a
-                      WHERE a.page_id = p.page_id AND a.file_kind = 'drawio'
-                        AND a.title NOT LIKE 'drawio-backup%' AND a.title NOT LIKE '~%') AS own_drawio_count,
-                   -- Drawio attachments reachable through drawio_reference
-                   -- links. Some pages (Robbie, Facility+, GAMS, LBP MA KM,
-                   -- LSC, LI2400338, LI2400343…) embed diagrams via the
-                   -- inc-drawio or templateUrl macros — the actual drawio
-                   -- lives on a SOURCE page scanned out-of-band. This
-                   -- subquery pulls those in so the admin list matches
-                   -- what a Confluence user sees.
-                   --
-                   -- Two parts:
-                   --   1. Refs directly owned by this page (its own macro)
-                   --   2. Refs on ANY descendant page (so a depth-2 folder
-                   --      reflects drawios embedded on its depth-3 children
-                   --      even though those children are filtered out in
-                   --      the default include_deep=false view). Descendant
-                   --      lookup uses parent_id direct-child match — good
-                   --      enough for 1-2 hops which is what we have.
-                   (SELECT count(*) FROM northstar.drawio_reference dr
-                      JOIN northstar.confluence_attachment sa
-                        ON sa.page_id = dr.source_page_id
-                       AND sa.file_kind = 'drawio'
-                       AND sa.title NOT LIKE 'drawio-backup%'
-                       AND sa.title NOT LIKE '~%'
-                       AND ((dr.diagram_name = '' AND dr.macro_kind = 'inc-drawio') OR sa.title = dr.diagram_name
-                            OR sa.title = dr.diagram_name || '.drawio')
-                      WHERE dr.inclusion_page_id = p.page_id
-                         OR dr.inclusion_page_id IN (
-                             SELECT child.page_id FROM northstar.confluence_page child
-                             WHERE child.parent_id = p.page_id
-                         )
-                   ) AS ref_drawio_count
+                   COALESCE(ac.own_att, 0) AS own_attachment_count,
+                   COALESCE(ac.own_drawio, 0) AS own_drawio_count,
+                   COALESCE(rt.ref_drawio, 0) AS ref_drawio_count
             FROM northstar.confluence_page p
+            LEFT JOIN att_counts ac ON ac.page_id = p.page_id
+            LEFT JOIN ref_totals rt ON rt.page_id = p.page_id
             {where_clause}
         ),
-        -- Combined attachment and drawio counts: own + referenced.
-        -- We surface them as attachment_count/drawio_count so downstream
-        -- grouping/aggregation code stays unchanged.
         base_with_refs AS (
             SELECT b.*,
                    (b.own_attachment_count + b.ref_drawio_count) AS attachment_count,
