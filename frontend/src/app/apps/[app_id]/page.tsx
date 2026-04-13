@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { DeploymentMap } from "@/components/DeploymentMap";
 
 // -----------------------------------------------------------------------------
 // Types — match backend/app/services/graph_query.py::get_application
@@ -2056,15 +2057,30 @@ function DeploymentTab({ appId }: { appId: string }) {
 
   return (
     <div>
-      {/* Summary KPIs */}
+      {/* Summary KPIs with Prod/Non-Prod breakdown */}
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
-        <DeployKpi label="Servers (VM/PM)" value={summary.servers} />
-        <DeployKpi label="Containers" value={summary.containers} />
-        <DeployKpi label="Databases" value={summary.databases} />
-        <DeployKpi label="Object Storage" value={summary.object_storage || 0} />
-        <DeployKpi label="NAS" value={summary.nas || 0} />
+        <DeployKpi label="Servers (VM/PM)" value={summary.servers}
+          prod={servers.filter(s => s.env === "Production").length}
+          nonProd={servers.filter(s => s.env === "Non-Production").length} />
+        <DeployKpi label="Containers" value={summary.containers}
+          prod={containers.filter(c => c.env === "Production").length}
+          nonProd={containers.filter(c => c.env === "Non-Production").length} />
+        <DeployKpi label="Databases" value={summary.databases}
+          prod={databases.filter(d => d.env === "Production").length}
+          nonProd={databases.filter(d => d.env === "Non-Production").length} />
+        <DeployKpi label="Object Storage" value={summary.object_storage || 0}
+          prod={oss.filter(o => o.env === "Production").length}
+          nonProd={oss.filter(o => o.env === "Non-Production").length} />
+        <DeployKpi label="NAS" value={summary.nas || 0}
+          prod={nas.filter(n => n.env === "Production").length}
+          nonProd={nas.filter(n => n.env === "Non-Production").length} />
         <DeployKpi label="Total" value={total} accent />
       </div>
+
+      {/* World/Regional Map */}
+      {(data.by_city_env || []).length > 0 && (
+        <DeploymentMap data={data.by_city_env} />
+      )}
 
       {/* City × Env distribution */}
       {(data.by_city_env || by_city).length > 0 && (
@@ -2291,7 +2307,9 @@ function DeploymentTab({ appId }: { appId: string }) {
   );
 }
 
-function DeployKpi({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
+function DeployKpi({ label, value, accent, prod, nonProd }: {
+  label: string; value: number; accent?: boolean; prod?: number; nonProd?: number;
+}) {
   return (
     <div
       style={{
@@ -2311,6 +2329,13 @@ function DeployKpi({ label, value, accent }: { label: string; value: number; acc
       }}>
         {value.toLocaleString()}
       </div>
+      {prod !== undefined && value > 0 && (
+        <div style={{ fontSize: 10, fontFamily: "var(--font-mono)", marginTop: 4, color: "var(--text-dim)" }}>
+          <span style={{ color: "var(--accent)" }}>{prod}P</span>
+          {" "}
+          <span style={{ color: "#6ba6e8" }}>{nonProd || 0}NP</span>
+        </div>
+      )}
     </div>
   );
 }
