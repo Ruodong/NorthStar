@@ -132,8 +132,8 @@ async def get_application(app_id: str) -> Optional[dict]:
 
     return {
         "app": app_dict,
-        "outbound": [e for e in row["out_edges"] if e.get("target")],
-        "inbound": [e for e in row["in_edges"] if e.get("source")],
+        "outbound": [e for e in row["out_edges"] if e.get("target") and not e["target"].startswith("X")],
+        "inbound": [e for e in row["in_edges"] if e.get("source") and not e["source"].startswith("X")],
         "investments": investments,
         "diagrams": neo4j_diagrams,
         "confluence_pages": [c for c in row["confluence_pages"] if c.get("page_id")],

@@ -55,6 +55,7 @@ async def summary(
         SELECT diff_type, count(*) AS c
         FROM northstar.ingestion_diffs
         WHERE detected_at >= $1
+          AND NOT (entity_type = 'application' AND entity_id LIKE 'X%')
         GROUP BY diff_type
         """,
         since_dt,
@@ -86,13 +87,15 @@ async def feed(
 ) -> ApiResponse:
     """Paginated feed of diff events, newest first, grouped client-side."""
     window_start = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+    # Exclude non-CMDB apps (X-prefix hash IDs) — they're diagram-derived noise
+    xclude = "AND NOT (entity_type = 'application' AND entity_id LIKE 'X%')"
     if diff_type:
         rows = await pg_client.fetch(
-            """
+            f"""
             SELECT id, loader_run_id, detected_at, diff_type, entity_type,
                    entity_id, entity_name, fiscal_year, old_value, new_value
             FROM northstar.ingestion_diffs
-            WHERE detected_at >= $1 AND diff_type = $2
+            WHERE detected_at >= $1 AND diff_type = $2 {xclude}
             ORDER BY detected_at DESC, id DESC
             LIMIT $3 OFFSET $4
             """,
@@ -103,11 +106,11 @@ async def feed(
         )
     else:
         rows = await pg_client.fetch(
-            """
+            f"""
             SELECT id, loader_run_id, detected_at, diff_type, entity_type,
                    entity_id, entity_name, fiscal_year, old_value, new_value
             FROM northstar.ingestion_diffs
-            WHERE detected_at >= $1
+            WHERE detected_at >= $1 {xclude}
             ORDER BY detected_at DESC, id DESC
             LIMIT $2 OFFSET $3
             """,
@@ -117,9 +120,9 @@ async def feed(
         )
 
     total_row = await pg_client.fetchval(
-        """
+        f"""
         SELECT count(*) FROM northstar.ingestion_diffs
-        WHERE detected_at >= $1
+        WHERE detected_at >= $1 {xclude}
         """
         + (" AND diff_type = $2" if diff_type else ""),
         *((window_start, diff_type) if diff_type else (window_start,)),
