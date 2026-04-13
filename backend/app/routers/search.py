@@ -26,6 +26,7 @@ router = APIRouter(prefix="/api/search", tags=["search"])
 MIN_QUERY_LEN = 2
 APP_LIMIT = 10
 PROJECT_LIMIT = 5
+EA_DOC_LIMIT = 5
 
 
 async def _search_applications(q: str, limit: int) -> list[dict[str, Any]]:
@@ -68,6 +69,40 @@ async def _search_applications(q: str, limit: int) -> list[dict[str, Any]]:
         ) AS score
     FROM prefilter
     ORDER BY score DESC, app_id ASC
+    LIMIT $2
+    """
+    rows = await pg_client.fetch(sql, q, limit)
+    return [dict(r) for r in rows]
+
+
+async def _search_ea_documents(q: str, limit: int) -> list[dict[str, Any]]:
+    """Search EA standards/guidelines via FTS + trigram."""
+    sql = """
+    WITH prefilter AS (
+        SELECT
+            page_id, title, domain, doc_type, page_url, excerpt,
+            to_tsvector('simple',
+                coalesce(title, '') || ' ' ||
+                coalesce(excerpt, '')
+            ) AS doc_tsv,
+            lower(coalesce(title, '')) AS doc_lower
+        FROM northstar.ref_ea_document
+        WHERE
+            lower(coalesce(title, '') || ' ' || coalesce(excerpt, ''))
+                ILIKE '%' || lower($1) || '%'
+            OR to_tsvector('simple',
+                coalesce(title, '') || ' ' ||
+                coalesce(excerpt, '')
+            ) @@ plainto_tsquery('simple', $1)
+    )
+    SELECT
+        page_id, title, domain, doc_type, page_url, excerpt,
+        GREATEST(
+            ts_rank(doc_tsv, plainto_tsquery('simple', $1)),
+            similarity(doc_lower, lower($1)) * 0.5
+        ) AS score
+    FROM prefilter
+    ORDER BY score DESC, title ASC
     LIMIT $2
     """
     rows = await pg_client.fetch(sql, q, limit)
@@ -127,6 +162,7 @@ async def search(
     q: str = Query("", description="Search query, min 2 characters"),
     app_limit: int = Query(APP_LIMIT, ge=1, le=50),
     project_limit: int = Query(PROJECT_LIMIT, ge=1, le=20),
+    ea_doc_limit: int = Query(EA_DOC_LIMIT, ge=1, le=20),
 ) -> ApiResponse:
     """Unified search across applications and projects.
 
@@ -140,14 +176,16 @@ async def search(
                 "query": q,
                 "applications": [],
                 "projects": [],
+                "ea_documents": [],
                 "note": f"query too short (min {MIN_QUERY_LEN} characters)",
             }
         )
 
     try:
-        apps, projects = await asyncio.gather(
+        apps, projects, ea_docs = await asyncio.gather(
             _search_applications(q, app_limit),
             _search_projects(q, project_limit),
+            _search_ea_documents(q, ea_doc_limit),
         )
     except Exception as exc:  # noqa: BLE001
         # Fallback: if pg_trgm extension is missing or indexes don't exist
@@ -163,5 +201,6 @@ async def search(
             "query": q,
             "applications": apps,
             "projects": projects,
+            "ea_documents": ea_docs,
         }
     )

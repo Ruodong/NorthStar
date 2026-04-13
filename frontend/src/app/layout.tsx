@@ -40,6 +40,7 @@ export default function RootLayout({
             <nav>
               <Link href="/dashboard">Dashboard</Link>
               <Link href="/graph">Graph</Link>
+              <Link href="/standards">Standards</Link>
               <Link href="/whats-new">What&apos;s New</Link>
               <Link href="/ingestion">Ingestion</Link>
               <Link href="/admin">Reference Data</Link>

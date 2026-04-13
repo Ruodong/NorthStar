@@ -731,6 +731,9 @@ export default function ProjectOverviewPage() {
         </div>
       )}
 
+      {/* EA Templates */}
+      <EaTemplatesPanel />
+
       {/* Full questionnaire from primary page */}
       {primaryPage?.questionnaire_sections && primaryPage.questionnaire_sections.length > 0 && (
         <div style={{ marginTop: 16 }}>
@@ -804,6 +807,68 @@ export default function ProjectOverviewPage() {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/* ── EA Templates Panel ──────────────────────────────────────── */
+interface EaTemplate {
+  page_id: string;
+  title: string;
+  domain: string;
+  page_url: string;
+  parent_section: string | null;
+}
+
+const EA_DOMAIN_SHORT: Record<string, string> = {
+  ai: "AI", aa: "App", ta: "Tech", da: "Data", dpp: "Privacy", governance: "Gov",
+};
+
+function EaTemplatesPanel() {
+  const [templates, setTemplates] = useState<EaTemplate[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let c = false;
+    (async () => {
+      try {
+        const r = await fetch("/api/ea-documents/templates");
+        const j = await r.json();
+        if (!c && j.success) setTemplates(j.data || []);
+      } catch { /* non-critical */ }
+      finally { if (!c) setLoading(false); }
+    })();
+    return () => { c = true; };
+  }, []);
+
+  if (loading || templates.length === 0) return null;
+
+  return (
+    <div className="panel" style={{ marginTop: 16 }}>
+      <div className="panel-title">EA Templates ({templates.length})</div>
+      <div style={{ display: "grid", gap: 6 }}>
+        {templates.map((t) => (
+          <div key={t.page_id} style={{ display: "flex", alignItems: "baseline", gap: 8, fontSize: 13 }}>
+            <span
+              style={{
+                fontSize: 9, fontWeight: 600, padding: "1px 5px",
+                border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)",
+                color: "var(--text-muted)", fontFamily: "var(--font-mono)",
+              }}
+            >
+              {EA_DOMAIN_SHORT[t.domain] || t.domain}
+            </span>
+            <a
+              href={t.page_url}
+              target="_blank"
+              rel="noreferrer"
+              style={{ color: "var(--accent)", textDecoration: "none" }}
+            >
+              {t.title} ↗
+            </a>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

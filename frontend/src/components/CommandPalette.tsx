@@ -31,12 +31,31 @@ interface ProjectResult {
   score: number;
 }
 
+interface EaDocResult {
+  page_id: string;
+  title: string;
+  domain: string;
+  doc_type: string;
+  page_url: string;
+  excerpt: string | null;
+  score: number;
+}
+
 interface SearchResponse {
   query: string;
   applications: AppResult[];
   projects: ProjectResult[];
+  ea_documents: EaDocResult[];
   note?: string;
 }
+
+const DOMAIN_LABELS: Record<string, string> = {
+  ai: "AI", aa: "App", ta: "Tech", da: "Data", dpp: "Privacy", governance: "Gov",
+};
+const DOC_TYPE_LABELS: Record<string, string> = {
+  standard: "Standard", guideline: "Guideline",
+  reference_arch: "Ref Arch", template: "Template",
+};
 
 interface RecentItem {
   kind: "app" | "project";
@@ -165,7 +184,7 @@ export function CommandPalette() {
 
   // --- Flat list of selectable items (for keyboard nav) ---
   const items = useMemo(() => {
-    const out: Array<{ kind: "app" | "project"; id: string; label: string; sub: string }> =
+    const out: Array<{ kind: "app" | "project" | "ea_doc"; id: string; label: string; sub: string; url?: string }> =
       [];
     if (data) {
       for (const a of data.applications) {
@@ -184,16 +203,31 @@ export function CommandPalette() {
           sub: [p.pm, p.status].filter(Boolean).join(" · "),
         });
       }
+      for (const d of data.ea_documents || []) {
+        out.push({
+          kind: "ea_doc",
+          id: d.page_id,
+          label: d.title,
+          sub: `${DOMAIN_LABELS[d.domain] || d.domain} · ${DOC_TYPE_LABELS[d.doc_type] || d.doc_type}`,
+          url: d.page_url,
+        });
+      }
     }
     return out;
   }, [data]);
 
   // --- Navigate on select ---
   const onSelect = useCallback(
-    (item: { kind: "app" | "project"; id: string; label: string }) => {
+    (item: { kind: "app" | "project" | "ea_doc"; id: string; label: string; url?: string }) => {
+      // EA docs open Confluence in a new tab — don't persist as recent
+      if (item.kind === "ea_doc" && item.url) {
+        window.open(item.url, "_blank", "noopener");
+        setOpen(false);
+        return;
+      }
       // persist recent
       const next: RecentItem[] = [
-        { kind: item.kind, id: item.id, label: item.label, ts: Date.now() },
+        { kind: item.kind as "app" | "project", id: item.id, label: item.label, ts: Date.now() },
         ...recent.filter((r) => !(r.kind === item.kind && r.id === item.id)),
       ].slice(0, MAX_RECENT);
       saveRecent(next);
@@ -290,7 +324,7 @@ export function CommandPalette() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={onInputKeyDown}
-            placeholder="Search applications, projects…"
+            placeholder="Search applications, projects, standards…"
             style={{
               flex: 1,
               background: "transparent",
@@ -400,6 +434,32 @@ export function CommandPalette() {
                     sub={[p.pm, p.status].filter(Boolean).join(" · ")}
                     mono={false}
                     id={p.project_id}
+                  />
+                );
+              })}
+            </ResultGroup>
+          )}
+
+          {data && (data.ea_documents || []).length > 0 && (
+            <ResultGroup label={`EA Standards & Guidelines (${data.ea_documents.length})`}>
+              {data.ea_documents.map((d, i) => {
+                const idxFlat = (data?.applications.length || 0) + (data?.projects.length || 0) + i;
+                return (
+                  <ResultRow
+                    key={`ea-${d.page_id}`}
+                    selected={selectedIdx === idxFlat}
+                    onClick={() =>
+                      onSelect({
+                        kind: "ea_doc",
+                        id: d.page_id,
+                        label: d.title,
+                        url: d.page_url,
+                      })
+                    }
+                    badge="EA"
+                    label={d.title}
+                    sub={`${DOMAIN_LABELS[d.domain] || d.domain} · ${DOC_TYPE_LABELS[d.doc_type] || d.doc_type}`}
+                    mono={false}
                   />
                 );
               })}

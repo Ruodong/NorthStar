@@ -7,6 +7,7 @@
 #      applications_history + ingestion_diffs so /whats-new stays fresh)
 #   3. (Optional) Refresh fuzzy merge candidates so the /admin/aliases
 #      queue picks up any newly-added non-CMDB apps
+#   4. (Optional) Sync EA documents from Confluence EA space
 #
 # This script MUST be run from the host, not from inside a container —
 # sync_from_egm.py needs VPN access to reach egm-postgres which the docker
@@ -52,22 +53,28 @@ fi
 log "===== starting weekly sync ====="
 
 # --- Stage 1: EGM/EAM → NorthStar PG ---
-log "stage 1/3: sync_from_egm.py"
+log "stage 1/4: sync_from_egm.py"
 "$PYTHON" scripts/sync_from_egm.py || fail "sync_from_egm failed"
 
 # --- Stage 2: PG → Neo4j ---
 # --wipe is intentional: the loader is idempotent but starting clean guarantees
 # orphan nodes from previous runs are cleaned up (e.g., apps that no longer
 # appear in any diagram after an EGM master-data cleanup).
-log "stage 2/3: load_neo4j_from_pg.py --wipe"
+log "stage 2/4: load_neo4j_from_pg.py --wipe"
 "$PYTHON" scripts/load_neo4j_from_pg.py --wipe || fail "load_neo4j_from_pg failed"
 
 # --- Stage 3: refresh fuzzy merge candidates ---
 # Non-fatal: the aliases system is optional, we shouldn't fail the whole weekly
 # sync if it misbehaves.
-log "stage 3/3: generate_merge_candidates.py"
+log "stage 3/4: generate_merge_candidates.py"
 if ! "$PYTHON" scripts/generate_merge_candidates.py; then
     log "WARN: generate_merge_candidates failed — continuing anyway"
+fi
+
+# --- Stage 4: sync EA documents from Confluence EA space ---
+log "stage 4/4: sync_ea_documents.py"
+if ! "$PYTHON" scripts/sync_ea_documents.py; then
+    log "WARN: sync_ea_documents failed — continuing anyway"
 fi
 
 log "===== weekly sync completed successfully ====="

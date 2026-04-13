@@ -14,6 +14,12 @@
     "backend/app/routers/masters.py": {
       "api": ["api-tests/test_masters.py"]
     },
+    "backend/app/routers/ea_documents.py": {
+      "api": ["api-tests/test_ea_documents.py"]
+    },
+    "backend/app/routers/search.py": {
+      "api": ["api-tests/test_ea_documents.py"]
+    },
     "backend/app/routers/admin.py": {
       "api": ["api-tests/test_admin_confluence.py", "api-tests/test_admin_applications.py", "api-tests/test_admin_projects.py", "api-tests/test_office_preview.py", "api-tests/test_image_vision.py"]
     },
@@ -96,6 +102,9 @@
     },
     "scripts/propagate_major_apps.py": {
       "api": ["api-tests/test_confluence_major_apps.py"]
+    },
+    "scripts/sync_ea_documents.py": {
+      "api": ["api-tests/test_ea_documents.py"]
     }
   },
   "wildcards": {

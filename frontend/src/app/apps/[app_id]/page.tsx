@@ -1018,7 +1018,91 @@ function OverviewTab({
           </ul>
         </Panel>
       )}
+
+      <EaStandardsPanel appId={app.app_id} />
     </div>
+  );
+}
+
+/* ── EA Standards & Guidelines panel (contextual) ────────────── */
+interface EaDocRef {
+  page_id: string;
+  title: string;
+  domain: string;
+  doc_type: string;
+  page_url: string;
+  excerpt: string | null;
+}
+
+const EA_DOMAIN_LABELS: Record<string, string> = {
+  ai: "AI", aa: "App", ta: "Tech", da: "Data", dpp: "Privacy", governance: "Gov",
+};
+const EA_TYPE_LABELS: Record<string, string> = {
+  standard: "Standard", guideline: "Guideline",
+  reference_arch: "Ref Arch", template: "Template",
+};
+
+function EaStandardsPanel({ appId }: { appId: string }) {
+  const [docs, setDocs] = useState<EaDocRef[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/ea-documents/for-app/${encodeURIComponent(appId)}`);
+        const j = await r.json();
+        if (!cancelled && j.success) setDocs(j.data || []);
+      } catch {
+        /* non-critical — hide panel */
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [appId]);
+
+  if (loading || docs.length === 0) return null;
+
+  const groups: { label: string; items: EaDocRef[] }[] = [];
+  const standards = docs.filter((d) => d.doc_type === "standard");
+  const guidelines = docs.filter((d) => d.doc_type === "guideline");
+  const others = docs.filter((d) => d.doc_type !== "standard" && d.doc_type !== "guideline");
+  if (standards.length) groups.push({ label: "Standards", items: standards });
+  if (guidelines.length) groups.push({ label: "Guidelines", items: guidelines });
+  if (others.length) groups.push({ label: "Reference Architectures", items: others });
+
+  return (
+    <Panel title={`EA Standards & Guidelines (${docs.length})`}>
+      {groups.map((g) => (
+        <div key={g.label} style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--text-dim)", marginBottom: 6 }}>
+            {g.label}
+          </div>
+          {g.items.map((d) => (
+            <div key={d.page_id} style={{ marginBottom: 8, display: "flex", alignItems: "baseline", gap: 8 }}>
+              <span
+                style={{
+                  fontSize: 9, fontWeight: 600, padding: "1px 5px",
+                  border: "1px solid var(--border-strong)", borderRadius: "var(--radius-sm)",
+                  color: "var(--text-muted)", fontFamily: "var(--font-mono)",
+                }}
+              >
+                {EA_DOMAIN_LABELS[d.domain] || d.domain}
+              </span>
+              <a
+                href={d.page_url}
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: "var(--accent)", textDecoration: "none", fontSize: 13 }}
+              >
+                {d.title} ↗
+              </a>
+            </div>
+          ))}
+        </div>
+      ))}
+    </Panel>
   );
 }
 
