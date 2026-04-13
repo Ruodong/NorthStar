@@ -42,16 +42,24 @@ interface CityData {
   total: number;
 }
 
-const W = 900;
-const H = 440;
+const W = 960;
+
+function getH(bounds: [number, number, number, number]): number {
+  const [minLon, maxLon, minLat, maxLat] = bounds;
+  const lonSpan = maxLon - minLon;
+  const latSpan = maxLat - minLat;
+  // Mercator-ish correction: lat degrees are ~1.3x wider than lon near 40°N
+  return Math.round(W * (latSpan / lonSpan) * 1.3);
+}
 
 function lonLatToXY(
   lon: number, lat: number,
   bounds: [number, number, number, number],
+  h: number,
 ): [number, number] {
   const [minLon, maxLon, minLat, maxLat] = bounds;
   const x = ((lon - minLon) / (maxLon - minLon)) * W;
-  const y = ((maxLat - lat) / (maxLat - minLat)) * H;
+  const y = ((maxLat - lat) / (maxLat - minLat)) * h;
   return [x, y];
 }
 
@@ -59,10 +67,11 @@ function lonLatToXY(
 function geoToPath(
   coordinates: number[][][],
   bounds: [number, number, number, number],
+  h: number,
 ): string {
   return coordinates
     .map((ring) => {
-      const pts = ring.map(([lon, lat]) => lonLatToXY(lon, lat, bounds));
+      const pts = ring.map(([lon, lat]) => lonLatToXY(lon, lat, bounds, h));
       return "M" + pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join("L") + "Z";
     })
     .join(" ");
@@ -136,14 +145,15 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
   }, [byCityAgg]);
 
   const maxTotal = Math.max(...Object.values(byCityAgg).map((v) => v.total), 1);
+  const H = getH(viewport.bounds);
 
   // Convert land polygons to SVG paths for current viewport
   const svgLandPaths = useMemo(() => {
     if (!landPaths.length) return [];
     return (landPaths as unknown as number[][][][]).map((coords) =>
-      geoToPath(coords as unknown as number[][][], viewport.bounds)
+      geoToPath(coords as unknown as number[][][], viewport.bounds, H)
     );
-  }, [landPaths, viewport]);
+  }, [landPaths, viewport, H]);
 
   return (
     <div style={{
@@ -161,7 +171,7 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
         {viewport.title}
       </div>
 
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", maxHeight: 380 }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", maxHeight: 500 }}>
         <rect width={W} height={H} fill="var(--bg)" rx="4" />
 
         {/* Land masses */}
@@ -174,7 +184,7 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
           const geo = CITY_GEO[city];
           if (!geo) return null;
 
-          const [cx, cy] = lonLatToXY(geo.lon, geo.lat, viewport.bounds);
+          const [cx, cy] = lonLatToXY(geo.lon, geo.lat, viewport.bounds, H);
           if (cx < -30 || cx > W + 30 || cy < -30 || cy > H + 30) return null;
 
           const radius = Math.max(8, Math.min(45, Math.sqrt(agg.total / maxTotal) * 45));
@@ -209,9 +219,9 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
                 />
               )}
 
-              <text x={cx} y={cy + 4}
-                textAnchor="middle" fill={isHov ? "#fff" : "var(--text-muted)"}
-                fontSize={radius > 16 ? 13 : 10}
+              <text x={cx} y={cy + 5}
+                textAnchor="middle" fill={isHov ? "#fff" : "var(--text)"}
+                fontSize="13"
                 fontFamily="var(--font-mono)" fontWeight={700}
               >
                 {agg.total}
