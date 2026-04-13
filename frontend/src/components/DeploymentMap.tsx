@@ -5,22 +5,22 @@ import { feature } from "topojson-client";
 import type { Topology, GeometryObject } from "topojson-specification";
 
 // City coordinates in lon/lat (WGS84)
-const CITY_GEO: Record<string, { lon: number; lat: number; label: string; region: "CN" | "US" | "EU" | "APAC" }> = {
-  SY:           { lon: 123.43, lat: 41.80, label: "沈阳 Shenyang",   region: "CN" },
-  NM:           { lon: 111.65, lat: 40.84, label: "内蒙 Hohhot",     region: "CN" },
-  BJ:           { lon: 116.40, lat: 39.90, label: "北京 Beijing",    region: "CN" },
-  SH:           { lon: 121.47, lat: 31.23, label: "上海 Shanghai",   region: "CN" },
-  SZ:           { lon: 114.07, lat: 22.55, label: "深圳 Shenzhen",   region: "CN" },
-  TJ:           { lon: 117.20, lat: 39.13, label: "天津 Tianjin",    region: "CN" },
-  WH:           { lon: 114.30, lat: 30.59, label: "武汉 Wuhan",      region: "CN" },
-  HK:           { lon: 114.17, lat: 22.28, label: "香港 Hong Kong",  region: "CN" },
-  "US-Reston":  { lon: -77.35, lat: 38.97, label: "US Reston",       region: "US" },
-  "US-Chicago": { lon: -87.63, lat: 41.88, label: "US Chicago",      region: "US" },
-  "US-Ral":     { lon: -78.64, lat: 35.78, label: "US Raleigh",      region: "US" },
-  NA:           { lon: -80.00, lat: 38.00, label: "North America",   region: "US" },
-  Frankfurt:    { lon:   8.68, lat: 50.11, label: "Frankfurt",       region: "EU" },
-  Hohhot:       { lon: 111.65, lat: 40.84, label: "内蒙 Hohhot",     region: "CN" },
-  Shenyang:     { lon: 123.43, lat: 41.80, label: "沈阳 Shenyang",   region: "CN" },
+const CITY_GEO: Record<string, { lon: number; lat: number; label: string; labelZh?: string; region: "CN" | "US" | "EU" | "APAC" }> = {
+  SY:           { lon: 123.43, lat: 41.80, label: "Shenyang",   labelZh: "沈阳",   region: "CN" },
+  NM:           { lon: 111.65, lat: 40.84, label: "Hohhot",     labelZh: "内蒙",   region: "CN" },
+  BJ:           { lon: 116.40, lat: 39.90, label: "Beijing",    labelZh: "北京",   region: "CN" },
+  SH:           { lon: 121.47, lat: 31.23, label: "Shanghai",   labelZh: "上海",   region: "CN" },
+  SZ:           { lon: 114.07, lat: 22.55, label: "Shenzhen",   labelZh: "深圳",   region: "CN" },
+  TJ:           { lon: 117.20, lat: 39.13, label: "Tianjin",    labelZh: "天津",   region: "CN" },
+  WH:           { lon: 114.30, lat: 30.59, label: "Wuhan",      labelZh: "武汉",   region: "CN" },
+  HK:           { lon: 114.17, lat: 22.28, label: "Hong Kong",  labelZh: "香港",   region: "CN" },
+  "US-Reston":  { lon: -77.35, lat: 38.97, label: "Reston",                       region: "US" },
+  "US-Chicago": { lon: -87.63, lat: 41.88, label: "Chicago",                      region: "US" },
+  "US-Ral":     { lon: -78.64, lat: 35.78, label: "Raleigh",                      region: "US" },
+  NA:           { lon: -80.00, lat: 38.00, label: "N. America",                    region: "US" },
+  Frankfurt:    { lon:   8.68, lat: 50.11, label: "Frankfurt",                     region: "EU" },
+  Hohhot:       { lon: 111.65, lat: 40.84, label: "Hohhot",     labelZh: "内蒙",   region: "CN" },
+  Shenyang:     { lon: 123.43, lat: 41.80, label: "Shenyang",   labelZh: "沈阳",   region: "CN" },
 };
 
 // Viewports: [minLon, maxLon, minLat, maxLat]
@@ -31,26 +31,41 @@ const VIEWPORTS: Record<string, { bounds: [number, number, number, number]; titl
   EU:    { bounds: [-5, 30, 42, 58],     title: "Europe Deployment" },
 };
 
-interface CityData {
+export interface CityData {
   city: string;
   env: string;
-  // API returns pm/vm/k8s/db/oss/nas (resource-type counts per city+env)
-  pm: number;
-  vm: number;
-  k8s: number;
-  db: number;
-  oss: number;
+  servers: number;
+  containers: number;
+  databases: number;
+  object_storage: number;
   nas: number;
   total: number;
 }
 
+// Aggregated data for a single city across environments
+interface CityAgg {
+  prod: { servers: number; containers: number; databases: number; oss: number; nas: number; total: number };
+  nonProd: { servers: number; containers: number; databases: number; oss: number; nas: number; total: number };
+  total: number;
+}
+
+// Resource type config for display
+const RESOURCE_TYPES = [
+  { key: "servers",    icon: "SRV", label: "Server" },
+  { key: "containers", icon: "CTR", label: "Container" },
+  { key: "databases",  icon: "DB",  label: "Database" },
+  { key: "oss",        icon: "OSS", label: "Object Storage" },
+  { key: "nas",        icon: "NAS", label: "NAS" },
+] as const;
+
 const W = 960;
+const CARD_W = 130; // label card width in SVG units
+const CARD_LINE_H = 14; // line height per resource row
 
 function getH(bounds: [number, number, number, number]): number {
   const [minLon, maxLon, minLat, maxLat] = bounds;
   const lonSpan = maxLon - minLon;
   const latSpan = maxLat - minLat;
-  // Mercator-ish correction: lat degrees are ~1.3x wider than lon near 40°N
   return Math.round(W * (latSpan / lonSpan) * 1.3);
 }
 
@@ -65,7 +80,6 @@ function lonLatToXY(
   return [x, y];
 }
 
-// Convert GeoJSON polygon coordinates to SVG path string
 function geoToPath(
   coordinates: number[][][],
   bounds: [number, number, number, number],
@@ -79,8 +93,17 @@ function geoToPath(
     .join(" ");
 }
 
+// Label card offset: push card away from center to avoid overlapping the dot
+function getCardOffset(
+  cx: number, cy: number, svgW: number, svgH: number,
+): { dx: number; dy: number } {
+  // Push cards toward the nearest edge (away from center)
+  const dx = cx > svgW / 2 ? 16 : -(CARD_W + 16);
+  const dy = cy > svgH / 2 ? -8 : 8;
+  return { dx, dy };
+}
+
 export function DeploymentMap({ data }: { data: CityData[] }) {
-  const [hovered, setHovered] = useState<string | null>(null);
   const [landPaths, setLandPaths] = useState<string[]>([]);
 
   // Load world-atlas land data
@@ -110,7 +133,6 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
             }
           }
         }
-        // Store raw coordinate arrays
         setLandPaths(paths as unknown as string[]);
       } catch (e) {
         console.error("Failed to load world map:", e);
@@ -118,16 +140,26 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
     })();
   }, []);
 
-  // Aggregate by city
+  // Aggregate by city: merge prod/non-prod rows into a single CityAgg
   const byCityAgg = useMemo(() => {
-    const agg: Record<string, { total: number; prod: number; nonProd: number; data: CityData[] }> = {};
+    const agg: Record<string, CityAgg> = {};
     for (const d of data) {
       const key = d.city;
-      if (!agg[key]) agg[key] = { total: 0, prod: 0, nonProd: 0, data: [] };
-      agg[key].total += d.total;
-      if (d.env === "Production") agg[key].prod += d.total;
-      else agg[key].nonProd += d.total;
-      agg[key].data.push(d);
+      if (!agg[key]) {
+        agg[key] = {
+          prod:    { servers: 0, containers: 0, databases: 0, oss: 0, nas: 0, total: 0 },
+          nonProd: { servers: 0, containers: 0, databases: 0, oss: 0, nas: 0, total: 0 },
+          total: 0,
+        };
+      }
+      const bucket = d.env === "Production" ? agg[key].prod : agg[key].nonProd;
+      bucket.servers    += d.servers || 0;
+      bucket.containers += d.containers || 0;
+      bucket.databases  += d.databases || 0;
+      bucket.oss        += d.object_storage || 0;
+      bucket.nas        += d.nas || 0;
+      bucket.total      += d.total;
+      agg[key].total    += d.total;
     }
     return agg;
   }, [data]);
@@ -146,7 +178,6 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
     return VIEWPORTS.WORLD;
   }, [byCityAgg]);
 
-  const maxTotal = Math.max(...Object.values(byCityAgg).map((v) => v.total), 1);
   const H = getH(viewport.bounds);
 
   // Convert land polygons to SVG paths for current viewport
@@ -156,6 +187,40 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
       geoToPath(coords as unknown as number[][][], viewport.bounds, H)
     );
   }, [landPaths, viewport, H]);
+
+  // Prepare city cards with positions
+  const cityCards = useMemo(() => {
+    const cards: {
+      city: string;
+      geo: typeof CITY_GEO[string];
+      agg: CityAgg;
+      cx: number;
+      cy: number;
+      rows: { icon: string; prod: number; nonProd: number }[];
+    }[] = [];
+
+    for (const [city, agg] of Object.entries(byCityAgg)) {
+      const geo = CITY_GEO[city];
+      if (!geo) continue;
+      const [cx, cy] = lonLatToXY(geo.lon, geo.lat, viewport.bounds, H);
+      if (cx < -50 || cx > W + 50 || cy < -50 || cy > H + 50) continue;
+
+      const rows: { icon: string; prod: number; nonProd: number }[] = [];
+      for (const rt of RESOURCE_TYPES) {
+        const p = agg.prod[rt.key as keyof typeof agg.prod] as number;
+        const np = agg.nonProd[rt.key as keyof typeof agg.nonProd] as number;
+        if (p > 0 || np > 0) {
+          rows.push({ icon: rt.icon, prod: p, nonProd: np });
+        }
+      }
+      if (rows.length === 0) continue;
+      cards.push({ city, geo, agg, cx, cy, rows });
+    }
+
+    // Sort by total descending so larger cities render first (z-order)
+    cards.sort((a, b) => b.agg.total - a.agg.total);
+    return cards;
+  }, [byCityAgg, viewport, H]);
 
   return (
     <div style={{
@@ -173,7 +238,7 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
         {viewport.title}
       </div>
 
-      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", maxHeight: 500 }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", maxHeight: 520 }}>
         <rect width={W} height={H} fill="var(--bg)" rx="4" />
 
         {/* Land masses */}
@@ -181,119 +246,128 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
           <path key={i} d={d} fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.12)" strokeWidth="0.5" />
         ))}
 
-        {/* City bubbles */}
-        {Object.entries(byCityAgg).map(([city, agg]) => {
-          const geo = CITY_GEO[city];
-          if (!geo) return null;
+        {/* City label cards */}
+        {cityCards.map(({ city, geo, agg, cx, cy, rows }) => {
+          const { dx, dy } = getCardOffset(cx, cy, W, H);
+          const cardX = cx + dx;
+          const cardY = cy + dy;
+          const titleH = 18; // city name row height
+          const cardH = titleH + rows.length * CARD_LINE_H + 6; // 6px bottom padding
 
-          const [cx, cy] = lonLatToXY(geo.lon, geo.lat, viewport.bounds, H);
-          if (cx < -30 || cx > W + 30 || cy < -30 || cy > H + 30) return null;
-
-          const radius = Math.max(8, Math.min(45, Math.sqrt(agg.total / maxTotal) * 45));
-          const prodRatio = agg.total > 0 ? agg.prod / agg.total : 0;
-          const isHov = hovered === city;
+          // Leader line from dot to card edge
+          const lineEndX = dx > 0 ? cardX : cardX + CARD_W;
+          const lineEndY = cardY + cardH / 2;
 
           return (
-            <g key={city}
-              onMouseEnter={() => setHovered(city)}
-              onMouseLeave={() => setHovered(null)}
-              style={{ cursor: "pointer" }}
-            >
-              {isHov && (
-                <circle cx={cx} cy={cy} r={radius + 6}
-                  fill="none" stroke="var(--accent)" strokeWidth="1" opacity="0.4">
-                  <animate attributeName="r" from={radius + 2} to={radius + 14} dur="1s" repeatCount="indefinite" />
-                  <animate attributeName="opacity" from="0.4" to="0" dur="1s" repeatCount="indefinite" />
-                </circle>
-              )}
-
-              <circle cx={cx} cy={cy} r={radius}
-                fill="rgba(107, 166, 232, 0.2)"
-                stroke={isHov ? "#6ba6e8" : "rgba(107, 166, 232, 0.4)"}
-                strokeWidth={isHov ? 2 : 1}
+            <g key={city}>
+              {/* Location dot */}
+              <circle cx={cx} cy={cy} r={3.5}
+                fill="var(--accent)" stroke="rgba(246,166,35,0.4)" strokeWidth={1.5}
               />
 
-              {prodRatio > 0 && (
-                <circle cx={cx} cy={cy} r={radius * Math.sqrt(prodRatio)}
-                  fill="rgba(246, 166, 35, 0.45)"
-                  stroke="rgba(246, 166, 35, 0.7)"
-                  strokeWidth={0.5}
-                />
-              )}
+              {/* Leader line */}
+              <line x1={cx} y1={cy} x2={lineEndX} y2={lineEndY}
+                stroke="rgba(255,255,255,0.15)" strokeWidth={0.7}
+                strokeDasharray="3,2"
+              />
 
-              <text x={cx} y={cy + 5}
-                textAnchor="middle" fill={isHov ? "#fff" : "var(--text)"}
-                fontSize="13"
-                fontFamily="var(--font-mono)" fontWeight={700}
+              {/* Card background */}
+              <rect
+                x={cardX} y={cardY}
+                width={CARD_W} height={cardH}
+                rx={3} ry={3}
+                fill="rgba(12,16,23,0.88)"
+                stroke="rgba(255,255,255,0.12)"
+                strokeWidth={0.5}
+              />
+
+              {/* City name */}
+              <text
+                x={cardX + 7} y={cardY + 13}
+                fill="#e7eaf0"
+                fontSize="10" fontWeight={700}
+                fontFamily="var(--font-mono)"
+              >
+                {geo.label}
+                {geo.labelZh && (
+                  <tspan fill="rgba(255,255,255,0.35)" fontSize="9" dx={4}>
+                    {geo.labelZh}
+                  </tspan>
+                )}
+              </text>
+
+              {/* Total count badge */}
+              <text
+                x={cardX + CARD_W - 7} y={cardY + 13}
+                fill="rgba(255,255,255,0.3)"
+                fontSize="9" fontWeight={600}
+                fontFamily="var(--font-mono)"
+                textAnchor="end"
               >
                 {agg.total}
               </text>
 
-              {(isHov || viewport !== VIEWPORTS.WORLD) && (
-                <text x={cx} y={cy - radius - 6}
-                  textAnchor="middle" fill="var(--text)"
-                  fontSize="11" fontWeight={600}
-                >
-                  {geo.label}
-                </text>
-              )}
+              {/* Resource rows */}
+              {rows.map((row, ri) => {
+                const ry = cardY + titleH + ri * CARD_LINE_H + 2;
+                return (
+                  <g key={row.icon}>
+                    {/* Icon label */}
+                    <text
+                      x={cardX + 7} y={ry + 10}
+                      fill="rgba(255,255,255,0.4)"
+                      fontSize="8" fontWeight={600}
+                      fontFamily="var(--font-mono)"
+                    >
+                      {row.icon}
+                    </text>
+
+                    {/* Numbers: prod (amber) · nonProd (blue) */}
+                    <text
+                      x={cardX + 38} y={ry + 10}
+                      fontSize="10" fontWeight={600}
+                      fontFamily="var(--font-mono)"
+                    >
+                      {row.prod > 0 && (
+                        <tspan fill="#f6a623">{row.prod}</tspan>
+                      )}
+                      {row.prod > 0 && row.nonProd > 0 && (
+                        <tspan fill="rgba(255,255,255,0.2)" dx={2} fontSize="8"> · </tspan>
+                      )}
+                      {row.nonProd > 0 && (
+                        <tspan fill="#6ba6e8">{row.nonProd}</tspan>
+                      )}
+                    </text>
+                  </g>
+                );
+              })}
             </g>
           );
         })}
       </svg>
 
       {/* Legend */}
-      <div style={{ display: "flex", gap: 16, marginTop: 8, fontSize: 10, color: "var(--text-dim)", flexWrap: "wrap" }}>
-        <span>
-          <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: "50%", background: "rgba(246, 166, 35, 0.45)", marginRight: 4, verticalAlign: "middle" }} />
-          Production
-        </span>
-        <span>
-          <span style={{ display: "inline-block", width: 10, height: 10, borderRadius: "50%", background: "rgba(107, 166, 232, 0.2)", border: "1px solid rgba(107, 166, 232, 0.4)", marginRight: 4, verticalAlign: "middle" }} />
-          Non-Production
-        </span>
-        <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)" }}>
-          bubble size = total resources
+      <div style={{
+        display: "flex", gap: 16, marginTop: 10, fontSize: 10,
+        color: "var(--text-dim)", flexWrap: "wrap", alignItems: "center",
+      }}>
+        {RESOURCE_TYPES.map((rt) => (
+          <span key={rt.key} style={{ fontFamily: "var(--font-mono)", letterSpacing: 0.3 }}>
+            <span style={{ color: "var(--text-muted)", fontWeight: 600 }}>{rt.icon}</span>
+            <span style={{ marginLeft: 4 }}>{rt.label}</span>
+          </span>
+        ))}
+        <span style={{ marginLeft: "auto", display: "flex", gap: 12 }}>
+          <span>
+            <span style={{ color: "#f6a623", fontWeight: 700 }}>N</span>
+            <span style={{ marginLeft: 3 }}>= Prod</span>
+          </span>
+          <span>
+            <span style={{ color: "#6ba6e8", fontWeight: 700 }}>N</span>
+            <span style={{ marginLeft: 3 }}>= Non-Prod</span>
+          </span>
         </span>
       </div>
-
-      {/* Hover tooltip */}
-      {hovered && byCityAgg[hovered] && (
-        <div style={{
-          position: "absolute", top: 16, right: 16,
-          background: "var(--bg)", border: "1px solid var(--accent-dim)",
-          borderRadius: "var(--radius-md)", padding: "10px 14px",
-          fontSize: 11, minWidth: 200, zIndex: 10,
-          boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
-        }}>
-          <div style={{ fontWeight: 600, marginBottom: 6, color: "var(--text)", fontSize: 12 }}>
-            {CITY_GEO[hovered]?.label || hovered}
-          </div>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <tbody>
-              {byCityAgg[hovered].data.map((d, i) => (
-                <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
-                  <td style={{ padding: "3px 0", color: d.env === "Production" ? "var(--accent)" : "#6ba6e8", fontFamily: "var(--font-mono)", fontSize: 10, fontWeight: 600 }}>
-                    {d.env === "Production" ? "PROD" : "NON-P"}
-                  </td>
-                  <td style={{ padding: "3px 4px", color: "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: 10, textAlign: "right" }}>
-                    {[
-                      (d.pm || d.vm) && `${(d.pm || 0) + (d.vm || 0)} srv`,
-                      d.k8s && `${d.k8s} ctr`,
-                      d.db && `${d.db} db`,
-                      d.oss && `${d.oss} oss`,
-                      d.nas && `${d.nas} nas`,
-                    ].filter(Boolean).join(" · ")}
-                  </td>
-                  <td style={{ padding: "3px 0", fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 700, textAlign: "right", color: "var(--text)" }}>
-                    {d.total}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
     </div>
   );
 }
