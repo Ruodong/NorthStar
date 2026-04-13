@@ -250,25 +250,76 @@ async def get_application_deployment(app_id: str) -> ApiResponse:
         app_id,
     )
 
-    # City × Env summary across all 3 sources
-    # Key: (city, env)
+    # Object Storage — has landscape (env) + location (full city name)
+    object_storage = await pg_client.fetch(
+        """
+        SELECT name, app_name, max_size, max_buckets, endpoint,
+               location AS city, operational_status, landscape, owner,
+               CASE
+                 WHEN lower(landscape) = 'production' THEN 'Production'
+                 WHEN landscape IS NULL OR landscape = '' THEN 'Unknown'
+                 ELSE 'Non-Production'
+               END AS env
+        FROM northstar.ref_deployment_object_storage
+        WHERE app_id = $1
+        ORDER BY
+            CASE WHEN lower(landscape) = 'production' THEN 0
+                 WHEN landscape IS NULL OR landscape = '' THEN 2
+                 ELSE 1 END,
+            name
+        """,
+        app_id,
+    )
+
+    # NAS Storage — has landscape (env) + location (full city name)
+    nas = await pg_client.fetch(
+        """
+        SELECT name, app_name, capacity, type, path,
+               location AS city, operational_status, landscape, owner,
+               CASE
+                 WHEN lower(landscape) = 'production' THEN 'Production'
+                 WHEN landscape IS NULL OR landscape = '' THEN 'Unknown'
+                 ELSE 'Non-Production'
+               END AS env
+        FROM northstar.ref_deployment_nas
+        WHERE app_id = $1
+        ORDER BY
+            CASE WHEN lower(landscape) = 'production' THEN 0
+                 WHEN landscape IS NULL OR landscape = '' THEN 2
+                 ELSE 1 END,
+            name
+        """,
+        app_id,
+    )
+
+    # City × Env summary across all 5 sources
+    ZERO = {"servers": 0, "containers": 0, "databases": 0,
+            "object_storage": 0, "nas": 0}
     cell_counts: dict[tuple[str, str], dict[str, int]] = {}
     for r in servers:
         key = (r["city"] or "Unknown", r["env"] or "Unknown")
-        cell_counts.setdefault(key, {"servers": 0, "containers": 0, "databases": 0})
+        cell_counts.setdefault(key, {**ZERO})
         cell_counts[key]["servers"] += 1
     for r in containers:
         key = (r["city"] or "Unknown", r["env"] or "Unknown")
-        cell_counts.setdefault(key, {"servers": 0, "containers": 0, "databases": 0})
+        cell_counts.setdefault(key, {**ZERO})
         cell_counts[key]["containers"] += 1
     for r in databases:
         key = (r["city"] or "Unknown", r["env"] or "Unknown")
-        cell_counts.setdefault(key, {"servers": 0, "containers": 0, "databases": 0})
+        cell_counts.setdefault(key, {**ZERO})
         cell_counts[key]["databases"] += 1
+    for r in object_storage:
+        key = (r["city"] or "Unknown", r["env"] or "Unknown")
+        cell_counts.setdefault(key, {**ZERO})
+        cell_counts[key]["object_storage"] += 1
+    for r in nas:
+        key = (r["city"] or "Unknown", r["env"] or "Unknown")
+        cell_counts.setdefault(key, {**ZERO})
+        cell_counts[key]["nas"] += 1
 
     by_city_env = sorted(
         [{"city": k[0], "env": k[1], **v,
-          "total": v["servers"] + v["containers"] + v["databases"]}
+          "total": sum(v.values())}
          for k, v in cell_counts.items()],
         key=lambda x: (
             {"Production": 0, "Non-Production": 1}.get(x["env"], 2),
@@ -277,16 +328,14 @@ async def get_application_deployment(app_id: str) -> ApiResponse:
         ),
     )
 
-    # Also provide a flat by_city (summed across envs) for backward compat
     city_totals: dict[str, dict[str, int]] = {}
     for row in by_city_env:
         c = row["city"]
-        city_totals.setdefault(c, {"servers": 0, "containers": 0, "databases": 0})
-        city_totals[c]["servers"] += row["servers"]
-        city_totals[c]["containers"] += row["containers"]
-        city_totals[c]["databases"] += row["databases"]
+        city_totals.setdefault(c, {**ZERO})
+        for k in ZERO:
+            city_totals[c][k] += row[k]
     by_city = sorted(
-        [{"city": k, **v, "total": v["servers"] + v["containers"] + v["databases"]}
+        [{"city": k, **v, "total": sum(v.values())}
          for k, v in city_totals.items()],
         key=lambda x: -x["total"],
     )
@@ -296,12 +345,16 @@ async def get_application_deployment(app_id: str) -> ApiResponse:
             "servers": len(servers),
             "containers": len(containers),
             "databases": len(databases),
+            "object_storage": len(object_storage),
+            "nas": len(nas),
         },
         "by_city": by_city,
         "by_city_env": by_city_env,
         "servers": [dict(r) for r in servers],
         "containers": [dict(r) for r in containers],
         "databases": [dict(r) for r in databases],
+        "object_storage": [dict(r) for r in object_storage],
+        "nas": [dict(r) for r in nas],
     })
 
 

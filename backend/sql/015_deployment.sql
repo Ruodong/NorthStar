@@ -216,3 +216,74 @@ CREATE TABLE IF NOT EXISTS ref_deployment_database (
 
 CREATE INDEX IF NOT EXISTS idx_ref_deploy_db_app ON ref_deployment_database (app_id);
 CREATE INDEX IF NOT EXISTS idx_ref_deploy_db_id ON ref_deployment_database (_id);
+
+-- Object Storage (原表: Application_ObjectStorage_MetaData)
+CREATE TABLE IF NOT EXISTS ref_deployment_object_storage (
+    _id                         BIGINT,
+    name                        TEXT,
+    owner                       TEXT,
+    operational_status          TEXT,
+    discovery_source            TEXT,
+    customer                    TEXT,
+    req_no                      TEXT,
+    "createdBy"                 TEXT,
+    is_dmz                      TEXT,
+    expiration_date             TEXT,
+    delivery_at                 TEXT,
+    landscape                   TEXT,
+    location                    TEXT,
+    app_name                    TEXT,
+    app_id                      TEXT,
+    cluster_id                  TEXT,
+    max_size                    TEXT,
+    max_buckets                 TEXT,
+    ops_storage_dbid            TEXT,
+    endpoint                    TEXT,
+    request_by                  TEXT,
+    "createdAt"                 TEXT,
+    "updatedBy"                 TEXT,
+    "updatedAt"                 TEXT,
+    source                      TEXT,
+    "chargingMethod"            TEXT,
+    cost_center                 TEXT,
+    "decomissionedFrom"         TEXT,
+    synced_at                   TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ref_deploy_oss_app ON ref_deployment_object_storage (app_id);
+CREATE INDEX IF NOT EXISTS idx_ref_deploy_oss_id ON ref_deployment_object_storage (_id);
+
+-- NAS Storage (原表: Application_NAS_MetaData)
+CREATE TABLE IF NOT EXISTS ref_deployment_nas (
+    _id                         BIGINT,
+    name                        TEXT,
+    "shareId"                   TEXT,
+    path                        TEXT,
+    source                      TEXT,
+    discovery_source            TEXT,
+    "shareMount"                TEXT,
+    owner                       TEXT,
+    request_by                  TEXT,
+    "targetIp"                  TEXT,
+    capacity                    TEXT,
+    type                        TEXT,
+    location                    TEXT,
+    app_name                    TEXT,
+    app_id                      TEXT,
+    landscape                   TEXT,
+    operational_status          TEXT,
+    "chargingMethod"            TEXT,
+    cost_center                 TEXT,
+    "createdAt"                 TEXT,
+    "isDmz"                     TEXT,
+    req_no                      TEXT,
+    expiration_date             TEXT,
+    info_classification         TEXT,
+    "isDoubleActive"            TEXT,
+    delivery_at                 TEXT,
+    "decomissionedFrom"         TEXT,
+    synced_at                   TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ref_deploy_nas_app ON ref_deployment_nas (app_id);
+CREATE INDEX IF NOT EXISTS idx_ref_deploy_nas_id ON ref_deployment_nas (_id);

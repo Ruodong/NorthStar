@@ -1798,7 +1798,9 @@ function DeploymentTab({ appId }: { appId: string }) {
   if (!data) return null;
 
   const { summary, by_city, servers, containers, databases } = data;
-  const total = summary.servers + summary.containers + summary.databases;
+  const total = summary.servers + summary.containers + summary.databases + (summary.object_storage || 0) + (summary.nas || 0);
+  const oss = data.object_storage || [];
+  const nas = data.nas || [];
 
   if (total === 0) {
     return (
@@ -1815,6 +1817,8 @@ function DeploymentTab({ appId }: { appId: string }) {
         <DeployKpi label="Servers (VM/PM)" value={summary.servers} />
         <DeployKpi label="Containers" value={summary.containers} />
         <DeployKpi label="Databases" value={summary.databases} />
+        <DeployKpi label="Object Storage" value={summary.object_storage || 0} />
+        <DeployKpi label="NAS" value={summary.nas || 0} />
         <DeployKpi label="Total" value={total} accent />
       </div>
 
@@ -1828,7 +1832,9 @@ function DeploymentTab({ appId }: { appId: string }) {
                 <th>Environment</th>
                 <th style={{ textAlign: "right" }}>Servers</th>
                 <th style={{ textAlign: "right" }}>Containers</th>
-                <th style={{ textAlign: "right" }}>Databases</th>
+                <th style={{ textAlign: "right" }}>DB</th>
+                <th style={{ textAlign: "right" }}>OSS</th>
+                <th style={{ textAlign: "right" }}>NAS</th>
                 <th style={{ textAlign: "right" }}>Total</th>
               </tr>
             </thead>
@@ -1845,6 +1851,12 @@ function DeploymentTab({ appId }: { appId: string }) {
                   </td>
                   <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>
                     {c.databases || "—"}
+                  </td>
+                  <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                    {c.object_storage || "—"}
+                  </td>
+                  <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                    {c.nas || "—"}
                   </td>
                   <td style={{
                     textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12,
@@ -1961,6 +1973,70 @@ function DeploymentTab({ appId }: { appId: string }) {
                   <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{d.db_size_mb || "—"}</td>
                   <td style={{ fontSize: 12 }}>{cityLabel(d.city)}</td>
                   <td><DeployStatusPill status={d.operational_status} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Panel>
+      )}
+
+      {/* Object Storage table */}
+      {oss.length > 0 && (
+        <Panel title={`Object Storage (${oss.length})`}>
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Env</th>
+                <th>Max Size</th>
+                <th>Max Buckets</th>
+                <th>Endpoint</th>
+                <th>City</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {oss.map((o, i) => (
+                <tr key={i}>
+                  <td style={{ fontSize: 12 }}>{o.name || "—"}</td>
+                  <td><EnvBadge env={o.env} /></td>
+                  <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{o.max_size ? `${o.max_size} GB` : "—"}</td>
+                  <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{o.max_buckets || "—"}</td>
+                  <td><code style={{ fontSize: 10, color: "var(--text-dim)" }}>{o.endpoint || "—"}</code></td>
+                  <td style={{ fontSize: 12 }}>{cityLabel(o.city)}</td>
+                  <td><DeployStatusPill status={o.operational_status} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Panel>
+      )}
+
+      {/* NAS Storage table */}
+      {nas.length > 0 && (
+        <Panel title={`NAS Storage (${nas.length})`}>
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Env</th>
+                <th>Type</th>
+                <th>Capacity</th>
+                <th>Path</th>
+                <th>City</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {nas.map((n, i) => (
+                <tr key={i}>
+                  <td style={{ fontSize: 12 }}>{n.name || "—"}</td>
+                  <td><EnvBadge env={n.env} /></td>
+                  <td style={{ fontSize: 12 }}>{n.type || "—"}</td>
+                  <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{n.capacity ? `${n.capacity} GB` : "—"}</td>
+                  <td><code style={{ fontSize: 10, color: "var(--text-dim)" }}>{n.path || "—"}</code></td>
+                  <td style={{ fontSize: 12 }}>{cityLabel(n.city)}</td>
+                  <td><DeployStatusPill status={n.operational_status} /></td>
                 </tr>
               ))}
             </tbody>

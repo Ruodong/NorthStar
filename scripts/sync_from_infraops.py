@@ -55,6 +55,16 @@ TABLES = [
         "dst": "ref_deployment_database",
         "label": "Databases",
     },
+    {
+        "src": '"Application_ObjectStorage_MetaData"',
+        "dst": "ref_deployment_object_storage",
+        "label": "Object Storage",
+    },
+    {
+        "src": '"Application_NAS_MetaData"',
+        "dst": "ref_deployment_nas",
+        "label": "NAS Storage",
+    },
 ]
 
 
