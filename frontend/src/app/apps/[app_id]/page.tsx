@@ -1685,6 +1685,7 @@ function KnowledgeBaseTab({ appId }: { appId: string }) {
 interface DeploymentData {
   summary: { servers: number; containers: number; databases: number };
   by_city: { city: string; servers: number; containers: number; databases: number; total: number }[];
+  by_city_env: { city: string; env: string; servers: number; containers: number; databases: number; total: number }[];
   servers: Record<string, string | null>[];
   containers: Record<string, string | null>[];
   databases: Record<string, string | null>[];
@@ -1759,13 +1760,14 @@ function DeploymentTab({ appId }: { appId: string }) {
         <DeployKpi label="Total" value={total} accent />
       </div>
 
-      {/* City distribution */}
-      {by_city.length > 0 && (
-        <Panel title="Deployment by City">
+      {/* City × Env distribution */}
+      {(data.by_city_env || by_city).length > 0 && (
+        <Panel title="Deployment by City / Environment">
           <table>
             <thead>
               <tr>
                 <th>City</th>
+                <th>Environment</th>
                 <th style={{ textAlign: "right" }}>Servers</th>
                 <th style={{ textAlign: "right" }}>Containers</th>
                 <th style={{ textAlign: "right" }}>Databases</th>
@@ -1773,9 +1775,10 @@ function DeploymentTab({ appId }: { appId: string }) {
               </tr>
             </thead>
             <tbody>
-              {by_city.map((c) => (
-                <tr key={c.city}>
+              {(data.by_city_env || []).map((c, i) => (
+                <tr key={i}>
                   <td style={{ fontWeight: 500 }}>{cityLabel(c.city)}</td>
+                  <td><EnvBadge env={c.env} /></td>
                   <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>
                     {c.servers || "—"}
                   </td>
@@ -1808,6 +1811,7 @@ function DeploymentTab({ appId }: { appId: string }) {
                   <th>Hostname</th>
                   <th>IP</th>
                   <th>Type</th>
+                  <th>Env</th>
                   <th>OS</th>
                   <th>CPU</th>
                   <th>RAM</th>
@@ -1822,6 +1826,7 @@ function DeploymentTab({ appId }: { appId: string }) {
                     <td><code style={{ fontSize: 11 }}>{s.name || "—"}</code></td>
                     <td style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>{s.ip_address || "—"}</td>
                     <td style={{ fontSize: 12 }}>{s.is_virtualized || s.device_type || "—"}</td>
+                    <td><EnvBadge env={s.env} /></td>
                     <td style={{ fontSize: 12 }}>{s.os_type || "—"}</td>
                     <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{s.cpu_count || "—"}</td>
                     <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{s.ram || "—"}</td>
@@ -1849,6 +1854,7 @@ function DeploymentTab({ appId }: { appId: string }) {
               <tr>
                 <th>Project</th>
                 <th>Cluster</th>
+                <th>Env</th>
                 <th>CPU Limit</th>
                 <th>MEM Limit</th>
                 <th>City</th>
@@ -1860,6 +1866,7 @@ function DeploymentTab({ appId }: { appId: string }) {
                 <tr key={i}>
                   <td style={{ fontSize: 12 }}>{c.project_name || "—"}</td>
                   <td><code style={{ fontSize: 10 }}>{c.cluster_name || "—"}</code></td>
+                  <td><EnvBadge env={c.env} /></td>
                   <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{c.limit_cpu || "—"}</td>
                   <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{c.limit_mem || "—"}</td>
                   <td style={{ fontSize: 12 }}>{cityLabel(c.city)}</td>
@@ -1879,7 +1886,7 @@ function DeploymentTab({ appId }: { appId: string }) {
               <tr>
                 <th>Instance</th>
                 <th>Type</th>
-                <th>Version</th>
+                <th>Env</th>
                 <th>Host</th>
                 <th>Size (MB)</th>
                 <th>City</th>
@@ -1891,7 +1898,7 @@ function DeploymentTab({ appId }: { appId: string }) {
                 <tr key={i}>
                   <td><code style={{ fontSize: 11 }}>{d.db_instance_name || d.name || "—"}</code></td>
                   <td style={{ fontSize: 12 }}>{d.db_type || "—"}</td>
-                  <td style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>{d.version || "—"}</td>
+                  <td><EnvBadge env={d.env} /></td>
                   <td><code style={{ fontSize: 10, color: "var(--text-dim)" }}>{d.host_name || "—"}</code></td>
                   <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{d.db_size_mb || "—"}</td>
                   <td style={{ fontSize: 12 }}>{cityLabel(d.city)}</td>
@@ -1927,6 +1934,23 @@ function DeployKpi({ label, value, accent }: { label: string; value: number; acc
         {value.toLocaleString()}
       </div>
     </div>
+  );
+}
+
+function EnvBadge({ env }: { env: string | null | undefined }) {
+  const e = (env || "").toLowerCase();
+  const isProd = e === "production";
+  const color = isProd ? "#f6a623" : e === "non-production" ? "#6ba6e8" : "var(--text-dim)";
+  return (
+    <span style={{
+      fontSize: 10, fontFamily: "var(--font-mono)", fontWeight: 600,
+      padding: "2px 6px", borderRadius: "var(--radius-sm)",
+      background: `color-mix(in srgb, ${color} 15%, transparent)`,
+      color, border: `1px solid color-mix(in srgb, ${color} 30%, transparent)`,
+      textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap",
+    }}>
+      {isProd ? "PROD" : e === "non-production" ? "NON-PROD" : env || "—"}
+    </span>
   );
 }
 

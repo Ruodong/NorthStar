@@ -156,13 +156,18 @@ async def get_application_deployment(app_id: str) -> ApiResponse:
     Container city is derived from cluster_name; database city is joined
     from ref_deployment_server via host_name.
     """
-    # Servers (VM/PM) — city comes directly from the "City" column
+    # Servers (VM/PM) — city + env (landscape → Production/Non-Production)
     servers = await pg_client.fetch(
         """
         SELECT name, ip_address, app_name, device_type, is_virtualized,
                os_type, os_version, cpu_count, ram, disk_space,
                "City" AS city, location, operational_status, landscape,
-               have_dr, model_type
+               have_dr, model_type,
+               CASE
+                 WHEN lower(landscape) = 'production' THEN 'Production'
+                 WHEN landscape IS NULL OR landscape = '' THEN 'Unknown'
+                 ELSE 'Non-Production'
+               END AS env
         FROM northstar.ref_deployment_server
         WHERE app_id = $1
         ORDER BY operational_status, "City", name
@@ -170,13 +175,11 @@ async def get_application_deployment(app_id: str) -> ApiResponse:
         app_id,
     )
 
-    # Containers — derive city from cluster_name
+    # Containers — derive city + env from cluster_name
     containers = await pg_client.fetch(
         """
         SELECT name AS project_name, cluster_name, limit_cpu, limit_mem,
                operational_status, owner, type,
-               -- Derive city from cluster_name patterns like
-               -- CLUSTER-PRD-SHENYANG, CLUSTER-PRD-RESTON, etc.
                CASE
                  WHEN cluster_name ILIKE '%SHENYANG%' THEN 'SY'
                  WHEN cluster_name ILIKE '%SY-%' OR cluster_name ILIKE '%-SY-%' THEN 'SY'
@@ -188,8 +191,16 @@ async def get_application_deployment(app_id: str) -> ApiResponse:
                  WHEN cluster_name ILIKE '%HOHHOT%' OR cluster_name ILIKE '%-NM-%' THEN 'NM'
                  WHEN cluster_name ILIKE '%HK%' OR cluster_name ILIKE '%HONGKONG%' THEN 'HK'
                  WHEN cluster_name ILIKE '%NA-%' OR cluster_name ILIKE '%-NA-%' THEN 'NA'
+                 WHEN cluster_name ILIKE '%AWSUS%' THEN 'NA'
                  ELSE cluster_name
-               END AS city
+               END AS city,
+               CASE
+                 WHEN cluster_name ILIKE '%-PRD-%' OR cluster_name ILIKE '%-PRD' THEN 'Production'
+                 WHEN cluster_name ILIKE '%-STG-%' OR cluster_name ILIKE '%-UAT-%'
+                   OR cluster_name ILIKE '%-DEV-%' OR cluster_name ILIKE '%-QA-%'
+                   OR cluster_name ILIKE '%-TEST-%' THEN 'Non-Production'
+                 ELSE 'Unknown'
+               END AS env
         FROM northstar.ref_deployment_container
         WHERE app_id = $1
         ORDER BY operational_status, cluster_name
@@ -197,14 +208,20 @@ async def get_application_deployment(app_id: str) -> ApiResponse:
         app_id,
     )
 
-    # Databases — join server table for city via host_name
+    # Databases — join server table for city; env from used_for
     databases = await pg_client.fetch(
         """
         SELECT d.name, d.db_instance_name, d.app_name,
                d."className" AS db_type, d.version, d.host_name,
                d.operational_status, d.ha_type, d.ha_role, d.port,
                d.u_db_size_in_mb AS db_size_mb,
-               s."City" AS city, s.location
+               d.used_for,
+               s."City" AS city, s.location,
+               CASE
+                 WHEN lower(d.used_for) = 'production' THEN 'Production'
+                 WHEN d.used_for IS NULL OR d.used_for = '' THEN 'Unknown'
+                 ELSE 'Non-Production'
+               END AS env
         FROM northstar.ref_deployment_database d
         LEFT JOIN LATERAL (
             SELECT DISTINCT ON (s2."City") s2."City", s2.location
@@ -219,26 +236,41 @@ async def get_application_deployment(app_id: str) -> ApiResponse:
         app_id,
     )
 
-    # City summary across all 3 sources
-    city_counts: dict[str, dict[str, int]] = {}
+    # City × Env summary across all 3 sources
+    # Key: (city, env)
+    cell_counts: dict[tuple[str, str], dict[str, int]] = {}
     for r in servers:
-        c = r["city"] or "Unknown"
-        city_counts.setdefault(c, {"servers": 0, "containers": 0, "databases": 0})
-        city_counts[c]["servers"] += 1
+        key = (r["city"] or "Unknown", r["env"] or "Unknown")
+        cell_counts.setdefault(key, {"servers": 0, "containers": 0, "databases": 0})
+        cell_counts[key]["servers"] += 1
     for r in containers:
-        c = r["city"] or "Unknown"
-        city_counts.setdefault(c, {"servers": 0, "containers": 0, "databases": 0})
-        city_counts[c]["containers"] += 1
+        key = (r["city"] or "Unknown", r["env"] or "Unknown")
+        cell_counts.setdefault(key, {"servers": 0, "containers": 0, "databases": 0})
+        cell_counts[key]["containers"] += 1
     for r in databases:
-        c = r["city"] or "Unknown"
-        city_counts.setdefault(c, {"servers": 0, "containers": 0, "databases": 0})
-        city_counts[c]["databases"] += 1
+        key = (r["city"] or "Unknown", r["env"] or "Unknown")
+        cell_counts.setdefault(key, {"servers": 0, "containers": 0, "databases": 0})
+        cell_counts[key]["databases"] += 1
 
+    by_city_env = sorted(
+        [{"city": k[0], "env": k[1], **v,
+          "total": v["servers"] + v["containers"] + v["databases"]}
+         for k, v in cell_counts.items()],
+        key=lambda x: (-x["total"], x["city"], x["env"]),
+    )
+
+    # Also provide a flat by_city (summed across envs) for backward compat
+    city_totals: dict[str, dict[str, int]] = {}
+    for row in by_city_env:
+        c = row["city"]
+        city_totals.setdefault(c, {"servers": 0, "containers": 0, "databases": 0})
+        city_totals[c]["servers"] += row["servers"]
+        city_totals[c]["containers"] += row["containers"]
+        city_totals[c]["databases"] += row["databases"]
     by_city = sorted(
         [{"city": k, **v, "total": v["servers"] + v["containers"] + v["databases"]}
-         for k, v in city_counts.items()],
-        key=lambda x: x["total"],
-        reverse=True,
+         for k, v in city_totals.items()],
+        key=lambda x: -x["total"],
     )
 
     return ApiResponse(data={
@@ -248,6 +280,7 @@ async def get_application_deployment(app_id: str) -> ApiResponse:
             "databases": len(databases),
         },
         "by_city": by_city,
+        "by_city_env": by_city_env,
         "servers": [dict(r) for r in servers],
         "containers": [dict(r) for r in containers],
         "databases": [dict(r) for r in databases],
