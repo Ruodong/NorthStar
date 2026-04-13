@@ -834,6 +834,27 @@ function OverviewTab({
 }) {
   const fyList = [...new Set(investments.map((i) => i.fiscal_year).filter(Boolean))].sort();
 
+  // Fetch deployment summary for the overview panel
+  const [deploySummary, setDeploySummary] = useState<{
+    servers: number; containers: number; databases: number;
+    top_cities: { city: string; total: number }[];
+  } | null>(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(`/api/masters/applications/${app.app_id}/deployment`);
+        const j = await r.json();
+        if (j.success && j.data) {
+          const s = j.data.summary;
+          const cities = (j.data.by_city || []).slice(0, 3).map((c: { city: string; total: number }) => ({
+            city: c.city, total: c.total,
+          }));
+          setDeploySummary({ ...s, top_cities: cities });
+        }
+      } catch { /* non-blocking */ }
+    })();
+  }, [app.app_id]);
+
   return (
     <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}>
       <Panel title="Basic">
@@ -867,6 +888,43 @@ function OverviewTab({
         <CmdbField label="Patch Level" value={app.patch_level} />
         <CmdbField label="Support" value={app.support} />
         {app.decommissioned_at && <CmdbField label="Decommissioned" value={new Date(app.decommissioned_at).toISOString().slice(0, 10)} />}
+        {deploySummary && (deploySummary.servers + deploySummary.containers + deploySummary.databases) > 0 && (
+          <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--text-dim)", marginBottom: 8 }}>
+              Infrastructure (InfraOps)
+            </div>
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+              {deploySummary.servers > 0 && (
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                  <span style={{ color: "var(--accent)", fontWeight: 700, fontSize: 16 }}>{deploySummary.servers}</span>
+                  <span style={{ color: "var(--text-dim)", marginLeft: 4 }}>servers</span>
+                </div>
+              )}
+              {deploySummary.containers > 0 && (
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                  <span style={{ color: "var(--accent)", fontWeight: 700, fontSize: 16 }}>{deploySummary.containers}</span>
+                  <span style={{ color: "var(--text-dim)", marginLeft: 4 }}>containers</span>
+                </div>
+              )}
+              {deploySummary.databases > 0 && (
+                <div style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                  <span style={{ color: "var(--accent)", fontWeight: 700, fontSize: 16 }}>{deploySummary.databases}</span>
+                  <span style={{ color: "var(--text-dim)", marginLeft: 4 }}>databases</span>
+                </div>
+              )}
+            </div>
+            {deploySummary.top_cities.length > 0 && (
+              <div style={{ marginTop: 8, fontSize: 11, color: "var(--text-muted)" }}>
+                {deploySummary.top_cities.map((c, i) => (
+                  <span key={c.city}>
+                    {i > 0 && " · "}
+                    {CITY_LABELS[c.city] || c.city} ({c.total})
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </Panel>
 
       {tco && (
