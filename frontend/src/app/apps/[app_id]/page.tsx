@@ -1986,7 +1986,7 @@ function KnowledgeBaseTab({ appId }: { appId: string }) {
 interface DeploymentData {
   summary: { servers: number; containers: number; databases: number; object_storage?: number; nas?: number };
   by_city: { city: string; servers: number; containers: number; databases: number; total: number }[];
-  by_city_env: { city: string; env: string; servers: number; containers: number; databases: number; object_storage: number; nas: number; total: number }[];
+  by_city_env: { city: string; env: string; pm: number; vm: number; k8s: number; db: number; oss: number; nas: number; total: number }[];
   servers: Record<string, string | null>[];
   containers: Record<string, string | null>[];
   databases: Record<string, string | null>[];
@@ -2205,7 +2205,7 @@ function DeploymentTab({ appId }: { appId: string }) {
                     <td><EnvBadge env={s.env} /></td>
                     <td style={{ fontSize: 12 }}>{s.os_type || "—"}</td>
                     <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{s.cpu_count || "—"}</td>
-                    <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{s.ram || "—"}</td>
+                    <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{s.ram ? Number(s.ram).toLocaleString() : "—"}</td>
                     <td style={{ fontSize: 12 }}>{cityLabel(s.city)}</td>
                     <td><code style={{ fontSize: 10, color: "var(--text-dim)" }}>{s.location || "—"}</code></td>
                     <td><DeployStatusPill status={s.operational_status} /></td>
