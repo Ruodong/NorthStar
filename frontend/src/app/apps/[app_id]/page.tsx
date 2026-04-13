@@ -1743,7 +1743,7 @@ function KnowledgeBaseTab({ appId }: { appId: string }) {
 interface DeploymentData {
   summary: { servers: number; containers: number; databases: number; object_storage?: number; nas?: number };
   by_city: { city: string; servers: number; containers: number; databases: number; total: number }[];
-  by_city_env: { city: string; env: string; servers: number; containers: number; databases: number; total: number }[];
+  by_city_env: { city: string; env: string; servers: number; containers: number; databases: number; object_storage: number; nas: number; total: number }[];
   servers: Record<string, string | null>[];
   containers: Record<string, string | null>[];
   databases: Record<string, string | null>[];
