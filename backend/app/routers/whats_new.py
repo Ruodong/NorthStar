@@ -46,9 +46,9 @@ async def summary(
         try:
             since_dt = datetime.fromisoformat(since.replace("Z", "+00:00")).replace(tzinfo=None)
         except ValueError:
-            since_dt = datetime.utcnow() - timedelta(days=days)
+            since_dt = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
     else:
-        since_dt = datetime.utcnow() - timedelta(days=days)
+        since_dt = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
 
     rows = await pg_client.fetch(
         """
@@ -85,7 +85,7 @@ async def feed(
     days: int = Query(90, ge=1, le=365, description="Only return diffs from last N days"),
 ) -> ApiResponse:
     """Paginated feed of diff events, newest first, grouped client-side."""
-    window_start = datetime.utcnow() - timedelta(days=days)
+    window_start = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
     if diff_type:
         rows = await pg_client.fetch(
             """

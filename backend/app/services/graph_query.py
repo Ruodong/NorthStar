@@ -153,7 +153,7 @@ async def _fetch_cmdb_enrichment(app_id: str) -> Optional[dict]:
     sql = """
     SELECT
         a.short_description, a.app_full_name,
-        a.u_service_area, a.app_classification, a.app_ownership,
+        a.u_service_area, trim(both '{}' from a.app_classification) AS app_classification, a.app_ownership,
         a.app_solution_type, a.portfolio_mgt,
         a.owned_by,            e_o.name  AS owned_by_name,
         a.app_it_owner,        e_it.name AS app_it_owner_name,

@@ -123,6 +123,22 @@ PREVIEW_CACHE_ROOT = Path(
     os.environ.get("PREVIEW_CACHE_ROOT", "/app_cache/preview")
 )
 
+# Shared SQL fragment for matching drawio_reference rows to their source
+# attachment. Used in 6+ queries across list_pages, get_page, and
+# _EXTRACTED_SOURCES_CTE. Centralised here so diagram_name matching
+# logic changes in one place.
+#
+# Rule: blank diagram_name matches all drawios on the source page ONLY for
+# inc_drawio macros (they transclude the whole page). template_url and
+# page_link always require an explicit name match.
+_DIAGRAM_NAME_MATCH = (
+    "((dr.diagram_name = '' AND dr.macro_kind = 'inc_drawio')"
+    " OR sa.title = dr.diagram_name"
+    " OR sa.title = dr.diagram_name || '.drawio')"
+)
+# Variant with %% escaping for f-strings (used inside f"""...""" queries)
+_DIAGRAM_NAME_MATCH_FSTR = _DIAGRAM_NAME_MATCH.replace("%", "%%")
+
 # Media types the office-preview endpoint accepts. Everything else on
 # confluence_attachment — legacy .ppt/.xls/.doc, ConceptDraw, generic
 # octet-stream — returns 415.
@@ -428,8 +444,7 @@ async def list_pages(
                                  AND sa.file_kind = 'drawio'
                                  AND sa.title NOT LIKE 'drawio-backup%'
                                  AND sa.title NOT LIKE '~%'
-                                 AND ((dr.diagram_name = '' AND dr.macro_kind = 'inc-drawio') OR sa.title = dr.diagram_name
-                                      OR sa.title = dr.diagram_name || '.drawio')
+                                 AND {_DIAGRAM_NAME_MATCH_FSTR}
                                 WHERE dr.inclusion_page_id = p.page_id), 0)
                    ) AS attachment_count,
                    ((SELECT count(*) FROM northstar.confluence_attachment a
@@ -441,8 +456,7 @@ async def list_pages(
                                  AND sa.file_kind = 'drawio'
                                  AND sa.title NOT LIKE 'drawio-backup%'
                                  AND sa.title NOT LIKE '~%'
-                                 AND ((dr.diagram_name = '' AND dr.macro_kind = 'inc-drawio') OR sa.title = dr.diagram_name
-                                      OR sa.title = dr.diagram_name || '.drawio')
+                                 AND {_DIAGRAM_NAME_MATCH_FSTR}
                                 WHERE dr.inclusion_page_id = p.page_id), 0)
                    ) AS drawio_count,
                    1 AS group_size,
@@ -507,9 +521,7 @@ async def list_pages(
              AND sa.file_kind = 'drawio'
              AND sa.title NOT LIKE 'drawio-backup%'
              AND sa.title NOT LIKE '~%'
-             AND ((dr.diagram_name = '' AND dr.macro_kind = 'inc-drawio')
-                  OR sa.title = dr.diagram_name
-                  OR sa.title = dr.diagram_name || '.drawio')
+             AND {_DIAGRAM_NAME_MATCH_FSTR}
             GROUP BY dr.inclusion_page_id
         ),
         -- Fold ref_counts from child pages up to parent (depth-2 folders
@@ -955,8 +967,7 @@ async def get_page(page_id: str) -> ApiResponse:
          AND sa.file_kind = 'drawio'
          AND sa.title NOT LIKE 'drawio-backup%'
          AND sa.title NOT LIKE '~%'
-         AND ((dr.diagram_name = '' AND dr.macro_kind = 'inc-drawio') OR sa.title = dr.diagram_name
-              OR sa.title = dr.diagram_name || '.drawio')
+         AND {_DIAGRAM_NAME_MATCH_FSTR}
         """,
         page_id,
     )
@@ -997,8 +1008,7 @@ async def get_page(page_id: str) -> ApiResponse:
                    AND sa.file_kind = 'drawio'
                    AND sa.title NOT LIKE 'drawio-backup%'
                    AND sa.title NOT LIKE '~%'
-                   AND ((dr.diagram_name = '' AND dr.macro_kind = 'inc-drawio') OR sa.title = dr.diagram_name
-                        OR sa.title = dr.diagram_name || '.drawio')
+                   AND {_DIAGRAM_NAME_MATCH}
                   WHERE dr.inclusion_page_id = c.page_id) AS ref_drawio
         FROM northstar.confluence_page c
         WHERE c.parent_id = $1
@@ -1069,9 +1079,7 @@ _EXTRACTED_SOURCES_CTE = """
          AND sa.file_kind = 'drawio'
          AND sa.title NOT LIKE 'drawio-backup%%'
          AND sa.title NOT LIKE '~%%'
-         AND ((dr.diagram_name = '' AND dr.macro_kind = 'inc-drawio')
-              OR sa.title = dr.diagram_name
-              OR sa.title = dr.diagram_name || '.drawio')
+         AND """ + _DIAGRAM_NAME_MATCH + """
     ),
     -- Unified source: own/descendant from subtree + referenced via drawio_reference
     all_sources AS (
