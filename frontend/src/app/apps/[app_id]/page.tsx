@@ -2019,6 +2019,7 @@ function DeploymentTab({ appId }: { appId: string }) {
   const [data, setData] = useState<DeploymentData | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const [deployView, setDeployView] = useState<"table" | "map">("table");
 
   useEffect(() => {
     let cancelled = false;
@@ -2077,58 +2078,103 @@ function DeploymentTab({ appId }: { appId: string }) {
         <DeployKpi label="Total" value={total} accent />
       </div>
 
-      {/* World/Regional Map */}
-      {(data.by_city_env || []).length > 0 && (
-        <DeploymentMap data={data.by_city_env} />
-      )}
+      {/* BY ENVIRONMENT bar chart */}
+      {total > 0 && (() => {
+        const prodTotal = servers.filter(s => s.env === "Production").length
+          + containers.filter(c => c.env === "Production").length
+          + databases.filter(d => d.env === "Production").length
+          + oss.filter(o => o.env === "Production").length
+          + nas.filter(n => n.env === "Production").length;
+        const npTotal = servers.filter(s => s.env === "Non-Production").length
+          + containers.filter(c => c.env === "Non-Production").length
+          + databases.filter(d => d.env === "Non-Production").length
+          + oss.filter(o => o.env === "Non-Production").length
+          + nas.filter(n => n.env === "Non-Production").length;
+        const unkTotal = total - prodTotal - npTotal;
+        const maxBar = Math.max(prodTotal, npTotal, unkTotal, 1);
+        return (
+          <div style={{ marginBottom: 16, padding: "12px 16px", background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: "var(--radius-md)" }}>
+            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.6, color: "var(--text-dim)", marginBottom: 10, fontWeight: 600 }}>By Environment</div>
+            {[
+              { label: "Production", value: prodTotal, color: "var(--accent)" },
+              { label: "Non-Production", value: npTotal, color: "#6ba6e8" },
+              ...(unkTotal > 0 ? [{ label: "Unknown", value: unkTotal, color: "var(--text-dim)" }] : []),
+            ].map((row) => (
+              <div key={row.label} style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 6 }}>
+                <div style={{ width: 100, fontSize: 11, color: "var(--text-muted)", textAlign: "right" }}>{row.label}</div>
+                <div style={{ flex: 1, height: 18, background: "var(--bg)", borderRadius: 2, overflow: "hidden" }}>
+                  <div style={{ width: `${(row.value / maxBar) * 100}%`, height: "100%", background: row.color, borderRadius: 2, minWidth: row.value > 0 ? 4 : 0 }} />
+                </div>
+                <div style={{ width: 40, fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600, color: row.color, textAlign: "right" }}>{row.value}</div>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
 
-      {/* City × Env distribution */}
-      {(data.by_city_env || by_city).length > 0 && (
-        <Panel title="Deployment by City / Environment">
-          <table>
-            <thead>
-              <tr>
-                <th>City</th>
-                <th>Environment</th>
-                <th style={{ textAlign: "right" }}>Servers</th>
-                <th style={{ textAlign: "right" }}>Containers</th>
-                <th style={{ textAlign: "right" }}>DB</th>
-                <th style={{ textAlign: "right" }}>OSS</th>
-                <th style={{ textAlign: "right" }}>NAS</th>
-                <th style={{ textAlign: "right" }}>Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(data.by_city_env || []).map((c, i) => (
-                <tr key={i}>
-                  <td style={{ fontWeight: 500 }}>{cityLabel(c.city)}</td>
-                  <td><EnvBadge env={c.env} /></td>
-                  <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                    {c.servers || "—"}
-                  </td>
-                  <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                    {c.containers || "—"}
-                  </td>
-                  <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                    {c.databases || "—"}
-                  </td>
-                  <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                    {c.object_storage || "—"}
-                  </td>
-                  <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                    {c.nas || "—"}
-                  </td>
-                  <td style={{
-                    textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12,
-                    fontWeight: 600, color: "var(--accent)",
-                  }}>
-                    {c.total}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Panel>
+      {/* Table / Map toggle */}
+      {(data.by_city_env || []).length > 0 && (
+        <div>
+          <div style={{ display: "flex", gap: 4, marginBottom: 12 }}>
+            <button
+              onClick={() => setDeployView("table")}
+              style={{
+                padding: "6px 14px", fontSize: 12, fontWeight: 600, border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)", cursor: "pointer",
+                background: deployView === "table" ? "var(--accent)" : "var(--bg-elevated)",
+                color: deployView === "table" ? "#000" : "var(--text-muted)",
+              }}
+            >
+              Table View
+            </button>
+            <button
+              onClick={() => setDeployView("map")}
+              style={{
+                padding: "6px 14px", fontSize: 12, fontWeight: 600, border: "1px solid var(--border)",
+                borderRadius: "var(--radius-sm)", cursor: "pointer",
+                background: deployView === "map" ? "var(--accent)" : "var(--bg-elevated)",
+                color: deployView === "map" ? "#000" : "var(--text-muted)",
+              }}
+            >
+              Map View
+            </button>
+          </div>
+
+          {deployView === "map" && <DeploymentMap data={data.by_city_env} />}
+
+          {deployView === "table" && (
+            <Panel title="Deployment by City / Environment">
+              <table>
+                <thead>
+                  <tr>
+                    <th>City</th>
+                    <th>Environment</th>
+                    <th style={{ textAlign: "right" }}>Servers</th>
+                    <th style={{ textAlign: "right" }}>Containers</th>
+                    <th style={{ textAlign: "right" }}>DB</th>
+                    <th style={{ textAlign: "right" }}>OSS</th>
+                    <th style={{ textAlign: "right" }}>NAS</th>
+                    <th style={{ textAlign: "right" }}>Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data.by_city_env || []).map((c, i) => (
+                    <tr key={i}>
+                      <td style={{ fontWeight: 500 }}>{cityLabel(c.city)}</td>
+                      <td><EnvBadge env={c.env} /></td>
+                      <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>{c.servers || "—"}</td>
+                      <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>{c.containers || "—"}</td>
+                      <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>{c.databases || "—"}</td>
+                      <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>{c.object_storage || "—"}</td>
+                      <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>{c.nas || "—"}</td>
+                      <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600, color: "var(--accent)" }}>{c.total}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </Panel>
+          )}
+        </div>
       )}
 
       {/* Servers table */}
