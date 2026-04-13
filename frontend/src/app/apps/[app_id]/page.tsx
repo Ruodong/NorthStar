@@ -175,6 +175,21 @@ export default function AppDetailPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
+  const [deployCount, setDeployCount] = useState<number | undefined>(undefined);
+
+  // Fetch deployment count for tab badge (non-blocking)
+  useEffect(() => {
+    (async () => {
+      try {
+        const r = await fetch(`/api/masters/applications/${encodeURIComponent(appId)}/deployment`);
+        const j = await r.json();
+        if (j.success && j.data?.summary) {
+          const s = j.data.summary;
+          setDeployCount(s.servers + s.containers + s.databases + (s.object_storage || 0) + (s.nas || 0));
+        }
+      } catch { /* non-blocking */ }
+    })();
+  }, [appId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -315,7 +330,7 @@ export default function AppDetailPage() {
           Integrations
         </TabButton>
         <TabButton current={tab} value="deployment" onClick={setTab}
-          count={deploySummary ? (deploySummary.servers + deploySummary.containers + deploySummary.databases) : undefined}>
+          count={deployCount}>
           Deployment
         </TabButton>
         <TabButton current={tab} value="impact" onClick={setTab}>
