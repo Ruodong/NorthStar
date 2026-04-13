@@ -970,7 +970,7 @@ async def get_page(page_id: str) -> ApiResponse:
     # Walk the refs owned by this page AND any direct-child page so a folder
     # row reflects diagrams embedded on its architecture children.
     referenced_rows = await pg_client.fetch(
-        """
+        f"""
         WITH incl AS (
             -- This page and its direct children (parent_id = this page)
             SELECT page_id, title FROM northstar.confluence_page WHERE page_id = $1
@@ -992,8 +992,8 @@ async def get_page(page_id: str) -> ApiResponse:
         JOIN northstar.confluence_attachment sa
           ON sa.page_id = dr.source_page_id
          AND sa.file_kind = 'drawio'
-         AND sa.title NOT LIKE 'drawio-backup%'
-         AND sa.title NOT LIKE '~%'
+         AND sa.title NOT LIKE 'drawio-backup%%'
+         AND sa.title NOT LIKE '~%%'
          AND {_DIAGRAM_NAME_MATCH_FSTR}
         """,
         page_id,
