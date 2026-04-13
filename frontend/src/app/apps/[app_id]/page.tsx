@@ -314,6 +314,9 @@ export default function AppDetailPage() {
         <TabButton current={tab} value="integrations" onClick={setTab} count={totalIntegrations}>
           Integrations
         </TabButton>
+        <TabButton current={tab} value="deployment" onClick={setTab}>
+          Deployment
+        </TabButton>
         <TabButton current={tab} value="impact" onClick={setTab}>
           Impact Analysis
         </TabButton>
@@ -325,9 +328,6 @@ export default function AppDetailPage() {
         </TabButton>
         <TabButton current={tab} value="confluence" onClick={setTab} count={reviewCount}>
           Confluence
-        </TabButton>
-        <TabButton current={tab} value="deployment" onClick={setTab}>
-          Deployment
         </TabButton>
         <TabButton current={tab} value="knowledge" onClick={setTab}>
           Knowledge Base
