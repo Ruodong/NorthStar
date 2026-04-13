@@ -292,26 +292,30 @@ async def get_application_deployment(app_id: str) -> ApiResponse:
         app_id,
     )
 
-    # City × Env summary across all 5 sources
-    ZERO = {"servers": 0, "containers": 0, "databases": 0,
-            "object_storage": 0, "nas": 0}
+    # City × Env summary across all 5 sources, splitting servers into PM/VM
+    ZERO = {"pm": 0, "vm": 0, "k8s": 0, "db": 0,
+            "oss": 0, "nas": 0}
     cell_counts: dict[tuple[str, str], dict[str, int]] = {}
     for r in servers:
         key = (r["city"] or "Unknown", r["env"] or "Unknown")
         cell_counts.setdefault(key, {**ZERO})
-        cell_counts[key]["servers"] += 1
+        virt = (r.get("is_virtualized") or "").lower()
+        if "physical" in virt:
+            cell_counts[key]["pm"] += 1
+        else:
+            cell_counts[key]["vm"] += 1
     for r in containers:
         key = (r["city"] or "Unknown", r["env"] or "Unknown")
         cell_counts.setdefault(key, {**ZERO})
-        cell_counts[key]["containers"] += 1
+        cell_counts[key]["k8s"] += 1
     for r in databases:
         key = (r["city"] or "Unknown", r["env"] or "Unknown")
         cell_counts.setdefault(key, {**ZERO})
-        cell_counts[key]["databases"] += 1
+        cell_counts[key]["db"] += 1
     for r in object_storage:
         key = (r["city"] or "Unknown", r["env"] or "Unknown")
         cell_counts.setdefault(key, {**ZERO})
-        cell_counts[key]["object_storage"] += 1
+        cell_counts[key]["oss"] += 1
     for r in nas:
         key = (r["city"] or "Unknown", r["env"] or "Unknown")
         cell_counts.setdefault(key, {**ZERO})

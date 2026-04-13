@@ -1986,7 +1986,7 @@ function KnowledgeBaseTab({ appId }: { appId: string }) {
 interface DeploymentData {
   summary: { servers: number; containers: number; databases: number; object_storage?: number; nas?: number };
   by_city: { city: string; servers: number; containers: number; databases: number; total: number }[];
-  by_city_env: { city: string; env: string; servers: number; containers: number; databases: number; object_storage: number; nas: number; total: number }[];
+  by_city_env: { city: string; env: string; pm: number; vm: number; k8s: number; db: number; oss: number; nas: number; total: number }[];
   servers: Record<string, string | null>[];
   containers: Record<string, string | null>[];
   databases: Record<string, string | null>[];
@@ -2149,8 +2149,9 @@ function DeploymentTab({ appId }: { appId: string }) {
                   <tr>
                     <th>City</th>
                     <th>Environment</th>
-                    <th style={{ textAlign: "right" }}>Servers</th>
-                    <th style={{ textAlign: "right" }}>Containers</th>
+                    <th style={{ textAlign: "right" }}>Physical</th>
+                    <th style={{ textAlign: "right" }}>Virtual</th>
+                    <th style={{ textAlign: "right" }}>Container</th>
                     <th style={{ textAlign: "right" }}>DB</th>
                     <th style={{ textAlign: "right" }}>OSS</th>
                     <th style={{ textAlign: "right" }}>NAS</th>
@@ -2162,10 +2163,11 @@ function DeploymentTab({ appId }: { appId: string }) {
                     <tr key={i}>
                       <td style={{ fontWeight: 500 }}>{cityLabel(c.city)}</td>
                       <td><EnvBadge env={c.env} /></td>
-                      <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>{c.servers || "—"}</td>
-                      <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>{c.containers || "—"}</td>
-                      <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>{c.databases || "—"}</td>
-                      <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>{c.object_storage || "—"}</td>
+                      <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>{c.pm || "—"}</td>
+                      <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>{c.vm || "—"}</td>
+                      <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>{c.k8s || "—"}</td>
+                      <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>{c.db || "—"}</td>
+                      <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>{c.oss || "—"}</td>
                       <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>{c.nas || "—"}</td>
                       <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600, color: "var(--accent)" }}>{c.total}</td>
                     </tr>

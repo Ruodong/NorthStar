@@ -34,33 +34,35 @@ const VIEWPORTS: Record<string, { bounds: [number, number, number, number]; titl
 export interface CityData {
   city: string;
   env: string;
-  servers: number;
-  containers: number;
-  databases: number;
-  object_storage: number;
+  pm: number;
+  vm: number;
+  k8s: number;
+  db: number;
+  oss: number;
   nas: number;
   total: number;
 }
 
 // Aggregated data for a single city across environments
 interface CityAgg {
-  prod: { servers: number; containers: number; databases: number; oss: number; nas: number; total: number };
-  nonProd: { servers: number; containers: number; databases: number; oss: number; nas: number; total: number };
+  prod: { pm: number; vm: number; k8s: number; db: number; oss: number; nas: number; total: number };
+  nonProd: { pm: number; vm: number; k8s: number; db: number; oss: number; nas: number; total: number };
   total: number;
 }
 
 // Resource type config for display
 const RESOURCE_TYPES = [
-  { key: "servers",    icon: "SRV", label: "Server" },
-  { key: "containers", icon: "CTR", label: "Container" },
-  { key: "databases",  icon: "DB",  label: "Database" },
-  { key: "oss",        icon: "OSS", label: "Object Storage" },
-  { key: "nas",        icon: "NAS", label: "NAS" },
+  { key: "pm",  icon: "PM",  label: "Physical Server" },
+  { key: "vm",  icon: "VM",  label: "Virtual Machine" },
+  { key: "k8s", icon: "K8S", label: "Container" },
+  { key: "db",  icon: "DB",  label: "Database" },
+  { key: "oss", icon: "OSS", label: "Object Storage" },
+  { key: "nas", icon: "NAS", label: "NAS" },
 ] as const;
 
 const W = 960;
-const CARD_W = 120; // ~12.5% of SVG width — fixed proportion per card
-const CARD_LINE_H = 14; // line height per resource row
+const CARD_W = 150; // ~15.6% of SVG width — fixed proportion per card
+const CARD_LINE_H = 17; // line height per resource row
 
 function getH(bounds: [number, number, number, number]): number {
   const [minLon, maxLon, minLat, maxLat] = bounds;
@@ -109,25 +111,36 @@ function renderResourceIcon(
 ) {
   const sc = 0.9; // slight scale-down for visual balance
   switch (key) {
-    case "servers": // rack unit: rectangle with horizontal dividers + LED dots
+    case "pm": // physical server — solid rack with filled LEDs
       return (
         <g transform={`translate(${x},${y}) scale(${sc})`} fill="none" stroke={color}>
-          <rect width={8} height={10} rx={1} strokeWidth={0.8} />
+          <rect width={8} height={10} rx={1} strokeWidth={0.9} />
           <line x1={0} y1={3.5} x2={8} y2={3.5} strokeWidth={0.5} />
           <line x1={0} y1={7} x2={8} y2={7} strokeWidth={0.5} />
-          <circle cx={6} cy={1.7} r={0.6} fill={color} stroke="none" />
-          <circle cx={6} cy={5.2} r={0.6} fill={color} stroke="none" />
-          <circle cx={6} cy={8.5} r={0.6} fill={color} stroke="none" />
+          <circle cx={6} cy={1.7} r={0.7} fill={color} stroke="none" />
+          <circle cx={6} cy={5.2} r={0.7} fill={color} stroke="none" />
+          <circle cx={6} cy={8.5} r={0.7} fill={color} stroke="none" />
         </g>
       );
-    case "containers": // box with handle tab (Docker-esque)
+    case "vm": // virtual machine — dashed rack with hollow LEDs
+      return (
+        <g transform={`translate(${x},${y}) scale(${sc})`} fill="none" stroke={color}>
+          <rect width={8} height={10} rx={1} strokeWidth={0.8} strokeDasharray="1.5,1" />
+          <line x1={0} y1={3.5} x2={8} y2={3.5} strokeWidth={0.5} strokeDasharray="1,1" />
+          <line x1={0} y1={7} x2={8} y2={7} strokeWidth={0.5} strokeDasharray="1,1" />
+          <circle cx={6} cy={1.7} r={0.6} fill="none" strokeWidth={0.5} />
+          <circle cx={6} cy={5.2} r={0.6} fill="none" strokeWidth={0.5} />
+          <circle cx={6} cy={8.5} r={0.6} fill="none" strokeWidth={0.5} />
+        </g>
+      );
+    case "k8s": // container — box with handle tab
       return (
         <g transform={`translate(${x},${y}) scale(${sc})`} fill="none" stroke={color}>
           <rect y={2.5} width={10} height={7.5} rx={1} strokeWidth={0.8} />
           <rect x={1} width={3} height={3} rx={0.5} strokeWidth={0.7} />
         </g>
       );
-    case "databases": // classic cylinder
+    case "db": // classic cylinder
       return (
         <g transform={`translate(${x},${y}) scale(${sc})`} fill="none" stroke={color} strokeWidth={0.8}>
           <path d="M0,2.5 C0,0.5 8,0.5 8,2.5 V7.5 C8,9.5 0,9.5 0,7.5 Z" />
@@ -236,19 +249,20 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
       const key = d.city;
       if (!agg[key]) {
         agg[key] = {
-          prod:    { servers: 0, containers: 0, databases: 0, oss: 0, nas: 0, total: 0 },
-          nonProd: { servers: 0, containers: 0, databases: 0, oss: 0, nas: 0, total: 0 },
+          prod:    { pm: 0, vm: 0, k8s: 0, db: 0, oss: 0, nas: 0, total: 0 },
+          nonProd: { pm: 0, vm: 0, k8s: 0, db: 0, oss: 0, nas: 0, total: 0 },
           total: 0,
         };
       }
       const bucket = d.env === "Production" ? agg[key].prod : agg[key].nonProd;
-      bucket.servers    += d.servers || 0;
-      bucket.containers += d.containers || 0;
-      bucket.databases  += d.databases || 0;
-      bucket.oss        += d.object_storage || 0;
-      bucket.nas        += d.nas || 0;
-      bucket.total      += d.total;
-      agg[key].total    += d.total;
+      bucket.pm  += d.pm || 0;
+      bucket.vm  += d.vm || 0;
+      bucket.k8s += d.k8s || 0;
+      bucket.db  += d.db || 0;
+      bucket.oss += d.oss || 0;
+      bucket.nas += d.nas || 0;
+      bucket.total += d.total;
+      agg[key].total += d.total;
     }
     return agg;
   }, [data]);
@@ -307,7 +321,7 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
       }
       if (rows.length === 0) continue;
 
-      const titleH = 18;
+      const titleH = 22;
       const cardH = titleH + rows.length * CARD_LINE_H + 6;
       const { dx, dy } = getCardOffset(cx, cy, W, H);
 
@@ -378,14 +392,14 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
 
               {/* City name */}
               <text
-                x={cardX + 7} y={cardY + 13}
+                x={cardX + 8} y={cardY + 15}
                 fill="#e7eaf0"
-                fontSize="10" fontWeight={700}
+                fontSize="11" fontWeight={700}
                 fontFamily="var(--font-mono)"
               >
                 {geo.label}
                 {geo.labelZh && (
-                  <tspan fill="rgba(255,255,255,0.35)" fontSize="9" dx={4}>
+                  <tspan fill="rgba(255,255,255,0.35)" fontSize="10" dx={4}>
                     {geo.labelZh}
                   </tspan>
                 )}
@@ -393,7 +407,7 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
 
               {/* Total count badge */}
               <text
-                x={cardX + CARD_W - 7} y={cardY + 13}
+                x={cardX + CARD_W - 8} y={cardY + 15}
                 fill="rgba(255,255,255,0.3)"
                 fontSize="9" fontWeight={600}
                 fontFamily="var(--font-mono)"
@@ -404,15 +418,15 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
 
               {/* Resource rows */}
               {rows.map((row, ri) => {
-                const rowY = cardY + 18 + ri * CARD_LINE_H + 2;
+                const rowY = cardY + 22 + ri * CARD_LINE_H + 2;
                 return (
                   <g key={row.key}>
                     {/* Resource icon */}
-                    {renderResourceIcon(row.key, cardX + 5, rowY + 1, "rgba(255,255,255,0.4)")}
+                    {renderResourceIcon(row.key, cardX + 6, rowY + 3, "rgba(255,255,255,0.4)")}
 
                     {/* Numbers: prod (amber) · nonProd (blue), right-aligned */}
                     <text
-                      x={cardX + CARD_W - 7} y={rowY + 10}
+                      x={cardX + CARD_W - 8} y={rowY + 12}
                       textAnchor="end"
                       fontSize="10" fontWeight={600}
                       fontFamily="var(--font-mono)"
