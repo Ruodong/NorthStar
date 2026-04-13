@@ -364,29 +364,20 @@ async def list_pages(
         where.append("(p.depth IS NULL OR p.depth <= 2)")
 
     if hide_empty:
-        # Hide project-folder pages that have NO Confluence content anywhere:
-        # no own attachments, no drawio macro embeds, no attachments on any
-        # direct child page. "FY2526-125 CoC PBI Data Refresh" style stubs
-        # that only have a title are noise in the raw data view.
+        # Hide pages with no content. Uses the pre-aggregated att_counts
+        # and ref_totals CTEs that are LEFT JOINed in base, plus a quick
+        # child-content check. Much faster than per-row EXISTS subqueries.
         where.append(
             """(
-                EXISTS (
-                    SELECT 1 FROM northstar.confluence_attachment a
-                    WHERE a.page_id = p.page_id
-                      AND a.title NOT LIKE 'drawio-backup%'
-                      AND a.title NOT LIKE '~%'
-                )
+                COALESCE(ac.own_att, 0) > 0
+                OR COALESCE(rt.ref_drawio, 0) > 0
                 OR EXISTS (
-                    SELECT 1 FROM northstar.drawio_reference dr
-                    WHERE dr.inclusion_page_id = p.page_id
-                )
-                OR EXISTS (
-                    SELECT 1 FROM northstar.confluence_attachment a2
-                    JOIN northstar.confluence_page cp2
-                         ON cp2.page_id = a2.page_id
-                    WHERE cp2.parent_id = p.page_id
-                      AND a2.title NOT LIKE 'drawio-backup%'
-                      AND a2.title NOT LIKE '~%'
+                    SELECT 1 FROM northstar.confluence_page child
+                    JOIN northstar.confluence_attachment ca
+                      ON ca.page_id = child.page_id
+                    WHERE child.parent_id = p.page_id
+                      AND ca.title NOT LIKE 'drawio-backup%'
+                      AND ca.title NOT LIKE '~%'
                 )
             )"""
         )
