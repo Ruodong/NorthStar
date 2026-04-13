@@ -114,9 +114,14 @@ def _search_sync(app_name: str) -> list[dict]:
             web_ui = p.get("_links", {}).get("webui", "")
             page_url = f"{public_base}{web_ui}" if web_ui else ""
 
+            # Clean Confluence highlight markers from excerpt
+            raw_excerpt = p.get("excerpt", "")
+            excerpt = raw_excerpt.replace("@@@hl@@@", "").replace("@@@endhl@@@", "").strip()
+
             pages.append({
                 "page_id": p.get("id", ""),
                 "title": p.get("title", ""),
+                "excerpt": excerpt,
                 "space_key": space.get("key", ""),
                 "space_name": space.get("name", ""),
                 "last_modified": last_upd.get("when", "")[:10],
@@ -187,6 +192,7 @@ async def search_knowledge_base(app_name: str) -> dict:
         by_space[sk]["pages"].append({
             "page_id": pg["page_id"],
             "title": pg["title"],
+            "excerpt": pg.get("excerpt", ""),
             "last_modified": pg["last_modified"],
             "updater": pg["updater"],
             "page_url": pg["page_url"],

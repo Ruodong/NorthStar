@@ -1827,6 +1827,7 @@ function ConfluenceTab({ pages }: { pages: ReviewPage[] }) {
 interface KBPage {
   page_id: string;
   title: string;
+  excerpt: string;
   last_modified: string;
   updater: string;
   page_url: string;
@@ -2020,56 +2021,69 @@ function KnowledgeBaseTab({ appId }: { appId: string }) {
                     <div
                       key={pg.page_id}
                       style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
                         padding: "8px 14px 8px 34px",
                         borderTop: "1px solid var(--border)",
                         fontSize: 12,
                       }}
                     >
-                      <a
-                        href={pg.page_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                          color: "var(--accent)",
-                          textDecoration: "none",
-                          flex: 1,
-                          marginRight: 16,
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                        }}
-                        title={pg.title}
-                      >
-                        {pg.title}
-                        <span style={{ fontSize: 10, marginLeft: 4, opacity: 0.5 }}>↗</span>
-                      </a>
-                      <div
-                        style={{
-                          display: "flex",
-                          gap: 16,
-                          flexShrink: 0,
-                          color: "var(--text-dim)",
-                          fontSize: 11,
-                        }}
-                      >
-                        <span style={{ fontFamily: "var(--font-mono)", width: 80 }}>
-                          {pg.last_modified}
-                        </span>
-                        <span
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <a
+                          href={pg.page_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
                           style={{
-                            width: 120,
+                            color: "var(--accent)",
+                            textDecoration: "none",
+                            flex: 1,
+                            marginRight: 16,
                             overflow: "hidden",
                             textOverflow: "ellipsis",
                             whiteSpace: "nowrap",
                           }}
-                          title={pg.updater}
+                          title={pg.title}
                         >
-                          {pg.updater}
-                        </span>
+                          {pg.title}
+                          <span style={{ fontSize: 10, marginLeft: 4, opacity: 0.5 }}>↗</span>
+                        </a>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 16,
+                            flexShrink: 0,
+                            color: "var(--text-dim)",
+                            fontSize: 11,
+                          }}
+                        >
+                          <span style={{ fontFamily: "var(--font-mono)", width: 80 }}>
+                            {pg.last_modified}
+                          </span>
+                          <span
+                            style={{
+                              width: 120,
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                            title={pg.updater}
+                          >
+                            {pg.updater}
+                          </span>
+                        </div>
                       </div>
+                      {pg.excerpt && (
+                        <div style={{
+                          marginTop: 4,
+                          fontSize: 11,
+                          lineHeight: 1.5,
+                          color: "var(--text-dim)",
+                          overflow: "hidden",
+                          display: "-webkit-box",
+                          WebkitLineClamp: 2,
+                          WebkitBoxOrient: "vertical" as const,
+                        }}>
+                          {pg.excerpt}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
