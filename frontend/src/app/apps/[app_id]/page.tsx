@@ -1827,7 +1827,7 @@ function DeploymentTab({ appId }: { appId: string }) {
                     <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{s.ram || "—"}</td>
                     <td style={{ fontSize: 12 }}>{cityLabel(s.city)}</td>
                     <td><code style={{ fontSize: 10, color: "var(--text-dim)" }}>{s.location || "—"}</code></td>
-                    <td><StatusPill status={s.operational_status} /></td>
+                    <td><DeployStatusPill status={s.operational_status} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -1863,7 +1863,7 @@ function DeploymentTab({ appId }: { appId: string }) {
                   <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{c.limit_cpu || "—"}</td>
                   <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{c.limit_mem || "—"}</td>
                   <td style={{ fontSize: 12 }}>{cityLabel(c.city)}</td>
-                  <td><StatusPill status={c.operational_status} /></td>
+                  <td><DeployStatusPill status={c.operational_status} /></td>
                 </tr>
               ))}
             </tbody>
@@ -1895,7 +1895,7 @@ function DeploymentTab({ appId }: { appId: string }) {
                   <td><code style={{ fontSize: 10, color: "var(--text-dim)" }}>{d.host_name || "—"}</code></td>
                   <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{d.db_size_mb || "—"}</td>
                   <td style={{ fontSize: 12 }}>{cityLabel(d.city)}</td>
-                  <td><StatusPill status={d.operational_status} /></td>
+                  <td><DeployStatusPill status={d.operational_status} /></td>
                 </tr>
               ))}
             </tbody>
@@ -1930,7 +1930,7 @@ function DeployKpi({ label, value, accent }: { label: string; value: number; acc
   );
 }
 
-function StatusPill({ status }: { status: string | null }) {
+function DeployStatusPill({ status }: { status: string | null }) {
   const s = (status || "").toLowerCase();
   const color = s === "operational" ? "#4ade80"
     : s === "power off" || s === "decommissioned" ? "#ef4444"
