@@ -887,7 +887,7 @@ function OverviewTab({
         <CmdbField label="Status" value={app.status} pill />
         <CmdbField label="Description" value={app.short_description} wide />
         <CmdbField label="Service Area" value={app.u_service_area} />
-        <CmdbField label="Classification" value={app.app_classification} />
+        <CmdbField label="Classification" value={app.app_classification?.replace(/^"|"$/g, "")} />
         <CmdbField label="Solution Type" value={app.app_solution_type} />
         <CmdbField label="Ownership" value={app.app_ownership} />
         <CmdbField label="Portfolio" value={app.portfolio_mgt} />

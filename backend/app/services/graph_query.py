@@ -469,27 +469,25 @@ async def kpi_summary(current_fy: Optional[str] = None) -> dict:
         new_apps_rows = await neo4j_client.run_query(new_apps_cypher)
         new_apps_count = new_apps_rows[0]["c"] if new_apps_rows else 0
 
+    # Total apps from PG CMDB (authoritative count, excludes non-CMDB X-prefix)
+    total_apps = await pg_client.fetchval(
+        "SELECT count(*) FROM northstar.ref_application"
+    ) or 0
+
+    # Integrations + sunset count from Neo4j
     totals_cypher = """
-    MATCH (a:Application)
-    WITH count(a) AS total_apps,
-         sum(CASE WHEN a.status = 'Sunset' THEN 1 ELSE 0 END) AS sunset_apps
+    MATCH (a:Application) WHERE NOT a.app_id STARTS WITH 'X'
+    WITH sum(CASE WHEN a.status = 'Sunset' THEN 1 ELSE 0 END) AS sunset_apps
     OPTIONAL MATCH ()-[r:INTEGRATES_WITH]->()
-    RETURN total_apps, sunset_apps, count(r) AS total_integrations
+    RETURN sunset_apps, count(r) AS total_integrations
     """
     rows = await neo4j_client.run_query(totals_cypher)
-    if not rows:
-        return {
-            "total_apps": 0,
-            "total_integrations": 0,
-            "new_apps_current_fy": new_apps_count,
-            "sunset_apps": 0,
-        }
-    row = rows[0]
+    row = rows[0] if rows else {}
     return {
-        "total_apps": row["total_apps"] or 0,
-        "total_integrations": row["total_integrations"] or 0,
+        "total_apps": total_apps,
+        "total_integrations": row.get("total_integrations") or 0,
         "new_apps_current_fy": new_apps_count or 0,
-        "sunset_apps": row["sunset_apps"] or 0,
+        "sunset_apps": row.get("sunset_apps") or 0,
     }
 
 
