@@ -48,17 +48,16 @@ def get_pg_conn():
     )
 
 
-def load_candidates(conn) -> list[dict]:
-    """Load all vision candidates >= 50KB that haven't been extracted yet
-    (no rows in confluence_image_extract_app)."""
+def load_candidates(conn, min_size: int = 50000) -> list[dict]:
+    """Load all vision candidates >= min_size that haven't been extracted yet."""
     with conn.cursor() as cur:
         cur.execute("""
             SELECT a.attachment_id, a.title, a.file_size, a.local_path
             FROM northstar.confluence_attachment a
             WHERE a.vision_candidate = true
-              AND a.file_size >= 50000
+              AND a.file_size >= %s
             ORDER BY a.file_size ASC
-        """)
+        """, (min_size,))
         return cur.fetchall()
 
 
@@ -192,12 +191,14 @@ async def main():
     parser = argparse.ArgumentParser(description="Batch vision extraction")
     parser.add_argument("--concurrency", type=int, default=10)
     parser.add_argument("--backend-url", default="http://localhost:8001")
+    parser.add_argument("--min-size", type=int, default=50000,
+                        help="Minimum file size in bytes (default 50000)")
     parser.add_argument("--force", action="store_true",
                         help="Re-extract even if already has results")
     args = parser.parse_args()
 
     conn = get_pg_conn()
-    candidates = load_candidates(conn)
+    candidates = load_candidates(conn, min_size=args.min_size)
     logger.info("loaded %d vision candidates (>= 50KB)", len(candidates))
 
     if not args.force:
