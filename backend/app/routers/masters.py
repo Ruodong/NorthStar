@@ -148,6 +148,112 @@ async def get_application(app_id: str) -> ApiResponse:
     return ApiResponse(data=dict(row))
 
 
+@router.get("/applications/{app_id}/deployment")
+async def get_application_deployment(app_id: str) -> ApiResponse:
+    """Infrastructure deployment data for an application: servers, containers, databases.
+
+    Returns summary counts + per-category rows with city information.
+    Container city is derived from cluster_name; database city is joined
+    from ref_deployment_server via host_name.
+    """
+    # Servers (VM/PM) — city comes directly from the "City" column
+    servers = await pg_client.fetch(
+        """
+        SELECT name, ip_address, app_name, device_type, is_virtualized,
+               os_type, os_version, cpu_count, ram, disk_space,
+               "City" AS city, location, operational_status, landscape,
+               have_dr, model_type
+        FROM northstar.ref_deployment_server
+        WHERE app_id = $1
+        ORDER BY operational_status, "City", name
+        """,
+        app_id,
+    )
+
+    # Containers — derive city from cluster_name
+    containers = await pg_client.fetch(
+        """
+        SELECT name AS project_name, cluster_name, limit_cpu, limit_mem,
+               operational_status, owner, type,
+               -- Derive city from cluster_name patterns like
+               -- CLUSTER-PRD-SHENYANG, CLUSTER-PRD-RESTON, etc.
+               CASE
+                 WHEN cluster_name ILIKE '%SHENYANG%' THEN 'SY'
+                 WHEN cluster_name ILIKE '%SY-%' OR cluster_name ILIKE '%-SY-%' THEN 'SY'
+                 WHEN cluster_name ILIKE '%RESTON%' THEN 'US-Reston'
+                 WHEN cluster_name ILIKE '%FRANKFURT%' THEN 'Frankfurt'
+                 WHEN cluster_name ILIKE '%CHICAGO%' THEN 'US-Chicago'
+                 WHEN cluster_name ILIKE '%BEIJING%' OR cluster_name ILIKE '%BJ%' THEN 'BJ'
+                 WHEN cluster_name ILIKE '%NANCHANG%' OR cluster_name ILIKE '%NC%' THEN 'NM'
+                 WHEN cluster_name ILIKE '%HOHHOT%' OR cluster_name ILIKE '%-NM-%' THEN 'NM'
+                 WHEN cluster_name ILIKE '%HK%' OR cluster_name ILIKE '%HONGKONG%' THEN 'HK'
+                 WHEN cluster_name ILIKE '%NA-%' OR cluster_name ILIKE '%-NA-%' THEN 'NA'
+                 ELSE cluster_name
+               END AS city
+        FROM northstar.ref_deployment_container
+        WHERE app_id = $1
+        ORDER BY operational_status, cluster_name
+        """,
+        app_id,
+    )
+
+    # Databases — join server table for city via host_name
+    databases = await pg_client.fetch(
+        """
+        SELECT d.name, d.db_instance_name, d.app_name,
+               d."className" AS db_type, d.version, d.host_name,
+               d.operational_status, d.ha_type, d.ha_role, d.port,
+               d.u_db_size_in_mb AS db_size_mb,
+               s."City" AS city, s.location
+        FROM northstar.ref_deployment_database d
+        LEFT JOIN LATERAL (
+            SELECT DISTINCT ON (s2."City") s2."City", s2.location
+            FROM northstar.ref_deployment_server s2
+            WHERE s2.name = d.host_name
+               OR s2.fqdn = d.host_name
+            LIMIT 1
+        ) s ON true
+        WHERE d.app_id = $1
+        ORDER BY d.operational_status, d."className", d.name
+        """,
+        app_id,
+    )
+
+    # City summary across all 3 sources
+    city_counts: dict[str, dict[str, int]] = {}
+    for r in servers:
+        c = r["city"] or "Unknown"
+        city_counts.setdefault(c, {"servers": 0, "containers": 0, "databases": 0})
+        city_counts[c]["servers"] += 1
+    for r in containers:
+        c = r["city"] or "Unknown"
+        city_counts.setdefault(c, {"servers": 0, "containers": 0, "databases": 0})
+        city_counts[c]["containers"] += 1
+    for r in databases:
+        c = r["city"] or "Unknown"
+        city_counts.setdefault(c, {"servers": 0, "containers": 0, "databases": 0})
+        city_counts[c]["databases"] += 1
+
+    by_city = sorted(
+        [{"city": k, **v, "total": v["servers"] + v["containers"] + v["databases"]}
+         for k, v in city_counts.items()],
+        key=lambda x: x["total"],
+        reverse=True,
+    )
+
+    return ApiResponse(data={
+        "summary": {
+            "servers": len(servers),
+            "containers": len(containers),
+            "databases": len(databases),
+        },
+        "by_city": by_city,
+        "servers": [dict(r) for r in servers],
+        "containers": [dict(r) for r in containers],
+        "databases": [dict(r) for r in databases],
+    })
+
+
 @router.get("/projects")
 async def list_projects(
     q: Optional[str] = None,

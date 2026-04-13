@@ -156,7 +156,7 @@ interface ImpactResponse {
   fan_out_cap: number;
 }
 
-type Tab = "overview" | "integrations" | "investments" | "diagrams" | "impact" | "confluence" | "knowledge";
+type Tab = "overview" | "integrations" | "investments" | "diagrams" | "impact" | "confluence" | "knowledge" | "deployment";
 
 const STATUS_COLORS: Record<string, string> = {
   Keep: "var(--status-keep)",
@@ -324,6 +324,9 @@ export default function AppDetailPage({ params }: { params: { app_id: string } }
         <TabButton current={tab} value="confluence" onClick={setTab} count={reviewCount}>
           Confluence
         </TabButton>
+        <TabButton current={tab} value="deployment" onClick={setTab}>
+          Deployment
+        </TabButton>
         <TabButton current={tab} value="knowledge" onClick={setTab}>
           Knowledge Base
         </TabButton>
@@ -346,6 +349,7 @@ export default function AppDetailPage({ params }: { params: { app_id: string } }
       {tab === "investments" && <InvestmentsTab investments={investments} />}
       {tab === "diagrams" && <DiagramsTab diagrams={diagrams} />}
       {tab === "confluence" && <ConfluenceTab pages={review_pages || []} />}
+      {tab === "deployment" && <DeploymentTab appId={app.app_id} />}
       {tab === "knowledge" && <KnowledgeBaseTab appId={app.app_id} />}
     </div>
   );
@@ -1670,5 +1674,273 @@ function KnowledgeBaseTab({ appId }: { appId: string }) {
         </div>
       )}
     </Panel>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// Deployment Tab — servers, containers, databases from infraops
+// ---------------------------------------------------------------------------
+
+interface DeploymentData {
+  summary: { servers: number; containers: number; databases: number };
+  by_city: { city: string; servers: number; containers: number; databases: number; total: number }[];
+  servers: Record<string, string | null>[];
+  containers: Record<string, string | null>[];
+  databases: Record<string, string | null>[];
+}
+
+const CITY_LABELS: Record<string, string> = {
+  SY: "沈阳 Shenyang",
+  NM: "内蒙 Hohhot",
+  BJ: "北京 Beijing",
+  SH: "上海 Shanghai",
+  SZ: "深圳 Shenzhen",
+  TJ: "天津 Tianjin",
+  WH: "武汉 Wuhan",
+  HK: "香港 Hong Kong",
+  NA: "North America",
+  "US-Reston": "US Reston",
+  "US-Chicago": "US Chicago",
+  "US-Ral": "US Raleigh",
+  Frankfurt: "Frankfurt",
+};
+
+function cityLabel(code: string | null): string {
+  if (!code) return "Unknown";
+  return CITY_LABELS[code] || code;
+}
+
+function DeploymentTab({ appId }: { appId: string }) {
+  const [data, setData] = useState<DeploymentData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const r = await fetch(`/api/masters/applications/${appId}/deployment`);
+        const j = await r.json();
+        if (!j.success) throw new Error(j.error || "API error");
+        if (!cancelled) setData(j.data);
+      } catch (e) {
+        if (!cancelled) setErr(String(e));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [appId]);
+
+  if (loading) return <div className="empty" style={{ padding: 40 }}>Loading deployment data…</div>;
+  if (err) return <div className="panel" style={{ borderColor: "#5b1f1f" }}>Error: {err}</div>;
+  if (!data) return null;
+
+  const { summary, by_city, servers, containers, databases } = data;
+  const total = summary.servers + summary.containers + summary.databases;
+
+  if (total === 0) {
+    return (
+      <div className="empty" style={{ padding: 40 }}>
+        No deployment data found for this application in InfraOps.
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* Summary KPIs */}
+      <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
+        <DeployKpi label="Servers (VM/PM)" value={summary.servers} />
+        <DeployKpi label="Containers" value={summary.containers} />
+        <DeployKpi label="Databases" value={summary.databases} />
+        <DeployKpi label="Total" value={total} accent />
+      </div>
+
+      {/* City distribution */}
+      {by_city.length > 0 && (
+        <Panel title="Deployment by City">
+          <table>
+            <thead>
+              <tr>
+                <th>City</th>
+                <th style={{ textAlign: "right" }}>Servers</th>
+                <th style={{ textAlign: "right" }}>Containers</th>
+                <th style={{ textAlign: "right" }}>Databases</th>
+                <th style={{ textAlign: "right" }}>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {by_city.map((c) => (
+                <tr key={c.city}>
+                  <td style={{ fontWeight: 500 }}>{cityLabel(c.city)}</td>
+                  <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                    {c.servers || "—"}
+                  </td>
+                  <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                    {c.containers || "—"}
+                  </td>
+                  <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                    {c.databases || "—"}
+                  </td>
+                  <td style={{
+                    textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12,
+                    fontWeight: 600, color: "var(--accent)",
+                  }}>
+                    {c.total}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Panel>
+      )}
+
+      {/* Servers table */}
+      {servers.length > 0 && (
+        <Panel title={`Servers · VM/PM (${servers.length})`}>
+          <div style={{ overflowX: "auto" }}>
+            <table>
+              <thead>
+                <tr>
+                  <th>Hostname</th>
+                  <th>IP</th>
+                  <th>Type</th>
+                  <th>OS</th>
+                  <th>CPU</th>
+                  <th>RAM</th>
+                  <th>City</th>
+                  <th>DC</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {servers.slice(0, 200).map((s, i) => (
+                  <tr key={i}>
+                    <td><code style={{ fontSize: 11 }}>{s.name || "—"}</code></td>
+                    <td style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>{s.ip_address || "—"}</td>
+                    <td style={{ fontSize: 12 }}>{s.is_virtualized || s.device_type || "—"}</td>
+                    <td style={{ fontSize: 12 }}>{s.os_type || "—"}</td>
+                    <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{s.cpu_count || "—"}</td>
+                    <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{s.ram || "—"}</td>
+                    <td style={{ fontSize: 12 }}>{cityLabel(s.city)}</td>
+                    <td><code style={{ fontSize: 10, color: "var(--text-dim)" }}>{s.location || "—"}</code></td>
+                    <td><StatusPill status={s.operational_status} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {servers.length > 200 && (
+              <div style={{ padding: 12, fontSize: 12, color: "var(--text-dim)", textAlign: "center" }}>
+                Showing 200 of {servers.length} servers
+              </div>
+            )}
+          </div>
+        </Panel>
+      )}
+
+      {/* Containers table */}
+      {containers.length > 0 && (
+        <Panel title={`Containers (${containers.length})`}>
+          <table>
+            <thead>
+              <tr>
+                <th>Project</th>
+                <th>Cluster</th>
+                <th>CPU Limit</th>
+                <th>MEM Limit</th>
+                <th>City</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {containers.map((c, i) => (
+                <tr key={i}>
+                  <td style={{ fontSize: 12 }}>{c.project_name || "—"}</td>
+                  <td><code style={{ fontSize: 10 }}>{c.cluster_name || "—"}</code></td>
+                  <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{c.limit_cpu || "—"}</td>
+                  <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{c.limit_mem || "—"}</td>
+                  <td style={{ fontSize: 12 }}>{cityLabel(c.city)}</td>
+                  <td><StatusPill status={c.operational_status} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Panel>
+      )}
+
+      {/* Databases table */}
+      {databases.length > 0 && (
+        <Panel title={`Databases (${databases.length})`}>
+          <table>
+            <thead>
+              <tr>
+                <th>Instance</th>
+                <th>Type</th>
+                <th>Version</th>
+                <th>Host</th>
+                <th>Size (MB)</th>
+                <th>City</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {databases.map((d, i) => (
+                <tr key={i}>
+                  <td><code style={{ fontSize: 11 }}>{d.db_instance_name || d.name || "—"}</code></td>
+                  <td style={{ fontSize: 12 }}>{d.db_type || "—"}</td>
+                  <td style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>{d.version || "—"}</td>
+                  <td><code style={{ fontSize: 10, color: "var(--text-dim)" }}>{d.host_name || "—"}</code></td>
+                  <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{d.db_size_mb || "—"}</td>
+                  <td style={{ fontSize: 12 }}>{cityLabel(d.city)}</td>
+                  <td><StatusPill status={d.operational_status} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Panel>
+      )}
+    </div>
+  );
+}
+
+function DeployKpi({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
+  return (
+    <div
+      style={{
+        padding: "12px 20px",
+        background: "var(--bg-elevated)",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-md)",
+        minWidth: 120,
+      }}
+    >
+      <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--text-dim)", marginBottom: 4 }}>
+        {label}
+      </div>
+      <div style={{
+        fontSize: 24, fontWeight: 700, fontFamily: "var(--font-display)",
+        color: accent ? "var(--accent)" : "var(--text)",
+      }}>
+        {value.toLocaleString()}
+      </div>
+    </div>
+  );
+}
+
+function StatusPill({ status }: { status: string | null }) {
+  const s = (status || "").toLowerCase();
+  const color = s === "operational" ? "#4ade80"
+    : s === "power off" || s === "decommissioned" ? "#ef4444"
+    : "var(--text-dim)";
+  return (
+    <span style={{
+      fontSize: 10, fontFamily: "var(--font-mono)", fontWeight: 600,
+      textTransform: "uppercase", color,
+    }}>
+      {status || "—"}
+    </span>
   );
 }
