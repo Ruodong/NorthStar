@@ -170,7 +170,11 @@ async def get_application_deployment(app_id: str) -> ApiResponse:
                END AS env
         FROM northstar.ref_deployment_server
         WHERE app_id = $1
-        ORDER BY operational_status, "City", name
+        ORDER BY
+            CASE WHEN lower(landscape) = 'production' THEN 0
+                 WHEN landscape IS NULL OR landscape = '' THEN 2
+                 ELSE 1 END,
+            "City", name
         """,
         app_id,
     )
@@ -203,7 +207,13 @@ async def get_application_deployment(app_id: str) -> ApiResponse:
                END AS env
         FROM northstar.ref_deployment_container
         WHERE app_id = $1
-        ORDER BY operational_status, cluster_name
+        ORDER BY
+            CASE WHEN cluster_name ILIKE '%-PRD-%' OR cluster_name ILIKE '%-PRD' THEN 0
+                 WHEN cluster_name ILIKE '%-STG-%' OR cluster_name ILIKE '%-UAT-%'
+                   OR cluster_name ILIKE '%-DEV-%' OR cluster_name ILIKE '%-QA-%'
+                   OR cluster_name ILIKE '%-TEST-%' THEN 1
+                 ELSE 2 END,
+            cluster_name
         """,
         app_id,
     )
@@ -231,7 +241,11 @@ async def get_application_deployment(app_id: str) -> ApiResponse:
             LIMIT 1
         ) s ON true
         WHERE d.app_id = $1
-        ORDER BY d.operational_status, d."className", d.name
+        ORDER BY
+            CASE WHEN lower(d.used_for) = 'production' THEN 0
+                 WHEN d.used_for IS NULL OR d.used_for = '' THEN 2
+                 ELSE 1 END,
+            d."className", d.name
         """,
         app_id,
     )
@@ -256,7 +270,11 @@ async def get_application_deployment(app_id: str) -> ApiResponse:
         [{"city": k[0], "env": k[1], **v,
           "total": v["servers"] + v["containers"] + v["databases"]}
          for k, v in cell_counts.items()],
-        key=lambda x: (-x["total"], x["city"], x["env"]),
+        key=lambda x: (
+            {"Production": 0, "Non-Production": 1}.get(x["env"], 2),
+            -x["total"],
+            x["city"],
+        ),
     )
 
     # Also provide a flat by_city (summed across envs) for backward compat
