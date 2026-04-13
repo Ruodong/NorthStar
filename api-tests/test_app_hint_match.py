@@ -85,18 +85,27 @@ async def test_li2500034_displays_at_least_three_rows(api):
     assert r.status_code == 200, r.text
     data = r.json()["data"]
     rows = data["rows"]
-    app_ids = {row.get("app_id") for row in rows}
+    # With the Python-side collapse, each project row has a `project_apps`
+    # array containing all linked apps. Collect all app_ids from both the
+    # primary `app_id` field and the nested `project_apps` entries.
+    app_ids: set[str] = set()
+    for row in rows:
+        if row.get("app_id"):
+            app_ids.add(row["app_id"])
+        for pa in row.get("project_apps", []):
+            if pa.get("app_id"):
+                app_ids.add(pa["app_id"])
 
     assert "A000590" in app_ids, (
         f"Pattern B: CSDC should resolve to A000590 (exact CMDB match), "
         f"got app_ids={app_ids!r}"
     )
     assert "A000296" in app_ids, (
-        f"Major apps: Retail Family (A000296) should appear as a row "
-        f"via the drawio-extracted Change status, got app_ids={app_ids!r}"
+        f"Major apps: Retail Family (A000296) should appear via "
+        f"project_apps, got app_ids={app_ids!r}"
     )
-    assert len(rows) >= 3, (
-        f"Pattern B: expected >= 3 rows for LI2500034, got {len(rows)}"
+    assert len(app_ids) >= 3, (
+        f"Pattern B: expected >= 3 distinct apps for LI2500034, got {len(app_ids)}"
     )
 
 
