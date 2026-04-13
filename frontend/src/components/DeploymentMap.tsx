@@ -24,11 +24,12 @@ const CITY_GEO: Record<string, { lon: number; lat: number; label: string; labelZ
 };
 
 // Viewports: [minLon, maxLon, minLat, maxLat]
-const VIEWPORTS: Record<string, { bounds: [number, number, number, number]; title: string }> = {
-  WORLD: { bounds: [-130, 160, -10, 65], title: "Global Deployment" },
-  CN:    { bounds: [100, 135, 18, 50],   title: "China Deployment" },
-  US:    { bounds: [-100, -65, 25, 50],  title: "US Deployment" },
-  EU:    { bounds: [-5, 30, 42, 58],     title: "Europe Deployment" },
+// cardScale: multiplier for card size — region views get bigger cards
+const VIEWPORTS: Record<string, { bounds: [number, number, number, number]; title: string; cardScale: number }> = {
+  WORLD: { bounds: [-130, 160, -10, 65], title: "Global Deployment", cardScale: 1 },
+  CN:    { bounds: [100, 135, 18, 50],   title: "China Deployment",  cardScale: 2.2 },
+  US:    { bounds: [-100, -65, 25, 50],  title: "US Deployment",     cardScale: 2.2 },
+  EU:    { bounds: [-5, 30, 42, 58],     title: "Europe Deployment", cardScale: 2.2 },
 };
 
 export interface CityData {
@@ -61,8 +62,8 @@ const RESOURCE_TYPES = [
 ] as const;
 
 const W = 960;
-const CARD_W = 150; // ~15.6% of SVG width — fixed proportion per card
-const CARD_LINE_H = 17; // line height per resource row
+const BASE_CARD_W = 150;
+const BASE_CARD_LINE_H = 17;
 
 function getH(bounds: [number, number, number, number]): number {
   const [minLon, maxLon, minLat, maxLat] = bounds;
@@ -97,10 +98,10 @@ function geoToPath(
 
 // Label card offset: push card away from center to avoid overlapping the dot
 function getCardOffset(
-  cx: number, cy: number, svgW: number, svgH: number,
+  cx: number, cy: number, svgW: number, svgH: number, cardW: number,
 ): { dx: number; dy: number } {
   // Push cards toward the nearest edge (away from center)
-  const dx = cx > svgW / 2 ? 16 : -(CARD_W + 16);
+  const dx = cx > svgW / 2 ? 16 : -(cardW + 16);
   const dy = cy > svgH / 2 ? -8 : 8;
   return { dx, dy };
 }
@@ -173,7 +174,7 @@ function renderResourceIcon(
 // Resolve overlapping cards by iteratively pushing them apart
 function resolveCardOverlaps(
   cards: { cardX: number; cardY: number; cardH: number }[],
-  svgW: number, svgH: number,
+  svgW: number, svgH: number, cardW: number,
 ): void {
   const GAP = 6;
   for (let iter = 0; iter < 30; iter++) {
@@ -181,7 +182,7 @@ function resolveCardOverlaps(
     for (let i = 0; i < cards.length; i++) {
       for (let j = i + 1; j < cards.length; j++) {
         const a = cards[i], b = cards[j];
-        const ox = Math.min(a.cardX + CARD_W + GAP, b.cardX + CARD_W + GAP) - Math.max(a.cardX, b.cardX);
+        const ox = Math.min(a.cardX + cardW + GAP, b.cardX + cardW + GAP) - Math.max(a.cardX, b.cardX);
         const oy = Math.min(a.cardY + a.cardH + GAP, b.cardY + b.cardH + GAP) - Math.max(a.cardY, b.cardY);
         if (ox > 0 && oy > 0) {
           moved = true;
@@ -194,9 +195,9 @@ function resolveCardOverlaps(
             if (a.cardY <= b.cardY) { a.cardY -= half; b.cardY += half; }
             else { a.cardY += half; b.cardY -= half; }
           }
-          a.cardX = Math.max(2, Math.min(svgW - CARD_W - 2, a.cardX));
+          a.cardX = Math.max(2, Math.min(svgW - cardW - 2, a.cardX));
           a.cardY = Math.max(2, Math.min(svgH - a.cardH - 2, a.cardY));
-          b.cardX = Math.max(2, Math.min(svgW - CARD_W - 2, b.cardX));
+          b.cardX = Math.max(2, Math.min(svgW - cardW - 2, b.cardX));
           b.cardY = Math.max(2, Math.min(svgH - b.cardH - 2, b.cardY));
         }
       }
@@ -291,6 +292,11 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
     );
   }, [landPaths, viewport, H]);
 
+  // Scaled card dimensions based on viewport
+  const sc = viewport.cardScale;
+  const CARD_W = Math.round(BASE_CARD_W * sc);
+  const CARD_LINE_H = Math.round(BASE_CARD_LINE_H * sc);
+
   // Prepare city cards with positions + overlap resolution
   const cityCards = useMemo(() => {
     const cards: {
@@ -321,9 +327,9 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
       }
       if (rows.length === 0) continue;
 
-      const titleH = 22;
-      const cardH = titleH + rows.length * CARD_LINE_H + 6;
-      const { dx, dy } = getCardOffset(cx, cy, W, H);
+      const titleH = Math.round(22 * sc);
+      const cardH = titleH + rows.length * CARD_LINE_H + Math.round(6 * sc);
+      const { dx, dy } = getCardOffset(cx, cy, W, H, CARD_W);
 
       cards.push({ city, geo, agg, cx, cy, rows, cardX: cx + dx, cardY: cy + dy, cardH });
     }
@@ -332,10 +338,10 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
     cards.sort((a, b) => b.agg.total - a.agg.total);
 
     // Resolve any overlapping cards
-    resolveCardOverlaps(cards, W, H);
+    resolveCardOverlaps(cards, W, H, CARD_W);
 
     return cards;
-  }, [byCityAgg, viewport, H]);
+  }, [byCityAgg, viewport, H, sc, CARD_W, CARD_LINE_H]);
 
   return (
     <div style={{
@@ -366,11 +372,21 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
           // Leader line from dot to nearest card edge
           const lineEndX = cardX > cx ? cardX : cardX + CARD_W;
           const lineEndY = cardY + cardH / 2;
+          // Scaled sizes
+          const pad = Math.round(8 * sc);
+          const titleFontSize = Math.round(11 * sc);
+          const titleZhFontSize = Math.round(10 * sc);
+          const badgeFontSize = Math.round(9 * sc);
+          const rowFontSize = Math.round(10 * sc);
+          const titleBaselineY = cardY + Math.round(15 * sc);
+          const titleH = Math.round(22 * sc);
+          const iconScale = sc * 0.9;
+          const dotR = Math.max(3.5, 3.5 * Math.min(sc, 1.5));
 
           return (
             <g key={city}>
               {/* Location dot */}
-              <circle cx={cx} cy={cy} r={3.5}
+              <circle cx={cx} cy={cy} r={dotR}
                 fill="var(--accent)" stroke="rgba(246,166,35,0.4)" strokeWidth={1.5}
               />
 
@@ -384,7 +400,7 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
               <rect
                 x={cardX} y={cardY}
                 width={CARD_W} height={cardH}
-                rx={3} ry={3}
+                rx={Math.round(3 * sc)} ry={Math.round(3 * sc)}
                 fill="rgba(12,16,23,0.88)"
                 stroke="rgba(255,255,255,0.12)"
                 strokeWidth={0.5}
@@ -392,14 +408,14 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
 
               {/* City name */}
               <text
-                x={cardX + 8} y={cardY + 15}
+                x={cardX + pad} y={titleBaselineY}
                 fill="#e7eaf0"
-                fontSize="11" fontWeight={700}
+                fontSize={titleFontSize} fontWeight={700}
                 fontFamily="var(--font-mono)"
               >
                 {geo.label}
                 {geo.labelZh && (
-                  <tspan fill="rgba(255,255,255,0.35)" fontSize="10" dx={4}>
+                  <tspan fill="rgba(255,255,255,0.35)" fontSize={titleZhFontSize} dx={4 * sc}>
                     {geo.labelZh}
                   </tspan>
                 )}
@@ -407,9 +423,9 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
 
               {/* Total count badge */}
               <text
-                x={cardX + CARD_W - 8} y={cardY + 15}
+                x={cardX + CARD_W - pad} y={titleBaselineY}
                 fill="rgba(255,255,255,0.3)"
-                fontSize="9" fontWeight={600}
+                fontSize={badgeFontSize} fontWeight={600}
                 fontFamily="var(--font-mono)"
                 textAnchor="end"
               >
@@ -418,17 +434,19 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
 
               {/* Resource rows */}
               {rows.map((row, ri) => {
-                const rowY = cardY + 22 + ri * CARD_LINE_H + 2;
+                const rowY = cardY + titleH + ri * CARD_LINE_H + Math.round(2 * sc);
                 return (
                   <g key={row.key}>
-                    {/* Resource icon */}
-                    {renderResourceIcon(row.key, cardX + 6, rowY + 3, "rgba(255,255,255,0.4)")}
+                    {/* Resource icon (scaled via wrapper g) */}
+                    <g transform={`translate(${cardX + Math.round(6 * sc)},${rowY + Math.round(3 * sc)}) scale(${sc})`}>
+                      {renderResourceIcon(row.key, 0, 0, "rgba(255,255,255,0.4)")}
+                    </g>
 
                     {/* Numbers: prod (amber) · nonProd (blue), right-aligned */}
                     <text
-                      x={cardX + CARD_W - 8} y={rowY + 12}
+                      x={cardX + CARD_W - pad} y={rowY + Math.round(12 * sc)}
                       textAnchor="end"
-                      fontSize="10" fontWeight={600}
+                      fontSize={rowFontSize} fontWeight={600}
                       fontFamily="var(--font-mono)"
                     >
                       {row.prod > 0 && (
