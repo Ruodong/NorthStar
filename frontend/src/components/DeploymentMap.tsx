@@ -112,26 +112,28 @@ function renderResourceIcon(
 ) {
   const sc = 0.9; // slight scale-down for visual balance
   switch (key) {
-    case "pm": // physical server — solid rack with filled LEDs
+    case "pm": // physical server — heavy solid rack with filled bands
       return (
         <g transform={`translate(${x},${y}) scale(${sc})`} fill="none" stroke={color}>
-          <rect width={8} height={10} rx={1} strokeWidth={0.9} />
-          <line x1={0} y1={3.5} x2={8} y2={3.5} strokeWidth={0.5} />
-          <line x1={0} y1={7} x2={8} y2={7} strokeWidth={0.5} />
-          <circle cx={6} cy={1.7} r={0.7} fill={color} stroke="none" />
-          <circle cx={6} cy={5.2} r={0.7} fill={color} stroke="none" />
-          <circle cx={6} cy={8.5} r={0.7} fill={color} stroke="none" />
+          <rect width={8} height={10} rx={1} strokeWidth={1} />
+          <rect x={0.5} y={0.5} width={7} height={2.5} rx={0.3} fill={color} opacity={0.15} stroke="none" />
+          <rect x={0.5} y={3.8} width={7} height={2.5} rx={0.3} fill={color} opacity={0.15} stroke="none" />
+          <rect x={0.5} y={7.1} width={7} height={2.4} rx={0.3} fill={color} opacity={0.15} stroke="none" />
+          <line x1={0} y1={3.3} x2={8} y2={3.3} strokeWidth={0.6} />
+          <line x1={0} y1={6.7} x2={8} y2={6.7} strokeWidth={0.6} />
+          <circle cx={6} cy={1.7} r={0.8} fill={color} stroke="none" />
+          <circle cx={6} cy={5} r={0.8} fill={color} stroke="none" />
+          <circle cx={6} cy={8.3} r={0.8} fill={color} stroke="none" />
         </g>
       );
-    case "vm": // virtual machine — dashed rack with hollow LEDs
+    case "vm": // virtual machine — cloud arc + thin server body
       return (
         <g transform={`translate(${x},${y}) scale(${sc})`} fill="none" stroke={color}>
-          <rect width={8} height={10} rx={1} strokeWidth={0.8} strokeDasharray="1.5,1" />
-          <line x1={0} y1={3.5} x2={8} y2={3.5} strokeWidth={0.5} strokeDasharray="1,1" />
-          <line x1={0} y1={7} x2={8} y2={7} strokeWidth={0.5} strokeDasharray="1,1" />
-          <circle cx={6} cy={1.7} r={0.6} fill="none" strokeWidth={0.5} />
-          <circle cx={6} cy={5.2} r={0.6} fill="none" strokeWidth={0.5} />
-          <circle cx={6} cy={8.5} r={0.6} fill="none" strokeWidth={0.5} />
+          <path d="M1,4 Q1,0.5 4,0.5 Q7,0.5 7,4" strokeWidth={0.7} />
+          <rect x={0} y={4} width={8} height={6} rx={0.5} strokeWidth={0.7} />
+          <line x1={0} y1={7} x2={8} y2={7} strokeWidth={0.4} />
+          <circle cx={6} cy={5.5} r={0.5} fill={color} stroke="none" />
+          <circle cx={6} cy={8.5} r={0.5} fill={color} stroke="none" />
         </g>
       );
     case "k8s": // container — box with handle tab
