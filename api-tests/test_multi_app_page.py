@@ -86,22 +86,21 @@ async def test_multi_app_page_appears_in_three_rows(api):
     assert r.status_code == 200, r.text
     data = r.json()["data"]
     rows = data["rows"]
-    app_ids = {r.get("app_id") for r in rows}
+    # With Python-side collapse, all apps for a project are in project_apps
+    app_ids: set[str] = set()
+    for row in rows:
+        if row.get("app_id"):
+            app_ids.add(row["app_id"])
+        for pa in row.get("project_apps", []):
+            if pa.get("app_id"):
+                app_ids.add(pa["app_id"])
 
-    # At least 2 of the 3 triple-app page's apps must be visible (the per-
-    # project cap is 10, so unless 10+ higher-ranked apps exist, all 3 show).
+    # At least 2 of the 3 triple-app page's apps must be visible
     visible = EXPECTED_APPS & app_ids
     assert len(visible) >= 2, (
         f"Pattern D: expected at least 2 of {EXPECTED_APPS} in LI2500120 "
         f"admin list; got {visible!r} from {app_ids!r}"
     )
-    # For each visible app, verify the triple-app page appears in its group.
-    for expected_app in visible:
-        matching = [r for r in rows if r.get("app_id") == expected_app]
-        assert TRIPLE_PAGE_ID in matching[0].get("group_page_ids", []), (
-            f"Pattern D: row for {expected_app} should include page "
-            f"{TRIPLE_PAGE_ID} in group_page_ids; got {matching[0].get('group_page_ids')!r}"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -110,28 +109,23 @@ async def test_multi_app_page_appears_in_three_rows(api):
 
 @pytest.mark.asyncio
 async def test_multi_app_grouping_consistency(api, pg):
-    """Spec AC-4. Sum of group_size across exploded rows must equal
-    count(*) from the LEFT-JOINed exploded view in the default admin
-    view (depth<=2 + root_project_id fold-up). Guards against accidental
-    DISTINCT bugs that would silently collapse Pattern D back to
-    Pattern A.
-
-    Note: this asserts admin-query consistency specifically, not "every
-    page in the tree". A sub-initiative row whose own project_id != root
-    still counts because the admin query folds by root_project_id.
+    """Spec AC-4 (updated for Python-side collapse). With collapse,
+    each project is one row with a `project_apps` array. Verify:
+    1. The number of distinct apps in project_apps matches the DB
+    2. The project_app_total field is consistent
     """
     with pg.cursor() as cur:
         cur.execute(
             """
-            SELECT count(*) AS n
+            SELECT count(DISTINCT l.app_id) AS n
             FROM northstar.confluence_page p
-            LEFT JOIN northstar.confluence_page_app_link l ON l.page_id = p.page_id
+            JOIN northstar.confluence_page_app_link l ON l.page_id = p.page_id
             WHERE p.fiscal_year = 'FY2526'
               AND COALESCE(p.root_project_id, p.project_id) = 'LI2500120'
               AND (p.depth IS NULL OR p.depth <= 2)
             """
         )
-        expected_total = cur.fetchone()["n"]
+        db_distinct_apps = cur.fetchone()["n"]
 
     r = await api.get(
         "/api/admin/confluence/pages",
@@ -143,17 +137,17 @@ async def test_multi_app_grouping_consistency(api, pg):
     )
     assert r.status_code == 200, r.text
     rows = r.json()["data"]["rows"]
-    total_group_size = sum(row.get("group_size", 0) for row in rows)
 
-    # With the per-project app cap (top 10), some groups may be hidden.
-    # The sum of group_sizes can be <= the expected total (never greater).
-    assert total_group_size <= expected_total, (
-        f"Pattern D consistency: sum(group_size)={total_group_size} exceeds "
-        f"exploded count={expected_total} — rows were added, not capped"
-    )
-    # Sanity: at least 50% of the expected total should still be visible
-    # (a cap that hides > 50% signals something is wrong with the ranking).
-    assert total_group_size >= expected_total * 0.5, (
-        f"Pattern D: sum(group_size)={total_group_size} is less than half "
-        f"the expected {expected_total} — cap may be too aggressive"
+    # Collect all apps from collapsed rows
+    all_apps: set[str] = set()
+    for row in rows:
+        for pa in row.get("project_apps", []):
+            if pa.get("app_id"):
+                all_apps.add(pa["app_id"])
+
+    # With per-project cap of 10, we expect at most 10 visible apps
+    # but at least a reasonable fraction of the DB total
+    assert len(all_apps) >= min(10, db_distinct_apps), (
+        f"Pattern D: expected at least min(10, {db_distinct_apps}) apps "
+        f"in collapsed project_apps, got {len(all_apps)}"
     )

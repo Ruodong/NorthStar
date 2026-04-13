@@ -207,20 +207,29 @@ async def test_graph_nodes_fiscal_year_filter_via_invests_in(api):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_node_detail_includes_investments(api, cypher):
+async def test_node_detail_includes_investments(api, pg):
     """Spec AC-9 / FR-24. The single-node detail response must include an
-    investments[] array when the app has INVESTS_IN edges."""
-    # Find a CMDB-linked app with at least one INVESTS_IN edge
-    rows = cypher(
-        """
-        MATCH (p:Project)-[:INVESTS_IN]->(a:Application {cmdb_linked: true})
-        RETURN a.app_id AS app_id
-        LIMIT 1
-        """
-    )
-    if not rows:
-        pytest.skip("no CMDB-linked apps with INVESTS_IN edges yet")
-    app_id = rows[0]["app_id"]
+    investments[] array when the app has investment-worthy projects.
+    The investments endpoint now queries PG (not Neo4j INVESTS_IN edges),
+    so we pick a test app from PG drawio extracts."""
+    # Find a CMDB app that appears with Change/New/Sunset in drawio extracts
+    with pg.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COALESCE(cda.resolved_app_id, cda.standard_id) AS app_id
+            FROM northstar.confluence_diagram_app cda
+            JOIN northstar.confluence_attachment ca ON ca.attachment_id = cda.attachment_id
+            JOIN northstar.confluence_page cp ON cp.page_id = ca.page_id
+            WHERE cda.application_status IN ('Change', 'New', 'Sunset')
+              AND COALESCE(cda.resolved_app_id, cda.standard_id) IS NOT NULL
+              AND cp.project_id IS NOT NULL
+            LIMIT 1
+            """
+        )
+        row = cur.fetchone()
+    if not row:
+        pytest.skip("no apps with Change/New/Sunset in drawio extracts")
+    app_id = row["app_id"]
     r = await api.get(f"/api/graph/nodes/{app_id}")
     assert r.status_code == 200, r.text
     body = r.json()

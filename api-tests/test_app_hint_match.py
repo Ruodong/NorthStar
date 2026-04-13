@@ -179,8 +179,15 @@ async def test_ksa_oasis_pattern_e_yields_app_rows(api):
     )
     assert r.status_code == 200, r.text
     rows = r.json()["data"]["rows"]
-    app_ids = {row.get("app_id") for row in rows if row.get("app_id")}
+    # With Python-side collapse, apps are in project_apps array
+    app_ids: set[str] = set()
+    for row in rows:
+        if row.get("app_id"):
+            app_ids.add(row["app_id"])
+        for pa in row.get("project_apps", []):
+            if pa.get("app_id"):
+                app_ids.add(pa["app_id"])
     assert len(app_ids) >= 10, (
-        f"Pattern E: expected >= 10 distinct app rows for LI2500058 KSA "
+        f"Pattern E: expected >= 10 distinct apps for LI2500058 KSA "
         f"Oasis, got {len(app_ids)} — {sorted(app_ids)}"
     )
