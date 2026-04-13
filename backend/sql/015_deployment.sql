@@ -114,7 +114,10 @@ CREATE TABLE IF NOT EXISTS ref_deployment_server (
 );
 
 -- Unique constraint on _id for upsert safety (ON CONFLICT requires a constraint)
-ALTER TABLE ref_deployment_server ADD CONSTRAINT IF NOT EXISTS ref_deploy_server_pk UNIQUE (_id);
+DO $$ BEGIN
+    ALTER TABLE ref_deployment_server ADD CONSTRAINT ref_deploy_server_pk UNIQUE (_id);
+EXCEPTION WHEN duplicate_table THEN NULL;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_ref_deploy_server_app ON ref_deployment_server (app_id);
 CREATE INDEX IF NOT EXISTS idx_ref_deploy_server_city ON ref_deployment_server ("City");
 
@@ -147,7 +150,10 @@ CREATE TABLE IF NOT EXISTS ref_deployment_container (
     synced_at                   TIMESTAMP NOT NULL DEFAULT now()
 );
 
-ALTER TABLE ref_deployment_container ADD CONSTRAINT IF NOT EXISTS ref_deploy_container_pk UNIQUE (_id);
+DO $$ BEGIN
+    ALTER TABLE ref_deployment_container ADD CONSTRAINT ref_deploy_container_pk UNIQUE (_id);
+EXCEPTION WHEN duplicate_table THEN NULL;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_ref_deploy_container_app ON ref_deployment_container (app_id);
 
 -- Database instances (原表: Application_Server_DB_MetaData)
@@ -215,7 +221,10 @@ CREATE TABLE IF NOT EXISTS ref_deployment_database (
     synced_at                   TIMESTAMP NOT NULL DEFAULT now()
 );
 
-ALTER TABLE ref_deployment_database ADD CONSTRAINT IF NOT EXISTS ref_deploy_database_pk UNIQUE (_id);
+DO $$ BEGIN
+    ALTER TABLE ref_deployment_database ADD CONSTRAINT ref_deploy_database_pk UNIQUE (_id);
+EXCEPTION WHEN duplicate_table THEN NULL;
+END $$;
 CREATE INDEX IF NOT EXISTS idx_ref_deploy_database_app ON ref_deployment_database (app_id);
 
 CREATE INDEX IF NOT EXISTS idx_ref_deploy_db_app ON ref_deployment_database (app_id);
