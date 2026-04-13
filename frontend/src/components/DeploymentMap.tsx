@@ -59,7 +59,7 @@ const RESOURCE_TYPES = [
 ] as const;
 
 const W = 960;
-const CARD_W = 130; // label card width in SVG units
+const CARD_W = 120; // ~12.5% of SVG width — fixed proportion per card
 const CARD_LINE_H = 14; // line height per resource row
 
 function getH(bounds: [number, number, number, number]): number {
@@ -101,6 +101,95 @@ function getCardOffset(
   const dx = cx > svgW / 2 ? 16 : -(CARD_W + 16);
   const dy = cy > svgH / 2 ? -8 : 8;
   return { dx, dy };
+}
+
+// Resource icons rendered as small SVG shapes (10x10 viewbox)
+function renderResourceIcon(
+  key: string, x: number, y: number, color: string,
+) {
+  const sc = 0.9; // slight scale-down for visual balance
+  switch (key) {
+    case "servers": // rack unit: rectangle with horizontal dividers + LED dots
+      return (
+        <g transform={`translate(${x},${y}) scale(${sc})`} fill="none" stroke={color}>
+          <rect width={8} height={10} rx={1} strokeWidth={0.8} />
+          <line x1={0} y1={3.5} x2={8} y2={3.5} strokeWidth={0.5} />
+          <line x1={0} y1={7} x2={8} y2={7} strokeWidth={0.5} />
+          <circle cx={6} cy={1.7} r={0.6} fill={color} stroke="none" />
+          <circle cx={6} cy={5.2} r={0.6} fill={color} stroke="none" />
+          <circle cx={6} cy={8.5} r={0.6} fill={color} stroke="none" />
+        </g>
+      );
+    case "containers": // box with handle tab (Docker-esque)
+      return (
+        <g transform={`translate(${x},${y}) scale(${sc})`} fill="none" stroke={color}>
+          <rect y={2.5} width={10} height={7.5} rx={1} strokeWidth={0.8} />
+          <rect x={1} width={3} height={3} rx={0.5} strokeWidth={0.7} />
+        </g>
+      );
+    case "databases": // classic cylinder
+      return (
+        <g transform={`translate(${x},${y}) scale(${sc})`} fill="none" stroke={color} strokeWidth={0.8}>
+          <path d="M0,2.5 C0,0.5 8,0.5 8,2.5 V7.5 C8,9.5 0,9.5 0,7.5 Z" />
+          <path d="M0,2.5 C0,4.2 8,4.2 8,2.5" strokeWidth={0.6} />
+        </g>
+      );
+    case "oss": // bucket shape
+      return (
+        <g transform={`translate(${x},${y}) scale(${sc})`} fill="none" stroke={color} strokeWidth={0.8}>
+          <path d="M1.5,0 H8.5 L10,8 C10,10 0,10 0,8 Z" />
+          <line x1={1.5} y1={2.2} x2={8.5} y2={2.2} strokeWidth={0.5} />
+        </g>
+      );
+    case "nas": // stacked storage units
+      return (
+        <g transform={`translate(${x},${y}) scale(${sc})`} fill="none" stroke={color} strokeWidth={0.7}>
+          <rect width={10} height={2.5} rx={0.5} />
+          <rect y={3.5} width={10} height={2.5} rx={0.5} />
+          <rect y={7} width={10} height={2.5} rx={0.5} />
+          <circle cx={8} cy={1.25} r={0.5} fill={color} stroke="none" />
+          <circle cx={8} cy={4.75} r={0.5} fill={color} stroke="none" />
+          <circle cx={8} cy={8.25} r={0.5} fill={color} stroke="none" />
+        </g>
+      );
+    default:
+      return null;
+  }
+}
+
+// Resolve overlapping cards by iteratively pushing them apart
+function resolveCardOverlaps(
+  cards: { cardX: number; cardY: number; cardH: number }[],
+  svgW: number, svgH: number,
+): void {
+  const GAP = 6;
+  for (let iter = 0; iter < 30; iter++) {
+    let moved = false;
+    for (let i = 0; i < cards.length; i++) {
+      for (let j = i + 1; j < cards.length; j++) {
+        const a = cards[i], b = cards[j];
+        const ox = Math.min(a.cardX + CARD_W + GAP, b.cardX + CARD_W + GAP) - Math.max(a.cardX, b.cardX);
+        const oy = Math.min(a.cardY + a.cardH + GAP, b.cardY + b.cardH + GAP) - Math.max(a.cardY, b.cardY);
+        if (ox > 0 && oy > 0) {
+          moved = true;
+          if (ox < oy) {
+            const half = ox / 2 + 1;
+            if (a.cardX <= b.cardX) { a.cardX -= half; b.cardX += half; }
+            else { a.cardX += half; b.cardX -= half; }
+          } else {
+            const half = oy / 2 + 1;
+            if (a.cardY <= b.cardY) { a.cardY -= half; b.cardY += half; }
+            else { a.cardY += half; b.cardY -= half; }
+          }
+          a.cardX = Math.max(2, Math.min(svgW - CARD_W - 2, a.cardX));
+          a.cardY = Math.max(2, Math.min(svgH - a.cardH - 2, a.cardY));
+          b.cardX = Math.max(2, Math.min(svgW - CARD_W - 2, b.cardX));
+          b.cardY = Math.max(2, Math.min(svgH - b.cardH - 2, b.cardY));
+        }
+      }
+    }
+    if (!moved) break;
+  }
 }
 
 export function DeploymentMap({ data }: { data: CityData[] }) {
@@ -188,7 +277,7 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
     );
   }, [landPaths, viewport, H]);
 
-  // Prepare city cards with positions
+  // Prepare city cards with positions + overlap resolution
   const cityCards = useMemo(() => {
     const cards: {
       city: string;
@@ -196,7 +285,10 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
       agg: CityAgg;
       cx: number;
       cy: number;
-      rows: { icon: string; prod: number; nonProd: number }[];
+      rows: { key: string; prod: number; nonProd: number }[];
+      cardX: number;
+      cardY: number;
+      cardH: number;
     }[] = [];
 
     for (const [city, agg] of Object.entries(byCityAgg)) {
@@ -205,20 +297,29 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
       const [cx, cy] = lonLatToXY(geo.lon, geo.lat, viewport.bounds, H);
       if (cx < -50 || cx > W + 50 || cy < -50 || cy > H + 50) continue;
 
-      const rows: { icon: string; prod: number; nonProd: number }[] = [];
+      const rows: { key: string; prod: number; nonProd: number }[] = [];
       for (const rt of RESOURCE_TYPES) {
         const p = agg.prod[rt.key as keyof typeof agg.prod] as number;
         const np = agg.nonProd[rt.key as keyof typeof agg.nonProd] as number;
         if (p > 0 || np > 0) {
-          rows.push({ icon: rt.icon, prod: p, nonProd: np });
+          rows.push({ key: rt.key, prod: p, nonProd: np });
         }
       }
       if (rows.length === 0) continue;
-      cards.push({ city, geo, agg, cx, cy, rows });
+
+      const titleH = 18;
+      const cardH = titleH + rows.length * CARD_LINE_H + 6;
+      const { dx, dy } = getCardOffset(cx, cy, W, H);
+
+      cards.push({ city, geo, agg, cx, cy, rows, cardX: cx + dx, cardY: cy + dy, cardH });
     }
 
     // Sort by total descending so larger cities render first (z-order)
     cards.sort((a, b) => b.agg.total - a.agg.total);
+
+    // Resolve any overlapping cards
+    resolveCardOverlaps(cards, W, H);
+
     return cards;
   }, [byCityAgg, viewport, H]);
 
@@ -247,15 +348,9 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
         ))}
 
         {/* City label cards */}
-        {cityCards.map(({ city, geo, agg, cx, cy, rows }) => {
-          const { dx, dy } = getCardOffset(cx, cy, W, H);
-          const cardX = cx + dx;
-          const cardY = cy + dy;
-          const titleH = 18; // city name row height
-          const cardH = titleH + rows.length * CARD_LINE_H + 6; // 6px bottom padding
-
-          // Leader line from dot to card edge
-          const lineEndX = dx > 0 ? cardX : cardX + CARD_W;
+        {cityCards.map(({ city, geo, agg, cx, cy, rows, cardX, cardY, cardH }) => {
+          // Leader line from dot to nearest card edge
+          const lineEndX = cardX > cx ? cardX : cardX + CARD_W;
           const lineEndY = cardY + cardH / 2;
 
           return (
@@ -309,22 +404,16 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
 
               {/* Resource rows */}
               {rows.map((row, ri) => {
-                const ry = cardY + titleH + ri * CARD_LINE_H + 2;
+                const rowY = cardY + 18 + ri * CARD_LINE_H + 2;
                 return (
-                  <g key={row.icon}>
-                    {/* Icon label */}
-                    <text
-                      x={cardX + 7} y={ry + 10}
-                      fill="rgba(255,255,255,0.4)"
-                      fontSize="8" fontWeight={600}
-                      fontFamily="var(--font-mono)"
-                    >
-                      {row.icon}
-                    </text>
+                  <g key={row.key}>
+                    {/* Resource icon */}
+                    {renderResourceIcon(row.key, cardX + 5, rowY + 1, "rgba(255,255,255,0.4)")}
 
-                    {/* Numbers: prod (amber) · nonProd (blue) */}
+                    {/* Numbers: prod (amber) · nonProd (blue), right-aligned */}
                     <text
-                      x={cardX + 38} y={ry + 10}
+                      x={cardX + CARD_W - 7} y={rowY + 10}
+                      textAnchor="end"
                       fontSize="10" fontWeight={600}
                       fontFamily="var(--font-mono)"
                     >
@@ -332,7 +421,7 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
                         <tspan fill="#f6a623">{row.prod}</tspan>
                       )}
                       {row.prod > 0 && row.nonProd > 0 && (
-                        <tspan fill="rgba(255,255,255,0.2)" dx={2} fontSize="8"> · </tspan>
+                        <tspan fill="rgba(255,255,255,0.2)"> · </tspan>
                       )}
                       {row.nonProd > 0 && (
                         <tspan fill="#6ba6e8">{row.nonProd}</tspan>
@@ -352,9 +441,14 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
         color: "var(--text-dim)", flexWrap: "wrap", alignItems: "center",
       }}>
         {RESOURCE_TYPES.map((rt) => (
-          <span key={rt.key} style={{ fontFamily: "var(--font-mono)", letterSpacing: 0.3 }}>
-            <span style={{ color: "var(--text-muted)", fontWeight: 600 }}>{rt.icon}</span>
-            <span style={{ marginLeft: 4 }}>{rt.label}</span>
+          <span key={rt.key} style={{
+            fontFamily: "var(--font-mono)", letterSpacing: 0.3,
+            display: "inline-flex", alignItems: "center", gap: 4,
+          }}>
+            <svg width={12} height={12} viewBox="0 0 10 10" style={{ flexShrink: 0 }}>
+              {renderResourceIcon(rt.key, 0, 0, "var(--text-muted)")}
+            </svg>
+            <span>{rt.label}</span>
           </span>
         ))}
         <span style={{ marginLeft: "auto", display: "flex", gap: 12 }}>
