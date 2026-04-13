@@ -88,6 +88,8 @@ interface DiagramRef {
   page_title?: string;
   page_url?: string;
   fiscal_year?: string;
+  project_id?: string;
+  project_name?: string;
   // Paired PNG preview attachment (for thumbnail generation)
   preview_attachment_id?: string;
 }
@@ -1464,22 +1466,60 @@ function DiagramsTab({ diagrams }: { diagrams: DiagramRef[] }) {
         )}
       </div>
 
-      {view === "grid" && hasAnyThumbnail ? (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-            gap: 1,
-            background: "var(--border)",
-          }}
-        >
-          {diagrams.map((d, idx) => (
-            <DiagramCard key={d.diagram_id || d.attachment_id || idx} d={d} />
-          ))}
-        </div>
-      ) : (
-        <DiagramList diagrams={diagrams} />
-      )}
+      {/* Group diagrams by project */}
+      {(() => {
+        const groups: { key: string; label: string; items: DiagramRef[] }[] = [];
+        const byProject = new Map<string, DiagramRef[]>();
+        for (const d of diagrams) {
+          const k = d.project_id || "_none";
+          if (!byProject.has(k)) byProject.set(k, []);
+          byProject.get(k)!.push(d);
+        }
+        for (const [k, items] of byProject) {
+          const first = items[0];
+          const label = k === "_none"
+            ? "Other Diagrams"
+            : `${first.project_id}${first.project_name ? " — " + first.project_name : ""}`;
+          groups.push({ key: k, label, items });
+        }
+        return groups.map((g) => (
+          <div key={g.key}>
+            {groups.length > 1 && (
+              <div
+                style={{
+                  padding: "10px 20px 6px",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: "var(--accent)",
+                  fontFamily: "var(--font-mono)",
+                  borderTop: "1px solid var(--border)",
+                }}
+              >
+                {g.label}
+                <span style={{ color: "var(--text-dim)", fontWeight: 400, marginLeft: 8 }}>
+                  ({g.items.length})
+                </span>
+              </div>
+            )}
+            {view === "grid" && hasAnyThumbnail ? (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+                  gap: 1,
+                  background: "var(--border)",
+                }}
+              >
+                {g.items.map((d, idx) => (
+                  <DiagramCard key={d.diagram_id || d.attachment_id || idx} d={d} />
+                ))}
+              </div>
+            ) : (
+              <DiagramList diagrams={g.items} />
+            )}
+          </div>
+        ));
+      })()}
     </div>
   );
 }

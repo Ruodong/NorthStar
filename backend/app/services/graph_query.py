@@ -192,6 +192,10 @@ async def _fetch_diagram_refs_from_pg(app_id: str) -> list[dict]:
         cp.title       AS page_title,
         cp.page_url,
         cp.fiscal_year,
+        -- Project context: use root_project_id (top-level Confluence page),
+        -- falling back to direct project_id extracted from page title.
+        COALESCE(cp.root_project_id, cp.project_id) AS project_id,
+        rp.project_name,
         -- Paired PNG preview: Confluence auto-generates <name>.drawio.png
         -- for most drawio files. Used by the frontend thumbnail feature.
         (SELECT img.attachment_id FROM northstar.confluence_attachment img
@@ -204,6 +208,8 @@ async def _fetch_diagram_refs_from_pg(app_id: str) -> list[dict]:
     FROM northstar.confluence_diagram_app cda
     JOIN northstar.confluence_attachment ca ON ca.attachment_id = cda.attachment_id
     JOIN northstar.confluence_page cp ON cp.page_id = ca.page_id
+    LEFT JOIN northstar.ref_project rp
+        ON rp.project_id = COALESCE(cp.root_project_id, cp.project_id)
     WHERE COALESCE(cda.resolved_app_id, cda.standard_id) = $1
     ORDER BY cp.fiscal_year DESC, ca.title
     """
