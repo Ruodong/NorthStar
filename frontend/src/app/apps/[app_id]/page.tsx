@@ -314,7 +314,8 @@ export default function AppDetailPage() {
         <TabButton current={tab} value="integrations" onClick={setTab} count={totalIntegrations}>
           Integrations
         </TabButton>
-        <TabButton current={tab} value="deployment" onClick={setTab}>
+        <TabButton current={tab} value="deployment" onClick={setTab}
+          count={deploySummary ? (deploySummary.servers + deploySummary.containers + deploySummary.databases) : undefined}>
           Deployment
         </TabButton>
         <TabButton current={tab} value="impact" onClick={setTab}>
