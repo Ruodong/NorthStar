@@ -18,14 +18,16 @@ async def test_whats_new_summary(api):
 
 @pytest.mark.asyncio
 async def test_whats_new_feed(api):
-    """Feed endpoint returns a list of change items."""
+    """Feed endpoint returns paginated change items."""
     r = await api.get("/api/whats-new/feed", params={"limit": 5})
     assert r.status_code == 200
     data = r.json()["data"]
-    assert isinstance(data, list)
-    if data:
-        item = data[0]
-        assert "diff_type" in item or "type" in item
+    assert "total" in data
+    assert "rows" in data
+    assert isinstance(data["rows"], list)
+    if data["rows"]:
+        item = data["rows"][0]
+        assert "diff_type" in item
 
 
 @pytest.mark.asyncio
