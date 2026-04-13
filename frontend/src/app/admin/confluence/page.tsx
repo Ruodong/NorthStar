@@ -61,7 +61,18 @@ const SCROLL_STORAGE_KEY = "northstar.admin.confluence.scroll";
 // Next.js preserves the module). Cleared on full-page reload (F5).
 // This gives instant back-nav — the table renders from cache while a
 // background fetch silently refreshes the data.
+// Capped at 20 entries to prevent unbounded growth during long sessions.
+// On eviction, the oldest entry is removed (FIFO, not true LRU, but
+// sufficient for pagination caching where back-nav hits recent pages).
+const _LIST_CACHE_MAX = 20;
 const _listCache = new Map<string, ListResult>();
+function _listCacheSet(key: string, value: ListResult) {
+  _listCache.set(key, value);
+  if (_listCache.size > _LIST_CACHE_MAX) {
+    const oldest = _listCache.keys().next().value;
+    if (oldest !== undefined) _listCache.delete(oldest);
+  }
+}
 const _summaryCache: { data: Summary | null } = { data: null };
 
 export default function ConfluenceIndex() {
@@ -227,7 +238,7 @@ export default function ConfluenceIndex() {
         const j = await r.json();
         if (!j.success) throw new Error(j.error);
         if (!cancelled) {
-          _listCache.set(apiUrl, j.data);
+          _listCacheSet(apiUrl, j.data);
           setData(j.data);
         }
       } catch (e) {

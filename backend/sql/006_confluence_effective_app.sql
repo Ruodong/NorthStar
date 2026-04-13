@@ -18,7 +18,17 @@ CREATE INDEX IF NOT EXISTS idx_cfl_page_effective_app
     ON northstar.confluence_page (effective_app_id);
 
 -- Backfill via recursive CTE: walk each page's parent chain until we find
--- a q_app_id. Then UPDATE effective_app_id to that value. Safe to re-run.
+-- a q_app_id. Wrapped in a DO block that only runs when there are pages
+-- with NULL effective_app_id, avoiding the expensive recursive CTE on
+-- every backend startup when data is already populated.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM northstar.confluence_page
+        WHERE effective_app_id IS NULL AND parent_id IS NOT NULL
+        LIMIT 1
+    ) THEN
+        RAISE NOTICE 'backfilling effective_app_id for pages with NULL values';
 WITH RECURSIVE walk AS (
     -- Seed: every page, pointing at itself
     SELECT page_id AS seed_id,
@@ -60,3 +70,5 @@ SET effective_app_id = r.q_app_id
 FROM resolved r
 WHERE cp.page_id = r.seed_id
   AND (cp.effective_app_id IS DISTINCT FROM r.q_app_id);
+    END IF;
+END $$;

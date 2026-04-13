@@ -113,9 +113,10 @@ CREATE TABLE IF NOT EXISTS ref_deployment_server (
     synced_at                   TIMESTAMP NOT NULL DEFAULT now()
 );
 
+-- Unique constraint on _id for upsert safety (ON CONFLICT requires a constraint)
+ALTER TABLE ref_deployment_server ADD CONSTRAINT IF NOT EXISTS ref_deploy_server_pk UNIQUE (_id);
 CREATE INDEX IF NOT EXISTS idx_ref_deploy_server_app ON ref_deployment_server (app_id);
 CREATE INDEX IF NOT EXISTS idx_ref_deploy_server_city ON ref_deployment_server ("City");
-CREATE INDEX IF NOT EXISTS idx_ref_deploy_server_id ON ref_deployment_server (_id);
 
 -- Containers (原表: Application_Container_MetaData)
 CREATE TABLE IF NOT EXISTS ref_deployment_container (
@@ -146,8 +147,8 @@ CREATE TABLE IF NOT EXISTS ref_deployment_container (
     synced_at                   TIMESTAMP NOT NULL DEFAULT now()
 );
 
+ALTER TABLE ref_deployment_container ADD CONSTRAINT IF NOT EXISTS ref_deploy_container_pk UNIQUE (_id);
 CREATE INDEX IF NOT EXISTS idx_ref_deploy_container_app ON ref_deployment_container (app_id);
-CREATE INDEX IF NOT EXISTS idx_ref_deploy_container_id ON ref_deployment_container (_id);
 
 -- Database instances (原表: Application_Server_DB_MetaData)
 CREATE TABLE IF NOT EXISTS ref_deployment_database (
@@ -213,6 +214,9 @@ CREATE TABLE IF NOT EXISTS ref_deployment_database (
     manager_ip                  TEXT,
     synced_at                   TIMESTAMP NOT NULL DEFAULT now()
 );
+
+ALTER TABLE ref_deployment_database ADD CONSTRAINT IF NOT EXISTS ref_deploy_database_pk UNIQUE (_id);
+CREATE INDEX IF NOT EXISTS idx_ref_deploy_database_app ON ref_deployment_database (app_id);
 
 CREATE INDEX IF NOT EXISTS idx_ref_deploy_db_app ON ref_deployment_database (app_id);
 CREATE INDEX IF NOT EXISTS idx_ref_deploy_db_id ON ref_deployment_database (_id);

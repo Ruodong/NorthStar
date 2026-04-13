@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
 
 // -----------------------------------------------------------------------------
 // Types — match backend/app/services/graph_query.py::get_application
@@ -167,8 +168,9 @@ const STATUS_COLORS: Record<string, string> = {
   Active: "var(--success)",
 };
 
-export default function AppDetailPage({ params }: { params: { app_id: string } }) {
-  const appId = decodeURIComponent(params.app_id);
+export default function AppDetailPage() {
+  const params = useParams();
+  const appId = decodeURIComponent(params.app_id as string);
   const [data, setData] = useState<AppDetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
