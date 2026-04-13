@@ -191,7 +191,16 @@ async def _fetch_diagram_refs_from_pg(app_id: str) -> list[dict]:
         cp.page_id::text AS page_id,
         cp.title       AS page_title,
         cp.page_url,
-        cp.fiscal_year
+        cp.fiscal_year,
+        -- Paired PNG preview: Confluence auto-generates <name>.drawio.png
+        -- for most drawio files. Used by the frontend thumbnail feature.
+        (SELECT img.attachment_id FROM northstar.confluence_attachment img
+         WHERE img.page_id = ca.page_id
+           AND img.file_kind = 'image'
+           AND img.title = ca.title || '.png'
+           AND img.local_path IS NOT NULL
+         LIMIT 1
+        ) AS preview_attachment_id
     FROM northstar.confluence_diagram_app cda
     JOIN northstar.confluence_attachment ca ON ca.attachment_id = cda.attachment_id
     JOIN northstar.confluence_page cp ON cp.page_id = ca.page_id

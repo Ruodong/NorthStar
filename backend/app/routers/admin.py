@@ -123,6 +123,14 @@ PREVIEW_CACHE_ROOT = Path(
     os.environ.get("PREVIEW_CACHE_ROOT", "/app_cache/preview")
 )
 
+# Thumbnail cache: small webp images generated from drawio paired PNGs.
+# Separate from preview cache because thumbnails are tiny (~3KB) and
+# permanent (never invalidated unless the source attachment changes).
+THUMBNAIL_CACHE_ROOT = Path(
+    os.environ.get("THUMBNAIL_CACHE_ROOT", "/app_cache/thumbnails")
+)
+THUMBNAIL_WIDTH = 280  # px — fits a 2-column grid comfortably
+
 # Shared SQL fragment for matching drawio_reference rows to their source
 # attachment. Used in 6+ queries across list_pages, get_page, and
 # _EXTRACTED_SOURCES_CTE. Centralised here so diagram_name matching
@@ -1914,6 +1922,80 @@ async def serve_attachment(attachment_id: str):
             headers={"Content-Disposition": "inline"},
         )
     return FileResponse(str(full_path), media_type=media_type, filename=row["title"])
+
+
+@router.get("/confluence/attachments/{attachment_id}/thumbnail")
+async def serve_thumbnail(attachment_id: str):
+    """Serve a small webp thumbnail for a drawio attachment.
+
+    Strategy: Confluence stores a paired PNG preview for most drawio files
+    (e.g. "arch.drawio" → "arch.drawio.png" on the same page). We find
+    that paired PNG, resize it to THUMBNAIL_WIDTH px wide, convert to webp,
+    cache the result, and serve it with long cache headers.
+
+    If no paired PNG exists or the file isn't downloaded, returns 404.
+    """
+    # 1. Check cache first — avoid DB round-trip on repeated requests
+    THUMBNAIL_CACHE_ROOT.mkdir(parents=True, exist_ok=True)
+    cached = THUMBNAIL_CACHE_ROOT / f"{attachment_id}.webp"
+    if cached.exists():
+        return FileResponse(
+            str(cached),
+            media_type="image/webp",
+            headers={
+                "Content-Disposition": "inline",
+                "Cache-Control": "public, max-age=86400",
+            },
+        )
+
+    # 2. Find the drawio attachment and its paired PNG
+    row = await pg_client.fetchrow(
+        """
+        SELECT d.title, d.page_id,
+               img.local_path AS png_local_path,
+               img.attachment_id AS png_attachment_id
+        FROM northstar.confluence_attachment d
+        LEFT JOIN northstar.confluence_attachment img
+          ON img.page_id = d.page_id
+         AND img.file_kind = 'image'
+         AND img.title = d.title || '.png'
+         AND img.local_path IS NOT NULL
+        WHERE d.attachment_id = $1
+        """,
+        attachment_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="attachment not found")
+    if not row["png_local_path"]:
+        raise HTTPException(status_code=404, detail="no paired PNG preview available")
+
+    png_path = ATTACHMENT_ROOT / Path(row["png_local_path"]).name
+    if not png_path.exists():
+        raise HTTPException(status_code=404, detail="paired PNG not on disk")
+
+    # 3. Generate thumbnail (sync PIL call — fast for small output)
+    try:
+        from PIL import Image
+        with Image.open(png_path) as im:
+            # Maintain aspect ratio
+            ratio = THUMBNAIL_WIDTH / im.width
+            new_h = max(1, int(im.height * ratio))
+            thumb = im.resize((THUMBNAIL_WIDTH, new_h), Image.LANCZOS)
+            thumb.save(str(cached), "WEBP", quality=75)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"thumbnail generation failed: {exc}",
+        )
+
+    return FileResponse(
+        str(cached),
+        media_type="image/webp",
+        headers={
+            "Content-Disposition": "inline",
+            "Cache-Control": "public, max-age=86400",
+        },
+    )
 
 
 @router.api_route(
