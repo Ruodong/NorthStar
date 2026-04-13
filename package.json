@@ -1,0 +1,27 @@
+{
+  "name": "@e2e/northstar",
+  "version": "1.0.0",
+  "description": "IT Operational Command System powered by Neo4j Ontology. Inspired by Palantir Ontology, builds a knowledge graph of IT architecture assets from draw.io diagrams stored in Lenovo's Confluence Architecture Review space.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ruodong/NorthStar.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Ruodong/NorthStar/issues"
+  },
+  "homepage": "https://github.com/Ruodong/NorthStar#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.59.1"
+  }
+}
