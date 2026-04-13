@@ -458,16 +458,22 @@ def main() -> int:
         return 0
 
     logger.info("stage 3a: upserting drawio_reference (%d rows)", len(all_refs))
-    for ref in all_refs:
-        try:
-            upsert_ref(pg, ref)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("  ref upsert failed for %s: %s", ref.inclusion_page_id, exc)
-            pg.rollback()
+    with pg.cursor() as cur:
+        for ref in all_refs:
+            try:
+                cur.execute("SAVEPOINT ref_upsert")
+                upsert_ref(pg, ref)
+                cur.execute("RELEASE SAVEPOINT ref_upsert")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("  ref upsert failed for %s: %s", ref.inclusion_page_id, exc)
+                cur.execute("ROLLBACK TO SAVEPOINT ref_upsert")
     pg.commit()
     logger.info("  done")
 
     # --- Stage 4: fetch source pages from Confluence -------------------------
+    # Include to_refresh pages (exist in DB but have 0 drawio attachments)
+    # so their attachments get re-downloaded.
+    to_fetch = to_fetch + [s for s in to_refresh if s not in to_fetch]
     logger.info("stage 4: fetching %d source pages", len(to_fetch))
     fetched = 0
     errors = 0
@@ -500,15 +506,18 @@ def main() -> int:
         # Fetch and persist attachments
         atts = list_attachments(client, pid)
         logger.info("    %d attachments", len(atts))
-        for att in atts:
-            try:
-                kind = upsert_attachment(pg, pid, att, attach_root, client, download=not args.no_download)
-                total_att += 1
-                if kind == "drawio":
-                    total_drawio += 1
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("    attachment upsert failed: %s", exc)
-                pg.rollback()
+        with pg.cursor() as acur:
+            for att in atts:
+                try:
+                    acur.execute("SAVEPOINT att_upsert")
+                    kind = upsert_attachment(pg, pid, att, attach_root, client, download=not args.no_download)
+                    acur.execute("RELEASE SAVEPOINT att_upsert")
+                    total_att += 1
+                    if kind == "drawio":
+                        total_drawio += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("    attachment upsert failed: %s", exc)
+                    acur.execute("ROLLBACK TO SAVEPOINT att_upsert")
         pg.commit()
         fetched += 1
 

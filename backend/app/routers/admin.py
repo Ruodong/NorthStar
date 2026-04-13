@@ -131,6 +131,31 @@ PREVIEW_CACHE_ROOT = Path(
 # Rule: blank diagram_name matches all drawios on the source page ONLY for
 # inc_drawio macros (they transclude the whole page). template_url and
 # page_link always require an explicit name match.
+def _parse_questionnaire(row: dict) -> dict:
+    """Pop body_questionnaire from a row dict, parse sections, return cleaned dict."""
+    import json as _json
+    d = dict(row)
+    q = d.pop("body_questionnaire", None)
+    if q:
+        try:
+            d["questionnaire_sections"] = (
+                (q if isinstance(q, dict) else _json.loads(q)).get("sections", [])
+            )
+        except Exception:  # noqa: BLE001
+            d["questionnaire_sections"] = None
+    else:
+        d["questionnaire_sections"] = None
+    return d
+
+
+def _clean_decimal(row: dict | None) -> dict | None:
+    """Convert Postgres Decimal values to float for JSON serialization."""
+    from decimal import Decimal
+    if row is None:
+        return None
+    return {k: float(v) if isinstance(v, Decimal) else v for k, v in row.items()}
+
+
 _DIAGRAM_NAME_MATCH = (
     "((dr.diagram_name = '' AND dr.macro_kind = 'inc_drawio')"
     " OR sa.title = dr.diagram_name"
@@ -994,25 +1019,44 @@ async def get_page(page_id: str) -> ApiResponse:
     # client can follow the page_id link to go deeper). Include their own
     # attachment/drawio counts (own + ref-direct) so the tree is scannable.
     children = await pg_client.fetch(
-        """
+        f"""
+        WITH child_att AS (
+            SELECT a.page_id,
+                   count(*) AS own_att,
+                   count(*) FILTER (
+                       WHERE a.file_kind = 'drawio'
+                         AND a.title NOT LIKE 'drawio-backup%%'
+                         AND a.title NOT LIKE '~%%'
+                   ) AS own_drawio
+            FROM northstar.confluence_attachment a
+            WHERE a.page_id IN (
+                SELECT page_id FROM northstar.confluence_page WHERE parent_id = $1
+            )
+              AND a.title NOT LIKE 'drawio-backup%%'
+              AND a.title NOT LIKE '~%%'
+            GROUP BY a.page_id
+        ),
+        child_ref AS (
+            SELECT dr.inclusion_page_id AS page_id, count(*) AS ref_drawio
+            FROM northstar.drawio_reference dr
+            JOIN northstar.confluence_attachment sa
+              ON sa.page_id = dr.source_page_id
+             AND sa.file_kind = 'drawio'
+             AND sa.title NOT LIKE 'drawio-backup%%'
+             AND sa.title NOT LIKE '~%%'
+             AND {_DIAGRAM_NAME_MATCH_FSTR}
+            WHERE dr.inclusion_page_id IN (
+                SELECT page_id FROM northstar.confluence_page WHERE parent_id = $1
+            )
+            GROUP BY dr.inclusion_page_id
+        )
         SELECT c.page_id, c.title, c.depth, c.page_url, c.page_type,
-               (SELECT count(*) FROM northstar.confluence_attachment a
-                  WHERE a.page_id = c.page_id
-                    AND a.title NOT LIKE 'drawio-backup%'
-                    AND a.title NOT LIKE '~%') AS own_attachments,
-               (SELECT count(*) FROM northstar.confluence_attachment a
-                  WHERE a.page_id = c.page_id AND a.file_kind = 'drawio'
-                    AND a.title NOT LIKE 'drawio-backup%'
-                    AND a.title NOT LIKE '~%') AS own_drawio,
-               (SELECT count(*) FROM northstar.drawio_reference dr
-                  JOIN northstar.confluence_attachment sa
-                    ON sa.page_id = dr.source_page_id
-                   AND sa.file_kind = 'drawio'
-                   AND sa.title NOT LIKE 'drawio-backup%'
-                   AND sa.title NOT LIKE '~%'
-                   AND {_DIAGRAM_NAME_MATCH}
-                  WHERE dr.inclusion_page_id = c.page_id) AS ref_drawio
+               COALESCE(ca.own_att, 0) AS own_attachments,
+               COALESCE(ca.own_drawio, 0) AS own_drawio,
+               COALESCE(cr.ref_drawio, 0) AS ref_drawio
         FROM northstar.confluence_page c
+        LEFT JOIN child_att ca ON ca.page_id = c.page_id
+        LEFT JOIN child_ref cr ON cr.page_id = c.page_id
         WHERE c.parent_id = $1
         ORDER BY c.title
         """,
@@ -1626,21 +1670,7 @@ async def application_overview(app_id: str) -> ApiResponse:
     )
     page_ids = [p["page_id"] for p in pages]
 
-    # Parse questionnaire sections per page (for inline rendering)
-    page_dicts: list[dict] = []
-    for p in pages:
-        d = dict(p)
-        q = d.pop("body_questionnaire", None)
-        if q:
-            try:
-                d["questionnaire_sections"] = (
-                    (q if isinstance(q, dict) else _json.loads(q)).get("sections", [])
-                )
-            except Exception:  # noqa: BLE001
-                d["questionnaire_sections"] = None
-        else:
-            d["questionnaire_sections"] = None
-        page_dicts.append(d)
+    page_dicts = [_parse_questionnaire(p) for p in pages]
 
     # 3) Attachments across those pages
     attachments: list[dict] = []
@@ -1713,25 +1743,11 @@ async def application_overview(app_id: str) -> ApiResponse:
         app_id,
     )
 
-    # Convert Postgres Decimal to float for JSON serialization
-    from decimal import Decimal as _Decimal
-
-    def _clean(row: dict | None) -> dict | None:
-        if row is None:
-            return None
-        out: dict = {}
-        for k, v in row.items():
-            if isinstance(v, _Decimal):
-                out[k] = float(v)
-            else:
-                out[k] = v
-        return out
-
     return ApiResponse(
         data={
             "app_id": app_id,
             "cmdb": dict(cmdb),
-            "tco": _clean(dict(tco)) if tco else None,
+            "tco": _clean_decimal(dict(tco)) if tco else None,
             "confluence_pages": page_dicts,
             "attachments": attachments,
             "graph": {
@@ -1851,38 +1867,13 @@ async def project_overview(project_id: str) -> ApiResponse:
         {"pid": project_id},
     )
 
-    # Parse questionnaire JSON payload in Python
-    page_dicts: list[dict] = []
-    for p in pages:
-        d = dict(p)
-        q = d.pop("body_questionnaire", None)
-        if q:
-            try:
-                d["questionnaire_sections"] = (
-                    (q if isinstance(q, dict) else _json.loads(q)).get("sections", [])
-                )
-            except Exception:  # noqa: BLE001
-                d["questionnaire_sections"] = None
-        else:
-            d["questionnaire_sections"] = None
-        page_dicts.append(d)
-
-    # Clean Decimal → float for JSON
-    from decimal import Decimal as _D2
-
-    def _clean2(row):
-        if row is None:
-            return None
-        out: dict = {}
-        for k, v in row.items():
-            out[k] = float(v) if isinstance(v, _D2) else v
-        return out
+    page_dicts = [_parse_questionnaire(p) for p in pages]
 
     return ApiResponse(
         data={
             "project_id": project_id,
-            "mspo": _clean2(dict(mspo)) if mspo else None,
-            "summary": _clean2(dict(summary)) if summary else None,
+            "mspo": _clean_decimal(dict(mspo)) if mspo else None,
+            "summary": _clean_decimal(dict(summary)) if summary else None,
             "team": [dict(t) for t in team],
             "confluence_pages": page_dicts,
             "attachments": attachments,
