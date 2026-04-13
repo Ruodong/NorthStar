@@ -645,6 +645,9 @@ async def reverse_dependency(app_id: str, depth: int = 2) -> dict:
     seen: set[tuple[str, int]] = set()
     unique_rows: list[dict] = []
     for r in rows:
+        # Skip non-CMDB apps (diagram-derived X-hash IDs)
+        if r["app_id"].startswith("X"):
+            continue
         key = (r["app_id"], r["distance"])
         if key in seen:
             continue
