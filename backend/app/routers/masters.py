@@ -214,7 +214,7 @@ async def get_application_deployment(app_id: str) -> ApiResponse:
         SELECT name, ip_address, app_name, device_type, is_virtualized,
                os_type, os_version, cpu_count, ram, disk_space,
                "City" AS city, location, operational_status, landscape,
-               have_dr, model_type,
+               have_dr, model_type, is_dmz,
                CASE
                  WHEN lower(landscape) = 'production' THEN 'Production'
                  WHEN landscape IS NULL OR landscape = '' THEN 'Unknown'

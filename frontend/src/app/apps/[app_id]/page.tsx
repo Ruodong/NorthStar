@@ -2374,6 +2374,7 @@ function DeploymentTab({ appId }: { appId: string }) {
                   <th>IP</th>
                   <th>Type</th>
                   <th>Env</th>
+                  <th>Zone</th>
                   <th>OS</th>
                   <th>CPU</th>
                   <th>RAM</th>
@@ -2389,6 +2390,7 @@ function DeploymentTab({ appId }: { appId: string }) {
                     <td style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>{s.ip_address || "—"}</td>
                     <td style={{ fontSize: 12 }}>{s.is_virtualized || s.device_type || "—"}</td>
                     <td><EnvBadge env={s.env} /></td>
+                    <td><ZoneBadge zone={s.is_dmz} /></td>
                     <td style={{ fontSize: 12 }}>{s.os_type || "—"}</td>
                     <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{s.cpu_count || "—"}</td>
                     <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{s.ram ? Number(s.ram).toLocaleString() : "—"}</td>
@@ -2585,6 +2587,36 @@ function EnvBadge({ env }: { env: string | null | undefined }) {
       textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap",
     }}>
       {isProd ? "PROD" : e === "non-production" ? "NON-PROD" : env || "—"}
+    </span>
+  );
+}
+
+const ZONE_COLORS: Record<string, string> = {
+  intranet: "#6ba6e8",
+  dmz: "#e8716b",
+  vpc: "#a78bfa",
+};
+
+function ZoneBadge({ zone }: { zone: string | null | undefined }) {
+  const raw = (zone || "").trim();
+  const key = raw.toLowerCase();
+  // Normalize: YES/Dmz → DMZ, NO → Intranet
+  const label = key === "yes" || key === "dmz" ? "DMZ"
+    : key === "no" || key === "intranet" ? "Intranet"
+    : key === "vpc" ? "VPC"
+    : raw || "—";
+  const colorKey = key === "yes" ? "dmz" : key === "no" ? "intranet" : key;
+  const color = ZONE_COLORS[colorKey] || "var(--text-dim)";
+  if (!raw) return <span style={{ color: "var(--text-dim)", fontSize: 12 }}>—</span>;
+  return (
+    <span style={{
+      fontSize: 10, fontFamily: "var(--font-mono)", fontWeight: 600,
+      padding: "2px 6px", borderRadius: "var(--radius-sm)",
+      background: `color-mix(in srgb, ${color} 15%, transparent)`,
+      color, border: `1px solid color-mix(in srgb, ${color} 30%, transparent)`,
+      textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap",
+    }}>
+      {label}
     </span>
   );
 }
