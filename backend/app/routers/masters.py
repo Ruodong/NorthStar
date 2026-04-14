@@ -42,14 +42,12 @@ async def project_statuses() -> ApiResponse:
 
 @router.get("/summary")
 async def summary() -> ApiResponse:
-    # 'applications' is the ACTIVE portfolio count (TCO-driven) so that all
-    # places that show "Applications: N" agree with the /admin/applications
-    # list (also TCO-driven). ref_application is the full 3169-row CMDB
-    # mirror which includes decommissioned/legacy entries.
+    # 'applications' is the full CMDB count (ref_application) — the authoritative
+    # app registry. ref_application_tco is a subset with budget data.
     rows = await pg_client.fetch(
         """
-        SELECT 'applications' AS entity, count(*) AS count FROM northstar.ref_application_tco
-        UNION ALL SELECT 'applications_total_cmdb', count(*) FROM northstar.ref_application
+        SELECT 'applications' AS entity, count(*) AS count FROM northstar.ref_application
+        UNION ALL SELECT 'applications_with_tco', count(*) FROM northstar.ref_application_tco
         UNION ALL SELECT 'employees', count(*) FROM northstar.ref_employee
         UNION ALL SELECT 'projects',  count(*) FROM northstar.ref_project
         UNION ALL SELECT 'diagram_apps', count(*) FROM northstar.ref_diagram_app
@@ -69,22 +67,18 @@ async def list_applications(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> ApiResponse:
-    """List applications driven by ref_application_tco (the active portfolio).
+    """List applications from the full CMDB (ref_application).
 
-    ref_application (full EAM CMDB, 3169 rows) contains decommissioned and
-    legacy records. ref_application_tco (1237 rows) is EAM's *active* tracked
-    set — apps that have budget allocation this fiscal year. Using TCO as the
-    driving table gives a cleaner, more current list.
-
-    Each row LEFT JOINs ref_application for display metadata (name, status,
-    owners, classification).
+    LEFT JOINs ref_application_tco for budget data. Apps without TCO
+    show budget/actual as null. Default sort: name ASC.
     """
     where = []
     args: list = []
     if q:
         args.append(f"%{q}%")
         where.append(
-            f"(COALESCE(a.name, t.app_name) ILIKE ${len(args)} OR t.app_id ILIKE ${len(args)})"
+            f"(a.name ILIKE ${len(args)} OR a.app_id ILIKE ${len(args)}"
+            f" OR a.app_full_name ILIKE ${len(args)})"
         )
     if status == EMPTY_SENTINEL:
         where.append("(a.status IS NULL OR a.status = '')")
@@ -96,19 +90,19 @@ async def list_applications(
     rows = await pg_client.fetch(
         f"""
         SELECT
-            t.app_id,
-            COALESCE(a.name, t.app_name)     AS name,
+            a.app_id,
+            a.name,
             a.app_full_name,
-            COALESCE(a.status, 'Active')     AS status,
+            a.status,
             a.u_service_area,
             a.portfolio_mgt,
-            COALESCE(a.app_classification, t.application_classification) AS app_classification,
+            a.app_classification,
             t.budget_k,
             t.actual_k
-        FROM northstar.ref_application_tco t
-        LEFT JOIN northstar.ref_application a ON a.app_id = t.app_id
+        FROM northstar.ref_application a
+        LEFT JOIN northstar.ref_application_tco t ON t.app_id = a.app_id
         {where_clause}
-        ORDER BY t.budget_k DESC NULLS LAST, t.app_id
+        ORDER BY a.name ASC NULLS LAST, a.app_id
         LIMIT ${len(args) - 1} OFFSET ${len(args)}
         """,
         *args,
@@ -116,8 +110,8 @@ async def list_applications(
     total = await pg_client.fetchval(
         f"""
         SELECT count(*)
-        FROM northstar.ref_application_tco t
-        LEFT JOIN northstar.ref_application a ON a.app_id = t.app_id
+        FROM northstar.ref_application a
+        LEFT JOIN northstar.ref_application_tco t ON t.app_id = a.app_id
         {where_clause}
         """,
         *args[:-2],
