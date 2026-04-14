@@ -2454,7 +2454,7 @@ function DeploymentTab({ appId }: { appId: string }) {
                   <td style={{ fontSize: 12 }}>{d.db_type || "—"}</td>
                   <td><EnvBadge env={d.env} /></td>
                   <td><code style={{ fontSize: 10, color: "var(--text-dim)" }}>{d.host_name || "—"}</code></td>
-                  <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{d.db_size_mb || "—"}</td>
+                  <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{d.db_size_mb ? Number(d.db_size_mb).toLocaleString() : "—"}</td>
                   <td style={{ fontSize: 12 }}>{cityLabel(d.city)}</td>
                   <td><DeployStatusPill status={d.operational_status} /></td>
                 </tr>
