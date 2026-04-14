@@ -1894,13 +1894,15 @@ function KnowledgeBaseTab({ appId }: { appId: string }) {
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
     (async () => {
       setLoading(true);
       setErr(null);
       try {
         const res = await fetch(
           `/api/graph/nodes/${encodeURIComponent(appId)}/knowledge`,
-          { cache: "no-store" }
+          { cache: "no-store", signal: controller.signal }
         );
         if (!res.ok) throw new Error(`${res.status}`);
         const j = await res.json();
@@ -1913,12 +1915,18 @@ function KnowledgeBaseTab({ appId }: { appId: string }) {
           setExpanded(new Set(topKeys));
         }
       } catch (e) {
-        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
+        if (!cancelled) {
+          const msg = e instanceof DOMException && e.name === "AbortError"
+            ? "Confluence search timed out — the server may be unreachable."
+            : e instanceof Error ? e.message : String(e);
+          setErr(msg);
+        }
       } finally {
+        clearTimeout(timeout);
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; controller.abort(); };
   }, [appId]);
 
   if (loading) {
