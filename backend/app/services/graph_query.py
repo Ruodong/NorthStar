@@ -101,24 +101,34 @@ async def get_application(app_id: str) -> Optional[dict]:
            }) AS confluence_pages
     """
     rows = await neo4j_client.run_query(cypher, {"app_id": app_id})
-    if not rows:
-        return None
-    row = rows[0]
-
-    # --- Postgres: investments (project → app via confluence_diagram_app) ---
-    investments = await _fetch_investments_from_pg(app_id)
+    has_neo4j = bool(rows)
+    row = rows[0] if has_neo4j else None
 
     # --- Postgres: CMDB enrichment (full ref_application row) ---
-    app_dict = dict(row["app"])
+    # When Neo4j has no node, CMDB is the sole source for the app object.
+    # This implements ontology invariant #5: "the page gracefully degrades
+    # when Neo4j data is absent."
+    if has_neo4j:
+        app_dict = dict(row["app"])
+    else:
+        app_dict = {"app_id": app_id}
+
     cmdb = await _fetch_cmdb_enrichment(app_id)
     if cmdb:
         app_dict.update(cmdb)
+
+    # If neither Neo4j nor PG CMDB knows this app, it truly doesn't exist
+    if not has_neo4j and not cmdb:
+        return None
+
+    # --- Postgres: investments (project → app via confluence_diagram_app) ---
+    investments = await _fetch_investments_from_pg(app_id)
 
     # --- Postgres: drawio diagram references (confluence_diagram_app) ---
     pg_diagrams = await _fetch_diagram_refs_from_pg(app_id)
 
     # Merge Neo4j diagrams (DESCRIBED_BY edges) with Postgres drawio refs
-    neo4j_diagrams = [d for d in row["diagrams"] if d.get("diagram_id")]
+    neo4j_diagrams = [d for d in (row["diagrams"] if has_neo4j else []) if d.get("diagram_id")]
     seen_att_ids = {d.get("diagram_id") for d in neo4j_diagrams}
     for pd in pg_diagrams:
         if pd["attachment_id"] not in seen_att_ids:
@@ -130,13 +140,17 @@ async def get_application(app_id: str) -> Optional[dict]:
     # --- Postgres: Confluence pages with questionnaire ---
     conf_pages = await _fetch_confluence_pages(app_id)
 
+    out_edges = row["out_edges"] if has_neo4j else []
+    in_edges = row["in_edges"] if has_neo4j else []
+    conf_pages_neo4j = row["confluence_pages"] if has_neo4j else []
+
     return {
         "app": app_dict,
-        "outbound": [e for e in row["out_edges"] if e.get("target") and not e["target"].startswith("X")],
-        "inbound": [e for e in row["in_edges"] if e.get("source") and not e["source"].startswith("X")],
+        "outbound": [e for e in out_edges if e.get("target") and not e["target"].startswith("X")],
+        "inbound": [e for e in in_edges if e.get("source") and not e["source"].startswith("X")],
         "investments": investments,
         "diagrams": neo4j_diagrams,
-        "confluence_pages": [c for c in row["confluence_pages"] if c.get("page_id")],
+        "confluence_pages": [c for c in conf_pages_neo4j if c.get("page_id")],
         "tco": tco,
         "review_pages": conf_pages,
     }
