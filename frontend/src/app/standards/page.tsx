@@ -63,7 +63,7 @@ export default function StandardsPage() {
       if (domainFilter) params.set("domain", domainFilter);
       if (typeFilter) params.set("doc_type", typeFilter);
       if (searchDebounced.length >= 2) params.set("q", searchDebounced);
-      params.set("limit", "100");
+      params.set("limit", "500");
 
       const r = await fetch(`/api/ea-documents?${params}`);
       const j = await r.json();
