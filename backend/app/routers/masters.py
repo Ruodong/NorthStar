@@ -120,6 +120,7 @@ async def list_applications(
             a.name,
             a.app_full_name,
             a.status,
+            a.app_ownership,
             a.u_service_area,
             a.portfolio_mgt,
             a.app_classification,

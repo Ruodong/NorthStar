@@ -9,6 +9,7 @@ interface AppRow {
   name: string;
   app_full_name: string | null;
   status: string;
+  app_ownership: string | null;
   u_service_area: string | null;
   portfolio_mgt: string | null;
   app_classification: string | null;
@@ -28,6 +29,19 @@ const STATUS_COLORS: Record<string, string> = {
   Planned: "#6ba6e8",
   Decommissioned: "#6b7488",
   Retain: "#e8b458",
+};
+
+const OWNERSHIP_COLORS: Record<string, string> = {
+  "CIO/CDTO": "#6ba6e8",
+  Shadow: "#e8716b",
+  LPL: "#a8b0c0",
+};
+
+const PORTFOLIO_COLORS: Record<string, string> = {
+  Invest: "#5fc58a",
+  Tolerate: "#e8b458",
+  Migrate: "#6ba6e8",
+  Retire: "#e8716b",
 };
 
 function formatMoney(k: number | null): string {
@@ -105,10 +119,8 @@ export default function AdminApplications() {
     <div>
       <h1>Applications (CMDB)</h1>
       <p className="subtitle">
-        Active application portfolio from EAM. Driven by{" "}
-        <code>application_tco</code> (apps with budgeted/actual spend this FY),
-        joined to <code>cmdb_application</code> for name, status, classification
-        and portfolio decision. Ordered by budget descending.
+        Full CMDB application registry from EAM ({data?.total.toLocaleString() ?? "…"} apps).
+        Enriched with TCO budget data where available.
       </p>
 
       <div className="toolbar">
@@ -150,13 +162,14 @@ export default function AdminApplications() {
         <table>
           <thead>
             <tr>
-              <th style={{ width: 110 }}>App ID</th>
+              <th style={{ width: 100 }}>App ID</th>
               <th>Name</th>
-              <th style={{ width: 130 }}>Status</th>
-              <th style={{ width: 110 }}>Portfolio</th>
+              <th style={{ width: 120 }}>Status</th>
+              <th style={{ width: 110 }}>Ownership</th>
+              <th style={{ width: 100 }}>Portfolio</th>
               <th style={{ width: 140 }}>Service Area</th>
-              <th style={{ width: 110, textAlign: "right" }}>Budget</th>
-              <th style={{ width: 110, textAlign: "right" }}>Actual</th>
+              <th style={{ width: 100, textAlign: "right" }}>Budget</th>
+              <th style={{ width: 100, textAlign: "right" }}>Actual</th>
             </tr>
           </thead>
           <tbody>
@@ -200,8 +213,35 @@ export default function AdminApplications() {
                     {r.status}
                   </span>
                 </td>
-                <td style={{ color: "var(--text-muted)", fontSize: 12 }}>
-                  {r.portfolio_mgt || "—"}
+                <td>
+                  {r.app_ownership ? (
+                    <span
+                      className="status-pill"
+                      style={{
+                        color: OWNERSHIP_COLORS[r.app_ownership] || "var(--text-muted)",
+                        background: `${OWNERSHIP_COLORS[r.app_ownership] || "#5f6a80"}26`,
+                      }}
+                    >
+                      {r.app_ownership}
+                    </span>
+                  ) : (
+                    <span style={{ color: "var(--text-dim)", fontSize: 12 }}>—</span>
+                  )}
+                </td>
+                <td>
+                  {r.portfolio_mgt ? (
+                    <span
+                      className="status-pill"
+                      style={{
+                        color: PORTFOLIO_COLORS[r.portfolio_mgt] || "var(--text-muted)",
+                        background: `${PORTFOLIO_COLORS[r.portfolio_mgt] || "#5f6a80"}26`,
+                      }}
+                    >
+                      {r.portfolio_mgt}
+                    </span>
+                  ) : (
+                    <span style={{ color: "var(--text-dim)", fontSize: 12 }}>—</span>
+                  )}
                 </td>
                 <td style={{ color: "var(--text-muted)", fontSize: 12 }}>
                   {r.u_service_area || "—"}
@@ -232,7 +272,7 @@ export default function AdminApplications() {
             ))}
             {!loading && data?.rows.length === 0 && (
               <tr>
-                <td colSpan={7} className="empty" style={{ padding: 40 }}>
+                <td colSpan={8} className="empty" style={{ padding: 40 }}>
                   No results.
                 </td>
               </tr>
