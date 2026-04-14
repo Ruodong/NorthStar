@@ -301,6 +301,40 @@ export default function AppDetailPage() {
               CMDB
             </span>
           )}
+          {app.app_ownership && (
+            <span
+              style={{
+                fontSize: 10,
+                padding: "2px 8px",
+                background: "rgba(107,166,232,0.12)",
+                color: "#6ba6e8",
+                border: "1px solid rgba(107,166,232,0.4)",
+                borderRadius: "var(--radius-sm)",
+                textTransform: "uppercase",
+                letterSpacing: 0.6,
+                fontWeight: 600,
+              }}
+            >
+              {app.app_ownership}
+            </span>
+          )}
+          {app.portfolio_mgt && (
+            <span
+              style={{
+                fontSize: 10,
+                padding: "2px 8px",
+                background: "rgba(168,176,192,0.12)",
+                color: "#a8b0c0",
+                border: "1px solid rgba(168,176,192,0.4)",
+                borderRadius: "var(--radius-sm)",
+                textTransform: "uppercase",
+                letterSpacing: 0.6,
+                fontWeight: 600,
+              }}
+            >
+              {app.portfolio_mgt}
+            </span>
+          )}
         </div>
         {app.description && (
           <p

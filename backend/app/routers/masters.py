@@ -27,6 +27,32 @@ async def application_statuses() -> ApiResponse:
     return ApiResponse(data=[dict(r) for r in rows])
 
 
+@router.get("/applications/ownerships")
+async def application_ownerships() -> ApiResponse:
+    rows = await pg_client.fetch(
+        """
+        SELECT COALESCE(app_ownership, '') AS ownership, count(*) AS count
+        FROM northstar.ref_application
+        GROUP BY COALESCE(app_ownership, '')
+        ORDER BY count DESC
+        """
+    )
+    return ApiResponse(data=[dict(r) for r in rows])
+
+
+@router.get("/applications/portfolios")
+async def application_portfolios() -> ApiResponse:
+    rows = await pg_client.fetch(
+        """
+        SELECT COALESCE(portfolio_mgt, '') AS portfolio, count(*) AS count
+        FROM northstar.ref_application
+        GROUP BY COALESCE(portfolio_mgt, '')
+        ORDER BY count DESC
+        """
+    )
+    return ApiResponse(data=[dict(r) for r in rows])
+
+
 @router.get("/projects/statuses")
 async def project_statuses() -> ApiResponse:
     rows = await pg_client.fetch(
