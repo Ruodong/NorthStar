@@ -119,7 +119,7 @@ function PillGroup({
           }}
           title="Clear filter"
         >
-          \u2715
+          clear
         </button>
       )}
     </div>
@@ -129,9 +129,10 @@ function PillGroup({
 export default function ApplicationsPage() {
   const [q, setQ] = useState("");
   const [qDebounced, setQDebounced] = useState("");
-  const [selStatus, setSelStatus] = useState<string[]>([]);
+  // Defaults: Active + CIO/CDTO + Invest
+  const [selStatus, setSelStatus] = useState<string[]>(["Active"]);
   const [selOwnership, setSelOwnership] = useState<string[]>(["CIO/CDTO"]);
-  const [selPortfolio, setSelPortfolio] = useState<string[]>([]);
+  const [selPortfolio, setSelPortfolio] = useState<string[]>(["Invest"]);
   const [statusOpts, setStatusOpts] = useState<FilterCount[]>([]);
   const [ownershipOpts, setOwnershipOpts] = useState<FilterCount[]>([]);
   const [portfolioOpts, setPortfolioOpts] = useState<FilterCount[]>([]);
@@ -149,9 +150,17 @@ export default function ApplicationsPage() {
           fetch("/api/masters/applications/portfolios", { cache: "no-store" }),
         ]);
         const [sJ, oJ, pJ] = await Promise.all([sRes.json(), oRes.json(), pRes.json()]);
-        if (sJ.success) setStatusOpts(sJ.data);
-        if (oJ.success) setOwnershipOpts(oJ.data);
-        if (pJ.success) setPortfolioOpts(pJ.data);
+        // Sort: non-empty first (by count desc), empty last
+        const sortEmptyLast = (arr: FilterCount[], key: keyof FilterCount) =>
+          [...arr].sort((a, b) => {
+            const aEmpty = !a[key];
+            const bEmpty = !b[key];
+            if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
+            return b.count - a.count;
+          });
+        if (sJ.success) setStatusOpts(sortEmptyLast(sJ.data, "status"));
+        if (oJ.success) setOwnershipOpts(sortEmptyLast(oJ.data, "ownership"));
+        if (pJ.success) setPortfolioOpts(sortEmptyLast(pJ.data, "portfolio"));
       } catch { /* non-blocking */ }
     })();
   }, []);
