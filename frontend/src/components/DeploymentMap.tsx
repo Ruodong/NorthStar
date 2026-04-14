@@ -19,8 +19,17 @@ const CITY_GEO: Record<string, { lon: number; lat: number; label: string; labelZ
   "US-Ral":     { lon: -78.64, lat: 35.78, label: "Raleigh",                      region: "US" },
   NA:           { lon: -80.00, lat: 38.00, label: "N. America",                    region: "US" },
   Frankfurt:    { lon:   8.68, lat: 50.11, label: "Frankfurt",                     region: "EU" },
-  Hohhot:       { lon: 111.65, lat: 40.84, label: "Hohhot",     labelZh: "内蒙",   region: "CN" },
-  Shenyang:     { lon: 123.43, lat: 41.80, label: "Shenyang",   labelZh: "沈阳",   region: "CN" },
+};
+
+// Normalize city key aliases so data from different sources merges into one card
+const CITY_ALIAS: Record<string, string> = {
+  Shenyang: "SY",
+  Hohhot:   "NM",
+  Beijing:  "BJ",
+  Shanghai: "SH",
+  Shenzhen: "SZ",
+  Tianjin:  "TJ",
+  Wuhan:    "WH",
 };
 
 // Viewports: [minLon, maxLon, minLat, maxLat]
@@ -249,7 +258,7 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
   const byCityAgg = useMemo(() => {
     const agg: Record<string, CityAgg> = {};
     for (const d of data) {
-      const key = d.city;
+      const key = CITY_ALIAS[d.city] || d.city;
       if (!agg[key]) {
         agg[key] = {
           prod:    { pm: 0, vm: 0, k8s: 0, db: 0, oss: 0, nas: 0, total: 0 },
@@ -366,7 +375,7 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
 
         {/* Land masses */}
         {svgLandPaths.map((d, i) => (
-          <path key={i} d={d} fill="rgba(255,255,255,0.06)" stroke="rgba(255,255,255,0.12)" strokeWidth="0.5" />
+          <path key={i} d={d} fill="#2e3a54" stroke="rgba(255,255,255,0.30)" strokeWidth="0.5" />
         ))}
 
         {/* City label cards */}
