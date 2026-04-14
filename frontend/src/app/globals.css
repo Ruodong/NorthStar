@@ -120,11 +120,14 @@ button:focus-visible,
 }
 .nav nav a {
   color: var(--text-muted);
-  padding: 8px 14px;
+  padding: 12px 14px;
   border-radius: var(--radius-md);
   position: relative;
   transition: color var(--t-hover) var(--ease), background var(--t-hover) var(--ease);
   font-weight: 500;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
 }
 .nav nav a:hover { color: var(--text); background: var(--surface); }
 .nav nav a.active { color: var(--text); }
@@ -133,7 +136,7 @@ button:focus-visible,
   position: absolute;
   left: 14px;
   right: 14px;
-  bottom: -16px;
+  bottom: -6px;
   height: 2px;
   background: var(--accent);
 }
