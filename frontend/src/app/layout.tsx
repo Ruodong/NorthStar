@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { CommandPalette } from "@/components/CommandPalette";
+import { NavLinks } from "@/components/NavLinks";
 import { StarMark } from "@/components/StarMark";
 import "./globals.css";
 
@@ -37,14 +38,7 @@ export default function RootLayout({
               </span>
               <span>NorthStar</span>
             </Link>
-            <nav>
-              <Link href="/dashboard">Dashboard</Link>
-              <Link href="/graph">Graph</Link>
-              <Link href="/standards">Standards</Link>
-              <Link href="/whats-new">What&apos;s New</Link>
-              <Link href="/ingestion">Ingestion</Link>
-              <Link href="/admin">Reference Data</Link>
-            </nav>
+            <NavLinks />
           </div>
         </header>
         <main className="main">{children}</main>
