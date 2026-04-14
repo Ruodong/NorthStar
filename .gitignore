@@ -32,3 +32,4 @@ data/local_drawio/*
 !.claude/settings.json
 .claude/settings.local.json
 .claude/skills/
+.gstack/

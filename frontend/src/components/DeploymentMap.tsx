@@ -497,11 +497,11 @@ export function DeploymentMap({ data }: { data: CityData[] }) {
         <span style={{ marginLeft: "auto", display: "flex", gap: 12 }}>
           <span>
             <span style={{ color: "#f6a623", fontWeight: 700 }}>N</span>
-            <span style={{ marginLeft: 3 }}>= Prod</span>
+            <span style={{ marginLeft: 3 }}>= Production</span>
           </span>
           <span>
             <span style={{ color: "#6ba6e8", fontWeight: 700 }}>N</span>
-            <span style={{ marginLeft: 3 }}>= Non-Prod</span>
+            <span style={{ marginLeft: 3 }}>= Non-Production</span>
           </span>
         </span>
       </div>
