@@ -15,10 +15,15 @@ router = APIRouter(prefix="/api/graph", tags=["graph"])
 async def list_nodes(
     status: Optional[str] = None,
     fiscal_year: Optional[str] = None,
+    app_ownership: Optional[str] = None,
+    portfolio_mgt: Optional[str] = None,
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
 ) -> ApiResponse:
-    data = await graph_query.list_applications(status, fiscal_year, limit, offset)
+    data = await graph_query.list_applications(
+        status, fiscal_year, limit, offset,
+        app_ownership=app_ownership, portfolio_mgt=portfolio_mgt,
+    )
     return ApiResponse(data=data)
 
 

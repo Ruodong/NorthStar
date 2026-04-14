@@ -17,41 +17,42 @@ async def list_applications(
     fiscal_year: Optional[str] = None,
     limit: int = 200,
     offset: int = 0,
+    *,
+    app_ownership: Optional[str] = None,
+    portfolio_mgt: Optional[str] = None,
 ) -> list[dict]:
-    """List applications, optionally filtered by status and/or fiscal year.
+    """List applications from PG CMDB with optional filters."""
+    conditions: list[str] = []
+    params: list[Any] = []
+    idx = 1
 
-    fiscal_year semantics: "applications that have at least one :INVESTS_IN
-    edge with fiscal_year = $fy". This means "apps touched by any project in
-    that FY", which replaces the old scalar filter.
+    if status:
+        conditions.append(f"a.status = ${idx}")
+        params.append(status)
+        idx += 1
+    if app_ownership:
+        conditions.append(f"a.app_ownership = ${idx}")
+        params.append(app_ownership)
+        idx += 1
+    if portfolio_mgt:
+        conditions.append(f"a.portfolio_mgt = ${idx}")
+        params.append(portfolio_mgt)
+        idx += 1
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    params.extend([limit, offset])
+
+    sql = f"""
+    SELECT app_id, name, status, short_description,
+           trim(both '{{}}' from app_classification) AS app_classification,
+           app_ownership, portfolio_mgt
+    FROM northstar.ref_application a
+    {where}
+    ORDER BY a.name
+    LIMIT ${idx} OFFSET ${idx + 1}
     """
-    params: dict[str, Any] = {"limit": limit, "offset": offset}
-    if fiscal_year:
-        cypher = """
-        MATCH (p:Project)-[r:INVESTS_IN]->(a:Application)
-        WHERE r.fiscal_year = $fiscal_year
-        """
-        params["fiscal_year"] = fiscal_year
-        if status:
-            cypher += " AND a.status = $status"
-            params["status"] = status
-        cypher += """
-        WITH DISTINCT a
-        RETURN a
-        ORDER BY a.name
-        SKIP $offset LIMIT $limit
-        """
-    else:
-        cypher = "MATCH (a:Application)"
-        if status:
-            cypher += " WHERE a.status = $status"
-            params["status"] = status
-        cypher += """
-        RETURN a
-        ORDER BY a.name
-        SKIP $offset LIMIT $limit
-        """
-    rows = await neo4j_client.run_query(cypher, params)
-    return [row["a"] for row in rows]
+    rows = await pg_client.fetch(sql, *params)
+    return [dict(r) for r in rows]
 
 
 async def get_application(app_id: str) -> Optional[dict]:
@@ -464,54 +465,44 @@ async def full_graph(fiscal_year: Optional[str] = None, status: Optional[str] = 
 
 
 async def kpi_summary(current_fy: Optional[str] = None) -> dict:
-    """KPI summary cards.
-
-    new_apps_current_fy: apps that have a :INVESTS_IN edge with fiscal_year=$fy
-    AND status='New' on the application. (An app is "new in FY2526" if a
-    project in FY2526 invested in it while the app's global status is New.)
-    """
-    if current_fy:
-        new_apps_cypher = """
-        MATCH (p:Project)-[r:INVESTS_IN]->(a:Application)
-        WHERE r.fiscal_year = $fy AND a.status = 'New'
-        RETURN count(DISTINCT a) AS c
-        """
-        new_apps_rows = await neo4j_client.run_query(new_apps_cypher, {"fy": current_fy})
-        new_apps_count = new_apps_rows[0]["c"] if new_apps_rows else 0
-    else:
-        new_apps_cypher = "MATCH (a:Application) WHERE a.status = 'New' RETURN count(a) AS c"
-        new_apps_rows = await neo4j_client.run_query(new_apps_cypher)
-        new_apps_count = new_apps_rows[0]["c"] if new_apps_rows else 0
-
-    # Total apps from PG CMDB (authoritative count, excludes non-CMDB X-prefix)
+    """KPI summary cards — app counts from PG CMDB (authoritative), integration count from Neo4j."""
+    # All app counts from PG CMDB
     total_apps = await pg_client.fetchval(
         "SELECT count(*) FROM northstar.ref_application"
     ) or 0
 
-    # Integrations + sunset count from Neo4j
-    totals_cypher = """
-    MATCH (a:Application) WHERE NOT a.app_id STARTS WITH 'X'
-    WITH sum(CASE WHEN a.status = 'Sunset' THEN 1 ELSE 0 END) AS sunset_apps
-    OPTIONAL MATCH ()-[r:INTEGRATES_WITH]->()
-    RETURN sunset_apps, count(r) AS total_integrations
-    """
-    rows = await neo4j_client.run_query(totals_cypher)
-    row = rows[0] if rows else {}
+    sunset_apps = await pg_client.fetchval(
+        "SELECT count(*) FROM northstar.ref_application WHERE status = 'Sunset'"
+    ) or 0
+
+    new_apps_count = await pg_client.fetchval(
+        "SELECT count(*) FROM northstar.ref_application WHERE status = 'New'"
+    ) or 0
+
+    # Integration count is the one thing only Neo4j knows
+    int_rows = await neo4j_client.run_query(
+        "MATCH ()-[r:INTEGRATES_WITH]->() RETURN count(r) AS c"
+    )
+    total_integrations = int_rows[0]["c"] if int_rows else 0
+
     return {
         "total_apps": total_apps,
-        "total_integrations": row.get("total_integrations") or 0,
-        "new_apps_current_fy": new_apps_count or 0,
-        "sunset_apps": row.get("sunset_apps") or 0,
+        "total_integrations": total_integrations,
+        "new_apps_current_fy": new_apps_count,
+        "sunset_apps": sunset_apps,
     }
 
 
 async def status_distribution() -> list[dict]:
-    cypher = """
-    MATCH (a:Application)
-    RETURN a.status AS status, count(a) AS count
-    ORDER BY count DESC
-    """
-    return await neo4j_client.run_query(cypher)
+    rows = await pg_client.fetch(
+        """
+        SELECT status, count(*) AS count
+        FROM northstar.ref_application
+        GROUP BY status
+        ORDER BY count DESC
+        """
+    )
+    return [dict(r) for r in rows]
 
 
 async def fy_trend() -> list[dict]:
