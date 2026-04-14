@@ -2388,7 +2388,7 @@ function DeploymentTab({ appId }: { appId: string }) {
                   <td><code style={{ fontSize: 10 }}>{c.cluster_name || "—"}</code></td>
                   <td><EnvBadge env={c.env} /></td>
                   <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{c.limit_cpu || "—"}</td>
-                  <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{c.limit_mem || "—"}</td>
+                  <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, textAlign: "right" }}>{c.limit_mem ? Number(c.limit_mem).toLocaleString() : "—"}</td>
                   <td style={{ fontSize: 12 }}>{cityLabel(c.city)}</td>
                   <td><DeployStatusPill status={c.operational_status} /></td>
                 </tr>
