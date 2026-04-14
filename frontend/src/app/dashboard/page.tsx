@@ -123,10 +123,10 @@ export default function DashboardPage() {
       <SectionLabel source="Master Data · Postgres · synced from EGM" />
       <div className="kpi-grid">
         <Kpi
-          label="Active apps (TCO)"
+          label="Applications (CMDB)"
           value={masters?.applications ?? 0}
           href="/admin/applications"
-          hint="ref_application_tco"
+          hint="ref_application"
         />
         <Kpi
           label="MSPO projects"
