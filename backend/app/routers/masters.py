@@ -421,31 +421,62 @@ async def list_projects(
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> ApiResponse:
-    where = []
+    """List MSPO projects with application counts derived from draw.io diagrams.
+
+    Each row includes app_count (CMDB-linked apps referenced in diagrams),
+    new_count, change_count, sunset_count.
+    """
+    where = ["1=1"]
     args: list = []
     if q:
         args.append(f"%{q}%")
-        where.append(f"(project_name ILIKE ${len(args)} OR project_id ILIKE ${len(args)})")
+        where.append(
+            f"(p.project_name ILIKE ${len(args)} OR p.project_id ILIKE ${len(args)}"
+            f" OR p.pm ILIKE ${len(args)})"
+        )
     if status == EMPTY_SENTINEL:
-        where.append("(status IS NULL OR status = '')")
+        where.append("(p.status IS NULL OR p.status = '')")
     elif status:
         args.append(status)
-        where.append(f"status = ${len(args)}")
-    where_clause = ("WHERE " + " AND ".join(where)) if where else ""
+        where.append(f"p.status = ${len(args)}")
+    where_clause = "WHERE " + " AND ".join(where)
     args.extend([limit, offset])
     rows = await pg_client.fetch(
         f"""
-        SELECT project_id, project_name, type, status, pm, it_lead, dt_lead,
-               start_date, go_live_date, end_date, source
-        FROM northstar.ref_project
+        SELECT p.project_id, p.project_name, p.type, p.status,
+               p.pm, p.it_lead, p.dt_lead,
+               p.start_date, p.go_live_date, p.end_date, p.source,
+               COALESCE(ac.app_count, 0)    AS app_count,
+               COALESCE(ac.new_count, 0)    AS new_count,
+               COALESCE(ac.change_count, 0) AS change_count,
+               COALESCE(ac.sunset_count, 0) AS sunset_count
+        FROM northstar.ref_project p
+        LEFT JOIN LATERAL (
+            SELECT
+                count(DISTINCT cda.resolved_app_id)
+                    FILTER (WHERE cda.resolved_app_id ~ '^A\\d') AS app_count,
+                count(DISTINCT cda.resolved_app_id)
+                    FILTER (WHERE cda.application_status = 'New'
+                            AND cda.resolved_app_id ~ '^A\\d') AS new_count,
+                count(DISTINCT cda.resolved_app_id)
+                    FILTER (WHERE cda.application_status = 'Change'
+                            AND cda.resolved_app_id ~ '^A\\d') AS change_count,
+                count(DISTINCT cda.resolved_app_id)
+                    FILTER (WHERE cda.application_status = 'Sunset'
+                            AND cda.resolved_app_id ~ '^A\\d') AS sunset_count
+            FROM northstar.confluence_diagram_app cda
+            JOIN northstar.confluence_attachment ca ON ca.attachment_id = cda.attachment_id
+            JOIN northstar.confluence_page cp ON cp.page_id = ca.page_id
+            WHERE COALESCE(cp.root_project_id, cp.project_id) = p.project_id
+        ) ac ON true
         {where_clause}
-        ORDER BY project_id DESC
+        ORDER BY ac.app_count DESC NULLS LAST, p.project_id DESC
         LIMIT ${len(args) - 1} OFFSET ${len(args)}
         """,
         *args,
     )
     total = await pg_client.fetchval(
-        f"SELECT count(*) FROM northstar.ref_project {where_clause}",
+        f"SELECT count(*) FROM northstar.ref_project p {where_clause}",
         *args[:-2],
     )
     return ApiResponse(
@@ -454,6 +485,90 @@ async def list_projects(
             "rows": [dict(r) for r in rows],
         }
     )
+
+
+@router.get("/projects/{project_id}")
+async def get_project(project_id: str) -> ApiResponse:
+    """Single project with its referenced applications (apps-first view)."""
+    project = await pg_client.fetchrow(
+        "SELECT * FROM northstar.ref_project WHERE project_id = $1",
+        project_id,
+    )
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"{project_id} not found")
+
+    # Applications referenced in this project's draw.io diagrams (CMDB-linked)
+    apps = await pg_client.fetch(
+        """
+        SELECT DISTINCT
+            COALESCE(cda.resolved_app_id, cda.standard_id) AS app_id,
+            cda.app_name,
+            cda.application_status AS role,
+            ra.name              AS cmdb_name,
+            ra.status            AS cmdb_status,
+            ra.app_ownership,
+            ra.portfolio_mgt,
+            ra.u_service_area,
+            t.budget_k
+        FROM northstar.confluence_diagram_app cda
+        JOIN northstar.confluence_attachment ca ON ca.attachment_id = cda.attachment_id
+        JOIN northstar.confluence_page cp ON cp.page_id = ca.page_id
+        LEFT JOIN northstar.ref_application ra
+            ON ra.app_id = COALESCE(cda.resolved_app_id, cda.standard_id)
+        LEFT JOIN northstar.ref_application_tco t
+            ON t.app_id = ra.app_id
+        WHERE COALESCE(cp.root_project_id, cp.project_id) = $1
+          AND COALESCE(cda.resolved_app_id, cda.standard_id) ~ '^A\\d'
+        ORDER BY cda.application_status, cda.app_name
+        """,
+        project_id,
+    )
+
+    # Confluence pages for this project (ARD documents)
+    pages = await pg_client.fetch(
+        """
+        SELECT page_id, title, page_url, fiscal_year, depth,
+               body_size_chars, q_pm, q_it_lead, q_dt_lead
+        FROM northstar.confluence_page
+        WHERE project_id = $1 OR root_project_id = $1
+        ORDER BY depth, title
+        """,
+        project_id,
+    )
+
+    # Drawio attachments
+    diagrams = await pg_client.fetch(
+        """
+        SELECT ca.attachment_id, ca.title AS file_name, ca.file_kind,
+               cp.page_id::text, cp.title AS page_title, cp.fiscal_year
+        FROM northstar.confluence_attachment ca
+        JOIN northstar.confluence_page cp ON cp.page_id = ca.page_id
+        WHERE (cp.project_id = $1 OR cp.root_project_id = $1)
+          AND ca.file_kind IN ('drawio', 'drawio_xml')
+        ORDER BY cp.fiscal_year DESC, ca.title
+        """,
+        project_id,
+    )
+
+    # Convert Decimal
+    from decimal import Decimal as _D
+
+    def clean(r: dict) -> dict:
+        return {k: (float(v) if isinstance(v, _D) else v) for k, v in r.items()}
+
+    # Role summary counts
+    role_counts: dict[str, int] = {}
+    for a in apps:
+        role = a["role"] or "Unknown"
+        role_counts[role] = role_counts.get(role, 0) + 1
+
+    return ApiResponse(data={
+        "project": dict(project),
+        "applications": [clean(dict(a)) for a in apps],
+        "role_summary": role_counts,
+        "pages": [dict(p) for p in pages],
+        "diagrams": [dict(d) for d in diagrams],
+    })
 
 
 @router.get("/employees/{itcode}")

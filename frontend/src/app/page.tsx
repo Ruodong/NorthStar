@@ -134,8 +134,8 @@ export default function CockpitHome() {
         <MetricCard
           label="Total applications"
           value={kpi ? kpi.total_apps.toLocaleString() : "—"}
-          link="/dashboard"
-          linkLabel="dashboard"
+          link="/applications"
+          linkLabel="browse"
         />
         <MetricCard
           label="Integrations"
@@ -235,7 +235,7 @@ export default function CockpitHome() {
                     href={
                       r.kind === "app"
                         ? `/apps/${encodeURIComponent(r.id)}`
-                        : "/admin/projects"
+                        : `/projects/${encodeURIComponent(r.id)}`
                     }
                     style={{
                       color: "var(--text)",
@@ -340,28 +340,28 @@ export default function CockpitHome() {
         }}
       >
         <SecondaryLink
-          href="/dashboard"
+          href="/applications"
           tag="01"
-          title="Dashboard"
-          desc="KPIs, trend charts, hubs"
+          title="Applications"
+          desc="CMDB application registry"
+        />
+        <SecondaryLink
+          href="/projects"
+          tag="02"
+          title="Projects"
+          desc="Architecture review projects"
         />
         <SecondaryLink
           href="/graph"
-          tag="02"
-          title="Asset graph"
-          desc="Full network visualization"
-        />
-        <SecondaryLink
-          href="/ingestion"
           tag="03"
-          title="Ingestion"
-          desc="Trigger + monitor runs"
+          title="Asset graph"
+          desc="Network visualization"
         />
         <SecondaryLink
           href="/admin"
           tag="04"
           title="Admin"
-          desc="Master data & Confluence raw"
+          desc="Ingestion & raw data"
         />
       </div>
     </div>
