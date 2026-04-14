@@ -130,17 +130,31 @@ async def list_applications(
             parts.append("(a.status IS NULL OR a.status = '')")
         where.append(f"({' OR '.join(parts)})")
 
-    # Ownership — multi-value
+    # Ownership — multi-value + __EMPTY__ sentinel
     own_vals = _parse_multi(app_ownership)
     if own_vals:
-        args.append(own_vals)
-        where.append(f"a.app_ownership = ANY(${len(args)}::text[])")
+        has_empty = EMPTY_SENTINEL in own_vals
+        real_vals = [v for v in own_vals if v != EMPTY_SENTINEL]
+        parts = []
+        if real_vals:
+            args.append(real_vals)
+            parts.append(f"a.app_ownership = ANY(${len(args)}::text[])")
+        if has_empty:
+            parts.append("(a.app_ownership IS NULL OR a.app_ownership = '')")
+        where.append(f"({' OR '.join(parts)})")
 
-    # Portfolio — multi-value
+    # Portfolio — multi-value + __EMPTY__ sentinel
     port_vals = _parse_multi(portfolio_mgt)
     if port_vals:
-        args.append(port_vals)
-        where.append(f"a.portfolio_mgt = ANY(${len(args)}::text[])")
+        has_empty = EMPTY_SENTINEL in port_vals
+        real_vals = [v for v in port_vals if v != EMPTY_SENTINEL]
+        parts = []
+        if real_vals:
+            args.append(real_vals)
+            parts.append(f"a.portfolio_mgt = ANY(${len(args)}::text[])")
+        if has_empty:
+            parts.append("(a.portfolio_mgt IS NULL OR a.portfolio_mgt = '')")
+        where.append(f"({' OR '.join(parts)})")
 
     where_clause = ("WHERE " + " AND ".join(where)) if where else ""
     args.extend([limit, offset])
