@@ -90,6 +90,8 @@ EMPTY_SENTINEL = "__EMPTY__"
 async def list_applications(
     q: Optional[str] = None,
     status: Optional[str] = None,
+    app_ownership: Optional[str] = None,
+    portfolio_mgt: Optional[str] = None,
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> ApiResponse:
@@ -111,6 +113,12 @@ async def list_applications(
     elif status:
         args.append(status)
         where.append(f"a.status = ${len(args)}")
+    if app_ownership:
+        args.append(app_ownership)
+        where.append(f"a.app_ownership = ${len(args)}")
+    if portfolio_mgt:
+        args.append(portfolio_mgt)
+        where.append(f"a.portfolio_mgt = ${len(args)}")
     where_clause = ("WHERE " + " AND ".join(where)) if where else ""
     args.extend([limit, offset])
     rows = await pg_client.fetch(

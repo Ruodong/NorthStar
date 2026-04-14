@@ -60,6 +60,8 @@ export default function AdminApplications() {
   const [q, setQ] = useState("");
   const [qDebounced, setQDebounced] = useState("");
   const [status, setStatus] = useState("");
+  const [ownership, setOwnership] = useState("");
+  const [portfolio, setPortfolio] = useState("");
   const [statuses, setStatuses] = useState<StatusCount[]>([]);
   const [page, setPage] = useState(0);
   const [data, setData] = useState<ListResult | null>(null);
@@ -95,6 +97,8 @@ export default function AdminApplications() {
         const params = new URLSearchParams();
         if (qDebounced) params.set("q", qDebounced);
         if (status) params.set("status", status);
+        if (ownership) params.set("app_ownership", ownership);
+        if (portfolio) params.set("portfolio_mgt", portfolio);
         params.set("limit", String(PAGE_SIZE));
         params.set("offset", String(page * PAGE_SIZE));
         const r = await fetch(`/api/masters/applications?${params}`, { cache: "no-store" });
@@ -110,7 +114,7 @@ export default function AdminApplications() {
     return () => {
       cancelled = true;
     };
-  }, [qDebounced, status, page]);
+  }, [qDebounced, status, ownership, portfolio, page]);
 
   const total = data?.total ?? 0;
   const maxPage = Math.max(0, Math.ceil(total / PAGE_SIZE) - 1);
@@ -142,6 +146,24 @@ export default function AdminApplications() {
             <option key={s.status || "__EMPTY__"} value={s.status || "__EMPTY__"}>
               {s.status || "(empty)"} ({s.count.toLocaleString()})
             </option>
+          ))}
+        </select>
+        <select
+          value={ownership}
+          onChange={(e) => { setOwnership(e.target.value); setPage(0); }}
+        >
+          <option value="">All ownership</option>
+          {Object.keys(OWNERSHIP_COLORS).map((o) => (
+            <option key={o} value={o}>{o}</option>
+          ))}
+        </select>
+        <select
+          value={portfolio}
+          onChange={(e) => { setPortfolio(e.target.value); setPage(0); }}
+        >
+          <option value="">All portfolio</option>
+          {Object.keys(PORTFOLIO_COLORS).map((p) => (
+            <option key={p} value={p}>{p}</option>
           ))}
         </select>
         <div style={{ flex: 1 }} />

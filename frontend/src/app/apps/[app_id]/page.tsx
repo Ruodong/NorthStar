@@ -304,8 +304,8 @@ export default function AppDetailPage() {
           {app.app_ownership && (
             <span
               style={{
-                fontSize: 10,
-                padding: "2px 8px",
+                fontSize: 11,
+                padding: "3px 10px",
                 background: "rgba(107,166,232,0.12)",
                 color: "#6ba6e8",
                 border: "1px solid rgba(107,166,232,0.4)",
@@ -321,8 +321,8 @@ export default function AppDetailPage() {
           {app.portfolio_mgt && (
             <span
               style={{
-                fontSize: 10,
-                padding: "2px 8px",
+                fontSize: 11,
+                padding: "3px 10px",
                 background: "rgba(168,176,192,0.12)",
                 color: "#a8b0c0",
                 border: "1px solid rgba(168,176,192,0.4)",
