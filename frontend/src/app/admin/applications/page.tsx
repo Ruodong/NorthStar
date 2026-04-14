@@ -159,10 +159,10 @@ export default function AdminApplications() {
         ]);
         const [sJ, oJ, pJ] = await Promise.all([sRes.json(), oRes.json(), pRes.json()]);
         // Sort options: non-empty first (by count desc), then empty last
-        const sortEmptyLast = (arr: FilterCount[], key: string) =>
+        const sortEmptyLast = (arr: FilterCount[], key: keyof FilterCount) =>
           [...arr].sort((a, b) => {
-            const aEmpty = !(a as Record<string, unknown>)[key];
-            const bEmpty = !(b as Record<string, unknown>)[key];
+            const aEmpty = !a[key];
+            const bEmpty = !b[key];
             if (aEmpty !== bEmpty) return aEmpty ? 1 : -1;
             return b.count - a.count;
           });
