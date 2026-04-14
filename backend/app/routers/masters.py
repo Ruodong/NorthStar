@@ -86,6 +86,13 @@ async def summary() -> ApiResponse:
 EMPTY_SENTINEL = "__EMPTY__"
 
 
+def _parse_multi(val: Optional[str]) -> list[str]:
+    """Split a comma-separated query param into a list of non-empty strings."""
+    if not val:
+        return []
+    return [v.strip() for v in val.split(",") if v.strip()]
+
+
 @router.get("/applications")
 async def list_applications(
     q: Optional[str] = None,
@@ -98,7 +105,8 @@ async def list_applications(
     """List applications from the full CMDB (ref_application).
 
     LEFT JOINs ref_application_tco for budget data. Apps without TCO
-    show budget/actual as null. Default sort: name ASC.
+    show budget/actual as null. Filters accept comma-separated multi-values.
+    Default sort: budget_k DESC (nulls last).
     """
     where = []
     args: list = []
@@ -108,17 +116,32 @@ async def list_applications(
             f"(a.name ILIKE ${len(args)} OR a.app_id ILIKE ${len(args)}"
             f" OR a.app_full_name ILIKE ${len(args)})"
         )
-    if status == EMPTY_SENTINEL:
-        where.append("(a.status IS NULL OR a.status = '')")
-    elif status:
-        args.append(status)
-        where.append(f"a.status = ${len(args)}")
-    if app_ownership:
-        args.append(app_ownership)
-        where.append(f"a.app_ownership = ${len(args)}")
-    if portfolio_mgt:
-        args.append(portfolio_mgt)
-        where.append(f"a.portfolio_mgt = ${len(args)}")
+
+    # Status — supports multi-value + __EMPTY__ sentinel
+    status_vals = _parse_multi(status)
+    if status_vals:
+        has_empty = EMPTY_SENTINEL in status_vals
+        real_vals = [v for v in status_vals if v != EMPTY_SENTINEL]
+        parts = []
+        if real_vals:
+            args.append(real_vals)
+            parts.append(f"a.status = ANY(${len(args)}::text[])")
+        if has_empty:
+            parts.append("(a.status IS NULL OR a.status = '')")
+        where.append(f"({' OR '.join(parts)})")
+
+    # Ownership — multi-value
+    own_vals = _parse_multi(app_ownership)
+    if own_vals:
+        args.append(own_vals)
+        where.append(f"a.app_ownership = ANY(${len(args)}::text[])")
+
+    # Portfolio — multi-value
+    port_vals = _parse_multi(portfolio_mgt)
+    if port_vals:
+        args.append(port_vals)
+        where.append(f"a.portfolio_mgt = ANY(${len(args)}::text[])")
+
     where_clause = ("WHERE " + " AND ".join(where)) if where else ""
     args.extend([limit, offset])
     rows = await pg_client.fetch(
@@ -137,7 +160,7 @@ async def list_applications(
         FROM northstar.ref_application a
         LEFT JOIN northstar.ref_application_tco t ON t.app_id = a.app_id
         {where_clause}
-        ORDER BY a.name ASC NULLS LAST, a.app_id
+        ORDER BY t.budget_k DESC NULLS LAST, a.name ASC NULLS LAST, a.app_id
         LIMIT ${len(args) - 1} OFFSET ${len(args)}
         """,
         *args,

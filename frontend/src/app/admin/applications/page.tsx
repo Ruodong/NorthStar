@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Pager } from "@/components/Pager";
 
 interface AppRow {
@@ -20,6 +20,13 @@ interface AppRow {
 interface ListResult {
   total: number;
   rows: AppRow[];
+}
+
+interface FilterCount {
+  status?: string;
+  ownership?: string;
+  portfolio?: string;
+  count: number;
 }
 
 const PAGE_SIZE = 50;
@@ -51,29 +58,109 @@ function formatMoney(k: number | null): string {
   return `$${(k / 1000).toFixed(2)}M`;
 }
 
-interface StatusCount {
-  status: string;
-  count: number;
+/* ── Multi-select pill toggle ─────────────────────────────── */
+function PillGroup({
+  options,
+  selected,
+  onToggle,
+  colorMap,
+  labelKey,
+}: {
+  options: FilterCount[];
+  selected: string[];
+  onToggle: (v: string) => void;
+  colorMap: Record<string, string>;
+  labelKey: "status" | "ownership" | "portfolio";
+}) {
+  return (
+    <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
+      {options.map((o) => {
+        const raw = o[labelKey] ?? "";
+        const value = raw || "__EMPTY__";
+        const label = raw || "(empty)";
+        const active = selected.includes(value);
+        const color = colorMap[raw] || "#5f6a80";
+        return (
+          <button
+            key={value}
+            onClick={() => onToggle(value)}
+            style={{
+              border: `1px solid ${active ? color : "var(--border)"}`,
+              background: active ? `${color}26` : "transparent",
+              color: active ? color : "var(--text-dim)",
+              padding: "3px 10px",
+              borderRadius: 4,
+              fontSize: 12,
+              cursor: "pointer",
+              fontFamily: "var(--font-body)",
+              transition: "all 0.15s",
+              whiteSpace: "nowrap",
+              lineHeight: "18px",
+            }}
+          >
+            {label}{" "}
+            <span style={{ opacity: 0.5, fontSize: 11 }}>
+              {o.count.toLocaleString()}
+            </span>
+          </button>
+        );
+      })}
+      {selected.length > 0 && (
+        <button
+          onClick={() => {
+            // clear all
+            selected.forEach((v) => onToggle(v));
+          }}
+          style={{
+            border: "none",
+            background: "transparent",
+            color: "var(--text-dim)",
+            fontSize: 11,
+            cursor: "pointer",
+            padding: "3px 6px",
+            opacity: 0.6,
+          }}
+          title="Clear filter"
+        >
+          ✕
+        </button>
+      )}
+    </div>
+  );
 }
 
 export default function AdminApplications() {
   const [q, setQ] = useState("");
   const [qDebounced, setQDebounced] = useState("");
-  const [status, setStatus] = useState("");
-  const [ownership, setOwnership] = useState("");
-  const [portfolio, setPortfolio] = useState("");
-  const [statuses, setStatuses] = useState<StatusCount[]>([]);
+
+  // Multi-select filter states
+  const [selStatus, setSelStatus] = useState<string[]>([]);
+  const [selOwnership, setSelOwnership] = useState<string[]>(["CIO/CDTO"]);
+  const [selPortfolio, setSelPortfolio] = useState<string[]>([]);
+
+  // Filter option lists (from API)
+  const [statusOpts, setStatusOpts] = useState<FilterCount[]>([]);
+  const [ownershipOpts, setOwnershipOpts] = useState<FilterCount[]>([]);
+  const [portfolioOpts, setPortfolioOpts] = useState<FilterCount[]>([]);
+
   const [page, setPage] = useState(0);
   const [data, setData] = useState<ListResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // Fetch filter options on mount
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch("/api/masters/applications/statuses", { cache: "no-store" });
-        const j = await r.json();
-        if (j.success) setStatuses(j.data);
+        const [sRes, oRes, pRes] = await Promise.all([
+          fetch("/api/masters/applications/statuses", { cache: "no-store" }),
+          fetch("/api/masters/applications/ownerships", { cache: "no-store" }),
+          fetch("/api/masters/applications/portfolios", { cache: "no-store" }),
+        ]);
+        const [sJ, oJ, pJ] = await Promise.all([sRes.json(), oRes.json(), pRes.json()]);
+        if (sJ.success) setStatusOpts(sJ.data);
+        if (oJ.success) setOwnershipOpts(oJ.data);
+        if (pJ.success) setPortfolioOpts(pJ.data);
       } catch {
         // non-blocking
       }
@@ -96,9 +183,9 @@ export default function AdminApplications() {
       try {
         const params = new URLSearchParams();
         if (qDebounced) params.set("q", qDebounced);
-        if (status) params.set("status", status);
-        if (ownership) params.set("app_ownership", ownership);
-        if (portfolio) params.set("portfolio_mgt", portfolio);
+        if (selStatus.length) params.set("status", selStatus.join(","));
+        if (selOwnership.length) params.set("app_ownership", selOwnership.join(","));
+        if (selPortfolio.length) params.set("portfolio_mgt", selPortfolio.join(","));
         params.set("limit", String(PAGE_SIZE));
         params.set("offset", String(page * PAGE_SIZE));
         const r = await fetch(`/api/masters/applications?${params}`, { cache: "no-store" });
@@ -114,7 +201,23 @@ export default function AdminApplications() {
     return () => {
       cancelled = true;
     };
-  }, [qDebounced, status, ownership, portfolio, page]);
+  }, [qDebounced, selStatus, selOwnership, selPortfolio, page]);
+
+  const toggle = useCallback(
+    (
+      setter: React.Dispatch<React.SetStateAction<string[]>>,
+    ) =>
+      (v: string) => {
+        setter((prev) => {
+          const next = prev.includes(v)
+            ? prev.filter((x) => x !== v)
+            : [...prev, v];
+          setPage(0);
+          return next;
+        });
+      },
+    [],
+  );
 
   const total = data?.total ?? 0;
   const maxPage = Math.max(0, Math.ceil(total / PAGE_SIZE) - 1);
@@ -127,6 +230,7 @@ export default function AdminApplications() {
         Enriched with TCO budget data where available.
       </p>
 
+      {/* Search + result count */}
       <div className="toolbar">
         <input
           placeholder="Search by name or app ID (e.g. A003559, EAM)…"
@@ -134,38 +238,6 @@ export default function AdminApplications() {
           onChange={(e) => setQ(e.target.value)}
           style={{ minWidth: 320 }}
         />
-        <select
-          value={status}
-          onChange={(e) => {
-            setStatus(e.target.value);
-            setPage(0);
-          }}
-        >
-          <option value="">All statuses</option>
-          {statuses.map((s) => (
-            <option key={s.status || "__EMPTY__"} value={s.status || "__EMPTY__"}>
-              {s.status || "(empty)"} ({s.count.toLocaleString()})
-            </option>
-          ))}
-        </select>
-        <select
-          value={ownership}
-          onChange={(e) => { setOwnership(e.target.value); setPage(0); }}
-        >
-          <option value="">All ownership</option>
-          {Object.keys(OWNERSHIP_COLORS).map((o) => (
-            <option key={o} value={o}>{o}</option>
-          ))}
-        </select>
-        <select
-          value={portfolio}
-          onChange={(e) => { setPortfolio(e.target.value); setPage(0); }}
-        >
-          <option value="">All portfolio</option>
-          {Object.keys(PORTFOLIO_COLORS).map((p) => (
-            <option key={p} value={p}>{p}</option>
-          ))}
-        </select>
         <div style={{ flex: 1 }} />
         <div
           style={{
@@ -175,6 +247,77 @@ export default function AdminApplications() {
           }}
         >
           {loading ? "loading…" : `${total.toLocaleString()} results`}
+        </div>
+      </div>
+
+      {/* Filter pill groups */}
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+          marginBottom: 12,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span
+            style={{
+              fontSize: 11,
+              color: "var(--text-dim)",
+              fontFamily: "var(--font-mono)",
+              minWidth: 70,
+              textAlign: "right",
+            }}
+          >
+            Status
+          </span>
+          <PillGroup
+            options={statusOpts}
+            selected={selStatus}
+            onToggle={toggle(setSelStatus)}
+            colorMap={STATUS_COLORS}
+            labelKey="status"
+          />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span
+            style={{
+              fontSize: 11,
+              color: "var(--text-dim)",
+              fontFamily: "var(--font-mono)",
+              minWidth: 70,
+              textAlign: "right",
+            }}
+          >
+            Ownership
+          </span>
+          <PillGroup
+            options={ownershipOpts}
+            selected={selOwnership}
+            onToggle={toggle(setSelOwnership)}
+            colorMap={OWNERSHIP_COLORS}
+            labelKey="ownership"
+          />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span
+            style={{
+              fontSize: 11,
+              color: "var(--text-dim)",
+              fontFamily: "var(--font-mono)",
+              minWidth: 70,
+              textAlign: "right",
+            }}
+          >
+            Portfolio
+          </span>
+          <PillGroup
+            options={portfolioOpts}
+            selected={selPortfolio}
+            onToggle={toggle(setSelPortfolio)}
+            colorMap={PORTFOLIO_COLORS}
+            labelKey="portfolio"
+          />
         </div>
       </div>
 
