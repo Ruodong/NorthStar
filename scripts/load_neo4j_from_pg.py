@@ -26,9 +26,14 @@ Pipeline:
     northstar.ref_request               (project metadata per review request)
     northstar.confluence_page           (Confluence page mirror)
     northstar.confluence_attachment     (Confluence attachment mirror)
+    northstar.ref_deployment_*          (server, container, database, storage)
+    northstar.ref_employee              (owner/team lookup)
   → Neo4j: :Project :Application :Diagram :ConfluencePage
+           :Server :Container :Database :ObjectStorage :NAS
+           :Team :Person
            + INVESTS_IN + INTEGRATES_WITH + HAS_DIAGRAM + DESCRIBED_BY
            + HAS_CONFLUENCE_PAGE + HAS_REVIEW_PAGE
+           + DEPLOYED_ON + OWNED_BY
 
 Usage (from ~/NorthStar on 71):
     set -a && source .env && set +a
@@ -956,6 +961,268 @@ def main() -> int:
                             project_id=pid,
                         )
                         stats["has_review_page_edges"] += 1
+
+            # ================================================================
+            # DEPLOYED_ON — Infrastructure nodes + edges from PG deployment tables
+            # ================================================================
+            # Creates :Server, :Container, :Database, :ObjectStorage, :NAS nodes
+            # and links them to :Application via DEPLOYED_ON edges. Each infra
+            # node carries city, env (Production/Non-Production), and type info.
+            logger.info("loading deployment data (DEPLOYED_ON)...")
+            stats.setdefault("infra_servers", 0)
+            stats.setdefault("infra_containers", 0)
+            stats.setdefault("infra_databases", 0)
+            stats.setdefault("infra_oss", 0)
+            stats.setdefault("infra_nas", 0)
+            stats.setdefault("deployed_on_edges", 0)
+
+            # Servers (VM/PM)
+            try:
+                with src.cursor() as cur:
+                    cur.execute("""
+                        SELECT name, app_id, device_type, is_virtualized,
+                               "City" AS city, landscape, operational_status
+                        FROM northstar.ref_deployment_server
+                        WHERE app_id IS NOT NULL AND name IS NOT NULL
+                    """)
+                    dep_servers = cur.fetchall()
+            except psycopg.errors.UndefinedTable:
+                dep_servers = []
+                src.rollback()
+
+            for s in dep_servers:
+                virt = (s.get("is_virtualized") or "").lower()
+                infra_type = "Physical" if "physical" in virt else "Virtual"
+                env = "Production" if (s.get("landscape") or "").lower() == "production" else (
+                    "Non-Production" if s.get("landscape") else "Unknown"
+                )
+                ns.run("""
+                    MERGE (i:Server {name: $name})
+                    SET i.city = $city, i.env = $env,
+                        i.infra_type = $infra_type,
+                        i.operational_status = $op_status,
+                        i.last_updated = $now
+                """, name=s["name"], city=s.get("city") or "",
+                    env=env, infra_type=infra_type,
+                    op_status=s.get("operational_status") or "", now=now_iso())
+                ns.run("""
+                    MATCH (a:Application {app_id: $app_id})
+                    MATCH (i:Server {name: $name})
+                    MERGE (a)-[:DEPLOYED_ON]->(i)
+                """, app_id=s["app_id"], name=s["name"])
+                stats["infra_servers"] += 1
+                stats["deployed_on_edges"] += 1
+
+            # Containers (K8s)
+            try:
+                with src.cursor() as cur:
+                    cur.execute("""
+                        SELECT name, app_id, cluster_name, operational_status
+                        FROM northstar.ref_deployment_container
+                        WHERE app_id IS NOT NULL AND name IS NOT NULL
+                    """)
+                    dep_containers = cur.fetchall()
+            except psycopg.errors.UndefinedTable:
+                dep_containers = []
+                src.rollback()
+
+            for c in dep_containers:
+                cluster = c.get("cluster_name") or ""
+                env = "Production" if "-PRD" in cluster.upper() else (
+                    "Non-Production" if any(x in cluster.upper() for x in ["-STG-", "-UAT-", "-DEV-", "-QA-"]) else "Unknown"
+                )
+                ns.run("""
+                    MERGE (i:Container {name: $name})
+                    SET i.cluster_name = $cluster, i.env = $env,
+                        i.operational_status = $op_status,
+                        i.last_updated = $now
+                """, name=c["name"], cluster=cluster, env=env,
+                    op_status=c.get("operational_status") or "", now=now_iso())
+                ns.run("""
+                    MATCH (a:Application {app_id: $app_id})
+                    MATCH (i:Container {name: $name})
+                    MERGE (a)-[:DEPLOYED_ON]->(i)
+                """, app_id=c["app_id"], name=c["name"])
+                stats["infra_containers"] += 1
+                stats["deployed_on_edges"] += 1
+
+            # Databases
+            try:
+                with src.cursor() as cur:
+                    cur.execute("""
+                        SELECT name, app_id, "className" AS db_type, version,
+                               host_name, used_for, operational_status
+                        FROM northstar.ref_deployment_database
+                        WHERE app_id IS NOT NULL AND name IS NOT NULL
+                    """)
+                    dep_dbs = cur.fetchall()
+            except psycopg.errors.UndefinedTable:
+                dep_dbs = []
+                src.rollback()
+
+            for d in dep_dbs:
+                env = "Production" if (d.get("used_for") or "").lower() == "production" else (
+                    "Non-Production" if d.get("used_for") else "Unknown"
+                )
+                ns.run("""
+                    MERGE (i:Database {name: $name})
+                    SET i.db_type = $db_type, i.version = $version,
+                        i.host_name = $host_name, i.env = $env,
+                        i.operational_status = $op_status,
+                        i.last_updated = $now
+                """, name=d["name"], db_type=d.get("db_type") or "",
+                    version=d.get("version") or "", host_name=d.get("host_name") or "",
+                    env=env, op_status=d.get("operational_status") or "", now=now_iso())
+                ns.run("""
+                    MATCH (a:Application {app_id: $app_id})
+                    MATCH (i:Database {name: $name})
+                    MERGE (a)-[:DEPLOYED_ON]->(i)
+                """, app_id=d["app_id"], name=d["name"])
+                stats["infra_databases"] += 1
+                stats["deployed_on_edges"] += 1
+
+            # Object Storage
+            try:
+                with src.cursor() as cur:
+                    cur.execute("""
+                        SELECT name, app_id, location AS city, landscape, operational_status
+                        FROM northstar.ref_deployment_object_storage
+                        WHERE app_id IS NOT NULL AND name IS NOT NULL
+                    """)
+                    dep_oss = cur.fetchall()
+            except psycopg.errors.UndefinedTable:
+                dep_oss = []
+                src.rollback()
+
+            for o in dep_oss:
+                env = "Production" if (o.get("landscape") or "").lower() == "production" else (
+                    "Non-Production" if o.get("landscape") else "Unknown"
+                )
+                ns.run("""
+                    MERGE (i:ObjectStorage {name: $name})
+                    SET i.city = $city, i.env = $env,
+                        i.operational_status = $op_status,
+                        i.last_updated = $now
+                """, name=o["name"], city=o.get("city") or "", env=env,
+                    op_status=o.get("operational_status") or "", now=now_iso())
+                ns.run("""
+                    MATCH (a:Application {app_id: $app_id})
+                    MATCH (i:ObjectStorage {name: $name})
+                    MERGE (a)-[:DEPLOYED_ON]->(i)
+                """, app_id=o["app_id"], name=o["name"])
+                stats["infra_oss"] += 1
+                stats["deployed_on_edges"] += 1
+
+            # NAS
+            try:
+                with src.cursor() as cur:
+                    cur.execute("""
+                        SELECT name, app_id, location AS city, landscape, operational_status
+                        FROM northstar.ref_deployment_nas
+                        WHERE app_id IS NOT NULL AND name IS NOT NULL
+                    """)
+                    dep_nas = cur.fetchall()
+            except psycopg.errors.UndefinedTable:
+                dep_nas = []
+                src.rollback()
+
+            for n in dep_nas:
+                env = "Production" if (n.get("landscape") or "").lower() == "production" else (
+                    "Non-Production" if n.get("landscape") else "Unknown"
+                )
+                ns.run("""
+                    MERGE (i:NAS {name: $name})
+                    SET i.city = $city, i.env = $env,
+                        i.operational_status = $op_status,
+                        i.last_updated = $now
+                """, name=n["name"], city=n.get("city") or "", env=env,
+                    op_status=n.get("operational_status") or "", now=now_iso())
+                ns.run("""
+                    MATCH (a:Application {app_id: $app_id})
+                    MATCH (i:NAS {name: $name})
+                    MERGE (a)-[:DEPLOYED_ON]->(i)
+                """, app_id=n["app_id"], name=n["name"])
+                stats["infra_nas"] += 1
+                stats["deployed_on_edges"] += 1
+
+            logger.info("  infra nodes: servers=%d containers=%d databases=%d oss=%d nas=%d edges=%d",
+                        stats["infra_servers"], stats["infra_containers"],
+                        stats["infra_databases"], stats["infra_oss"],
+                        stats["infra_nas"], stats["deployed_on_edges"])
+
+            # ================================================================
+            # OWNED_BY — Team/Owner nodes + edges from CMDB ownership fields
+            # ================================================================
+            # Creates :Team nodes (by tower/domain) and links :Application → :Team.
+            # Also creates :Person nodes for named owners and links :Application → :Person.
+            logger.info("loading ownership data (OWNED_BY)...")
+            stats.setdefault("teams_merged", 0)
+            stats.setdefault("persons_merged", 0)
+            stats.setdefault("owned_by_edges", 0)
+
+            with src.cursor() as cur:
+                cur.execute("""
+                    SELECT app_id, app_ownership,
+                           app_owner_tower, app_owner_domain,
+                           owned_by, app_it_owner, app_dt_owner, app_operation_owner,
+                           e_o.name AS owned_by_name,
+                           e_it.name AS it_owner_name,
+                           e_dt.name AS dt_owner_name,
+                           e_op.name AS op_owner_name
+                    FROM northstar.ref_application a
+                    LEFT JOIN northstar.ref_employee e_o  ON e_o.itcode  = a.owned_by
+                    LEFT JOIN northstar.ref_employee e_it ON e_it.itcode = a.app_it_owner
+                    LEFT JOIN northstar.ref_employee e_dt ON e_dt.itcode = a.app_dt_owner
+                    LEFT JOIN northstar.ref_employee e_op ON e_op.itcode = a.app_operation_owner
+                """)
+                ownership_rows = cur.fetchall()
+
+            for r in ownership_rows:
+                app_id = r["app_id"]
+                tower = (r.get("app_owner_tower") or "").strip()
+                domain = (r.get("app_owner_domain") or "").strip()
+
+                # Team node (tower + domain combination)
+                if tower:
+                    team_id = f"{tower}|{domain}" if domain else tower
+                    ns.run("""
+                        MERGE (t:Team {team_id: $team_id})
+                        SET t.tower = $tower, t.domain = $domain,
+                            t.last_updated = $now
+                    """, team_id=team_id, tower=tower, domain=domain, now=now_iso())
+                    ns.run("""
+                        MATCH (a:Application {app_id: $app_id})
+                        MATCH (t:Team {team_id: $team_id})
+                        MERGE (a)-[:OWNED_BY]->(t)
+                    """, app_id=app_id, team_id=team_id)
+                    stats["teams_merged"] += 1
+                    stats["owned_by_edges"] += 1
+
+                # Person nodes for named owners
+                for itcode_field, name_field, role in [
+                    ("owned_by", "owned_by_name", "owner"),
+                    ("app_it_owner", "it_owner_name", "it_owner"),
+                    ("app_dt_owner", "dt_owner_name", "dt_owner"),
+                    ("app_operation_owner", "op_owner_name", "operations_owner"),
+                ]:
+                    itcode = (r.get(itcode_field) or "").strip()
+                    pname = (r.get(name_field) or "").strip()
+                    if itcode:
+                        ns.run("""
+                            MERGE (p:Person {itcode: $itcode})
+                            SET p.name = $name, p.last_updated = $now
+                        """, itcode=itcode, name=pname, now=now_iso())
+                        ns.run("""
+                            MATCH (a:Application {app_id: $app_id})
+                            MATCH (p:Person {itcode: $itcode})
+                            MERGE (a)-[:OWNED_BY {role: $role}]->(p)
+                        """, app_id=app_id, itcode=itcode, role=role)
+                        stats["persons_merged"] += 1
+                        stats["owned_by_edges"] += 1
+
+            logger.info("  ownership: teams=%d persons=%d edges=%d",
+                        stats["teams_merged"], stats["persons_merged"],
+                        stats["owned_by_edges"])
 
             # ================================================================
             # Post-load: applications_history snapshots + ingestion_diffs
