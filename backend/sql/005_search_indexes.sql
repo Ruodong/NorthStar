@@ -20,8 +20,14 @@
 
 SET search_path TO northstar, public;
 
--- Required extensions (no-op if already installed)
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
+-- Required extensions (no-op if already installed).
+--
+-- Install into `public` explicitly so the migration works in both
+-- dedicated-DB (local Docker) and shared-DB (e.g. corp `dxp_config_nacos`
+-- where pg_trgm already lives in public) deployments. Unqualified
+-- `gin_trgm_ops` references below resolve via search_path regardless of
+-- which schema ultimately owns the extension.
+CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;
 
 -- =============================================================================
 -- ref_application search indexes

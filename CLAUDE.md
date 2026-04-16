@@ -141,6 +141,7 @@ NorthStar does **NOT** use Alembic. SQL migrations are flat files in `backend/sq
 4. **New columns MUST be nullable or have a `DEFAULT`** — existing data must keep working.
 5. **All migrations SET `search_path TO northstar, public;`** at the top — the backend pool doesn't set it globally.
 6. **No data migrations in SQL files** — if you need to backfill a value, write a Python script in `scripts/` instead. Keep DDL and data seeding separate.
+7. **Extensions MUST pin to `public`** — any `CREATE EXTENSION` line MUST use `WITH SCHEMA public` explicitly (e.g. `CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;`). NorthStar may be deployed in a dedicated DB (local Docker) OR co-tenant in a shared DB (e.g. corp `dxp_config_nacos` where pg_trgm already lives in `public`). Without `WITH SCHEMA public`, Postgres places the extension in the first `search_path` schema the user can `CREATE` in, which lands it in `northstar` locally but would collide with existing `public.pg_trgm` on shared DBs. Operator classes (`gin_trgm_ops`) must stay **unqualified** inside index DDL so they resolve via `search_path` regardless of actual location.
 
 **Pre-Edit Gate for schema changes:** Before any `backend/sql/*.sql` Edit/Write, the CLOSED-LOOP GATE block must include:
 
