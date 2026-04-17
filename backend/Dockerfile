@@ -17,6 +17,13 @@ COPY app ./app
 # created, etc.). Migrations are required to be idempotent and additive
 # — see CLAUDE.md § Schema Evolution Rules.
 COPY sql ./sql
+# Ship Alembic config + version files so `docker exec backend alembic ...`
+# works and env-sync can run forward migrations against local + 195 from
+# inside the container. Baseline (`001_baseline`) is auto-stamped by
+# ensure_sql_migrations(); everything from `002_*` onwards is applied via
+# `alembic upgrade head`.
+COPY alembic.ini ./alembic.ini
+COPY alembic ./alembic
 
 EXPOSE 8001
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]
