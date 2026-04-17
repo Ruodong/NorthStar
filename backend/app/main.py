@@ -21,7 +21,7 @@ from app.routers import (
     search,
     whats_new,
 )
-from app.services import neo4j_client, pg_client
+from app.services import graph_client, pg_client
 
 # SQL migrations directory — all *.sql files here are executed in alphabetical
 # order on backend startup. Migrations must be idempotent (CREATE TABLE IF NOT
@@ -31,7 +31,15 @@ SQL_DIR = Path(__file__).resolve().parent.parent / "sql"
 
 
 async def ensure_sql_migrations() -> None:
-    """Apply all backend/sql/*.sql files on startup. Idempotent by convention."""
+    """Apply all backend/sql/*.sql files on startup. Idempotent by convention.
+
+    After the flat SQL files run, also ensure the Alembic version-tracking
+    table (`northstar.alembic_version`) exists and is stamped at the
+    baseline `001_baseline`. This is the bridge from "flat-SQL-only" to
+    Alembic-managed schema — see backend/alembic/versions/001_baseline.py.
+    New migrations from `002_*` onwards run via `alembic upgrade head`
+    (NOT auto-applied at startup; deliberately gated through env-sync).
+    """
     if not SQL_DIR.is_dir():
         logger.warning("SQL migrations dir not found: %s", SQL_DIR)
         return
@@ -42,9 +50,24 @@ async def ensure_sql_migrations() -> None:
             await pg_client.execute_script(sql)
             logger.info("applied SQL migration: %s", f.name)
         except Exception as exc:  # noqa: BLE001
-            # Log and continue — don't block startup on a single bad migration.
-            # Idempotent CREATE/ALTER IF NOT EXISTS should never raise in practice.
             logger.error("SQL migration %s failed: %s", f.name, exc)
+
+    # Alembic baseline stamp — idempotent. Creates table if missing,
+    # inserts '001_baseline' if no row, leaves it alone if anything is set.
+    try:
+        await pg_client.execute_script(
+            """
+            CREATE TABLE IF NOT EXISTS northstar.alembic_version (
+                version_num VARCHAR(32) PRIMARY KEY
+            );
+            INSERT INTO northstar.alembic_version (version_num)
+            SELECT '001_baseline'
+            WHERE NOT EXISTS (SELECT 1 FROM northstar.alembic_version);
+            """
+        )
+        logger.info("alembic_version stamped (baseline=001_baseline if absent)")
+    except Exception as exc:  # noqa: BLE001
+        logger.error("alembic_version bootstrap failed: %s", exc)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -81,17 +104,17 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         logger.error("Postgres bootstrap failed: %s", exc)
     try:
-        await neo4j_client.connect()
-        await neo4j_client.ensure_schema()
-        logger.info("Neo4j ready; schema constraints/indexes ensured")
+        await graph_client.connect()
+        await graph_client.ensure_schema()
+        logger.info("AGE graph ready; labels + property indexes ensured")
     except Exception as exc:  # noqa: BLE001
-        logger.error("Neo4j bootstrap failed: %s", exc)
+        logger.error("AGE graph bootstrap failed: %s", exc)
     try:
         _purge_stale_preview_tmp()
     except Exception as exc:  # noqa: BLE001
         logger.error("preview tmp cleanup failed: %s", exc)
     yield
-    await neo4j_client.close()
+    await graph_client.close()
     await pg_client.close()
 
 
@@ -125,7 +148,7 @@ async def root() -> dict:
 @app.get("/health")
 async def health() -> dict:
     try:
-        await neo4j_client.run_query("RETURN 1 AS ok")
-        return {"status": "ok", "neo4j": "up"}
+        await graph_client.run_query("RETURN 1 AS ok")
+        return {"status": "ok", "graph": "up"}
     except Exception as exc:  # noqa: BLE001
-        return {"status": "degraded", "neo4j": f"down: {exc}"}
+        return {"status": "degraded", "graph": f"down: {exc}"}

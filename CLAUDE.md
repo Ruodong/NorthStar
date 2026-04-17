@@ -29,25 +29,28 @@ NorthStar is Lenovo's internal IT architecture reference tool. It builds a query
 - Chinese is used ONLY for conversational prose; all technical vocabulary, operations, and concepts prefer English even within Chinese responses
 - When language is ambiguous, default to English
 
-## Data Architecture (Two-Layer)
+## Data Architecture (Single DB, Two Logical Layers)
 
-NorthStar has a deliberate two-layer data model. Understand this before touching the data path.
+NorthStar has ONE database — Postgres — organised into two logical layers.
+The graph lives inside PG as an **Apache AGE** extension (migrated from a
+standalone Neo4j container on 2026-04-17). Understand this before touching
+the data path.
 
-**Layer 1 — Postgres (System of Record):**
-- Container `northstar-postgres`, host port 5434, schema `northstar`
+**Relational layer (`northstar.*` schema):**
+- Container `northstar-postgres`, host port 5434, image `apache/age:PG16_latest` (postgres:16 + AGE extension).
 - Mirrored master data: `ref_application` (CMDB), `ref_project` (MSPO), `ref_employee`, `ref_request`, `ref_diagram` (with raw drawio_xml), `ref_application_tco`
 - Confluence raw data: `confluence_page`, `confluence_attachment`
 - NorthStar-owned: `applications_history`, `ingestion_diffs`, `manual_app_aliases`, `pending_app_merge`, `app_normalized_name`
 - **Writes come from:** `scripts/sync_from_egm.py` (master data from EGM/EAM, host-side with VPN), `scripts/scan_confluence.py` (Confluence pages, host-side), `/api/admin/aliases/*` (human review decisions), backend `ensure_sql_migrations()` (schema)
 
-**Layer 2 — Neo4j (Derived Projection):**
-- Container `northstar-neo4j`, host port 7687, no schemas (Neo4j CE)
+**Graph layer (`ns_graph` AGE graph, physically in `ns_graph` schema inside the same PG):**
+- openCypher embedded in SQL via `ag_catalog.cypher(...)`. Bootstrap DDL in `backend/sql/018_enable_age.sql`; labels + property indexes in `graph_client.ensure_schema()` on every backend startup.
 - Nodes: `:Application`, `:Project`, `:Diagram`, `:ConfluencePage`
 - Relationships: `INVESTS_IN`, `INTEGRATES_WITH`, `HAS_DIAGRAM`, `DESCRIBED_BY`, `HAS_CONFLUENCE_PAGE`, `HAS_REVIEW_PAGE`
-- **Writes come from ONE path:** `scripts/load_neo4j_from_pg.py` (idempotent, rebuild-from-PG). Backend does NOT write Neo4j outside the loader.
-- `scripts/ingest.py` and `scripts/load_neo4j_from_confluence.py` exist but are legacy alternate loaders — use them only for ad-hoc experiments, not as the primary path.
+- Backend access: `backend/app/services/graph_client.py` (async, asyncpg). Host-side access: `scripts/_age_session_adapter.py` (sync, psycopg).
+- **Writes come from ONE path:** `scripts/load_age_from_pg.py` (idempotent, rebuild-from-PG). Backend does NOT write the graph outside the loader. Exception: `backend/app/services/ingestion.py` (interactive Confluence ingest) writes via `graph_client.run_write` — legacy, on cleanup list.
 
-**Invariant: Neo4j is a projection of Postgres.** If you find yourself writing Neo4j from the FastAPI routers, stop and rethink. Data flows PG → loader → Neo4j, never the reverse.
+**Invariant: the graph is a projection of the relational layer.** If you find yourself writing the graph from the FastAPI routers, stop and rethink. Data flows PG tables → loader → AGE graph, never the reverse.
 
 ## Ontology Invariants (MANDATORY — DO NOT VIOLATE)
 
@@ -61,7 +64,7 @@ These rules were locked in during the 2026-04-10 ontology repositioning. They ov
 
 4. **`:Diagram` is unified across EGM and Confluence sources.** The `source_systems` array property tracks provenance. The loader soft-matches via `diagram_identity_key(file_name, project_id)`. Diagrams without parseable graph data (`has_graph_data=false`) — image/PDF tech arch — still get nodes so `:Application -[:DESCRIBED_BY]-> :Diagram` can link them.
 
-5. **App search surface = Postgres, not Neo4j.** PG holds the full CMDB (3168 apps) and trigger projects (2356), while Neo4j only holds what's been extracted from diagrams. `/api/search` queries PG via `pg_trgm` + `tsvector`. Architects can search for an app that doesn't have a Neo4j node and still land on the App Detail Page; the page gracefully degrades when Neo4j data is absent.
+5. **App search surface = Postgres relational tables, not the graph.** The `northstar.*` schema holds the full CMDB (3168 apps) and trigger projects (2356), while `ns_graph` only holds what's been extracted from diagrams. `/api/search` queries `ref_application` via `pg_trgm` + `tsvector`. Architects can search for an app that doesn't have a graph node and still land on the App Detail Page; the page gracefully degrades when graph data is absent.
 
 If you need to change any of the above, stop and ask the user. These are strategic commitments, not implementation details.
 
@@ -79,19 +82,17 @@ ssh northstar-server 'cd ~/NorthStar && git pull && docker compose up -d --build
 
 **Services on 71:**
 
-| Service    | Host port | URL                                   |
-|------------|-----------|---------------------------------------|
-| Frontend   | 3003      | http://192.168.68.71:3003             |
-| Backend    | 8001      | http://192.168.68.71:8001/docs        |
-| Neo4j UI   | 7474      | http://192.168.68.71:7474             |
-| Neo4j Bolt | 7687      | bolt://192.168.68.71:7687             |
-| Postgres   | 5434      | `psql -h 192.168.68.71 -p 5434 -U northstar` |
+| Service    | Host port | URL                                                      |
+|------------|-----------|----------------------------------------------------------|
+| Frontend   | 3003      | http://192.168.68.71:3003                                |
+| Backend    | 8001      | http://192.168.68.71:8001/docs                           |
+| Postgres   | 5434      | `psql -h 192.168.68.71 -p 5434 -U northstar` (includes AGE; graph = `ns_graph`) |
 
 **Rebuild rules:**
 - `docker compose up -d --build backend` — backend code changes (picks up new routers, new SQL migrations)
 - `docker compose up -d --build frontend` — frontend code changes
-- Neo4j data persists in the `neo4j_data` volume; PG data in `postgres_data`
-- Never `docker compose down -v` on 71 unless the user explicitly asks — that nukes both databases
+- All data (relational tables + AGE graph) persists in the `postgres_data` volume
+- Never `docker compose down -v` on 71 unless the user explicitly asks — that nukes the DB
 
 ## Closed-Loop Workflow (MANDATORY)
 
@@ -131,35 +132,45 @@ Skip only for: documentation-only changes, test-only changes, dependency version
 
 ## Schema Evolution Rules (MANDATORY)
 
-NorthStar does **NOT** use Alembic. SQL migrations are flat files in `backend/sql/` applied on backend container startup by `ensure_sql_migrations()` in `app/main.py`. This means migrations run EVERY startup, not just once.
+NorthStar uses a **two-layer migration model** as of 2026-04-17:
 
-**Rules for `backend/sql/NNN_*.sql` files:**
+- **Baseline (frozen)** — `backend/sql/001..018_*.sql`. Flat idempotent SQL applied on every backend startup by `ensure_sql_migrations()` in `app/main.py`. Do NOT add NEW flat SQL files; this layer is now the immutable baseline.
+- **Forward (Alembic)** — `backend/alembic/versions/NNN_*.py` from `002_*` onwards. Versioned via the `northstar.alembic_version` table (auto-stamped to `001_baseline` after the flat SQL runs). Forward migrations apply via `alembic upgrade head`, NOT auto-applied at startup — env-sync gates the rollout to local + 195.
 
-1. **Naming:** `NNN_short_description.sql` where NNN is a zero-padded 3-digit number, strictly monotonic. Conflicts are the author's responsibility — coordinate via git.
-2. **Idempotent ONLY:** Every DDL statement must use `IF NOT EXISTS` / `IF EXISTS`. `CREATE EXTENSION IF NOT EXISTS`, `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`. A non-idempotent migration will crash backend startup and keep crashing.
-3. **Additive only:** NEVER `DROP COLUMN`, `RENAME COLUMN`, `RENAME TABLE`, `ALTER TYPE`. If you need to change a column's semantics, add a new column, backfill, and switch readers — never destructively alter.
-4. **New columns MUST be nullable or have a `DEFAULT`** — existing data must keep working.
-5. **All migrations SET `search_path TO northstar, public;`** at the top — the backend pool doesn't set it globally.
-6. **No data migrations in SQL files** — if you need to backfill a value, write a Python script in `scripts/` instead. Keep DDL and data seeding separate.
-7. **Extensions MUST pin to `public`** — any `CREATE EXTENSION` line MUST use `WITH SCHEMA public` explicitly (e.g. `CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;`). NorthStar may be deployed in a dedicated DB (local Docker) OR co-tenant in a shared DB (e.g. corp `dxp_config_nacos` where pg_trgm already lives in `public`). Without `WITH SCHEMA public`, Postgres places the extension in the first `search_path` schema the user can `CREATE` in, which lands it in `northstar` locally but would collide with existing `public.pg_trgm` on shared DBs. Operator classes (`gin_trgm_ops`) must stay **unqualified** inside index DDL so they resolve via `search_path` regardless of actual location.
+**Why both?** The flat-SQL baseline is already deployed everywhere and idempotent — converting all 18 files to Alembic versions is high-risk, low-value churn. Alembic from `002_*` onwards gives us proper version tracking, rollback, and multi-DB targeting (env var override of DSN to point at 195).
 
-**Pre-Edit Gate for schema changes:** Before any `backend/sql/*.sql` Edit/Write, the CLOSED-LOOP GATE block must include:
+**Rules for the BASELINE layer (`backend/sql/001..018`):**
+
+1. **Frozen.** No new files added here. If you need to alter the baseline, write an Alembic migration that does it, never edit a baseline SQL file.
+2. **Existing rules still apply** for understanding what's there: idempotent (`IF NOT EXISTS` / `IF EXISTS`), additive only, nullable-or-default new columns, `SET search_path TO northstar, public;` at top, no data migrations, extensions pinned to `WITH SCHEMA public`.
+
+**Rules for the ALEMBIC layer (`backend/alembic/versions/NNN_*.py`):**
+
+1. **Naming:** `NNN_short_description.py`. NNN starts at `002` (since `001_baseline` is reserved). Strictly monotonic; conflicts are the author's responsibility — coordinate via git.
+2. **Both `upgrade()` and `downgrade()`** must be implemented. The `downgrade()` doesn't have to be perfectly reversible (data loss is acceptable for additive columns) but must be syntactically valid and not error.
+3. **Additive default** — same rule as baseline: prefer ADD COLUMN with default/nullable over destructive changes. If you must drop something, ensure all readers have already been switched off in code first.
+4. **`SET search_path TO northstar, public;`** still required inside `op.execute(...)` blocks; `env.py` sets it once but that's connection-scoped and Alembic may open new connections.
+5. **No data migrations in version files** — write Python scripts in `scripts/` for backfill. Keep DDL and data seeding separate.
+6. **Apply order**: env-sync runs `alembic upgrade head` against local first, then 195. Never push code that depends on a new migration before the migration is applied to 195.
+
+**Pre-Edit Gate for schema changes:** Before any new Alembic migration, the CLOSED-LOOP GATE block must include:
 
 ```
-│ Migration: backend/sql/NNN_xxx.sql              │
+│ Migration: backend/alembic/versions/NNN_xxx.py  │
+│ Layer: Alembic (forward)                        │
 │ Additive Only: Yes (explain what's added)       │
-│ Idempotent: Yes (all DDL uses IF NOT EXISTS)    │
+│ Reversible downgrade: Yes / No (justify if no)  │
 ```
 
-## Loader Rules (scripts/load_neo4j_from_pg.py)
+## Loader Rules (scripts/load_age_from_pg.py)
 
-The Neo4j loader is the ONLY authoritative writer to Neo4j. Rules:
+The AGE loader is the ONLY authoritative writer to the graph. Rules:
 
-1. **Always idempotent** — running `load_neo4j_from_pg.py --wipe` twice must produce identical Neo4j state. No order-dependent writes.
-2. **Read from PG, write to Neo4j** — never read from Confluence directly, never write back to PG except `applications_history` + `ingestion_diffs` (see What's New infra in `004_whats_new.sql`).
+1. **Always idempotent** — running `load_age_from_pg.py --wipe` twice must produce identical graph state. No order-dependent writes.
+2. **Read from PG relational tables, write to the AGE graph (same PG, different schema)** — never read from Confluence directly, never write back to relational tables except `applications_history` + `ingestion_diffs` (see What's New infra in `004_whats_new.sql`).
 3. **Preserve ontology invariants** (see Ontology Invariants above). The `MERGE (a:Application)` block must never `SET a.source_project_id` or `SET a.source_fiscal_year`.
 4. **Apply `manual_app_aliases`** — load the table once at start, pass to `derive_app_id()`, non-CMDB ids flow through the alias map.
-5. **Emit diffs** — after all Neo4j writes, call `write_history_and_diffs()` to snapshot and compare. Failures here must NOT break the loader; wrap in try/except and log.
+5. **Emit diffs** — after all graph writes, call `write_history_and_diffs()` to snapshot and compare. Failures here must NOT break the loader; wrap in try/except and log.
 6. **`projects_merged` is counted by unique set, not per-diagram.** Stats counts must reflect entities, not write operations.
 
 When editing the loader, re-read the top-of-file docstring and make sure your change doesn't silently break one of these rules. The loader is load-bearing for the entire product.
@@ -193,7 +204,7 @@ In QA / design-review mode, flag any code that doesn't match DESIGN.md.
 **Backend (FastAPI):**
 - All responses use **snake_case** JSON keys — do NOT map to camelCase. The frontend consumes snake_case directly.
 - Queries use asyncpg (PG) via `app/services/pg_client.py` (`fetch`, `fetchrow`, `fetchval`, `execute_script`).
-- Cypher queries use async Neo4j driver via `app/services/neo4j_client.py` (`run_query`, `run_write`).
+- Cypher queries use the AGE-backed graph client via `app/services/graph_client.py` (`run_query`, `run_write`). Same signature as the old Neo4j client; internally wraps Cypher in `SELECT * FROM ag_catalog.cypher('ns_graph', $$ ... $$) AS (...)`.
 - No auth, no RBAC — NorthStar is internal network only. Never add `require_permission()`-style guards without asking first.
 - Pydantic schemas live in `app/models/schemas.py`. Router responses wrap in `ApiResponse[T]` (`success`, `data`, `error`).
 - Routers in `app/routers/*.py`, registered in `app/main.py`.
@@ -206,7 +217,7 @@ In QA / design-review mode, flag any code that doesn't match DESIGN.md.
 - Font imports are Google Fonts (`Space Grotesk`, `Geist`, `JetBrains Mono`) loaded in `layout.tsx`.
 
 **Scripts:**
-- Host-side scripts (sync_from_egm, scan_confluence, load_neo4j_from_pg) run from `.venv-ingest` on 71 because the docker network can't reach EGM over VPN.
+- Host-side scripts (sync_from_egm, scan_confluence, load_age_from_pg) run from `.venv-ingest` on 71 because the docker network can't reach EGM over VPN.
 - Weekly automation: `scripts/weekly_sync.sh` wraps sync + loader + merge candidates. Cron-installed on 71.
 
 ## Plan Mode 规范
