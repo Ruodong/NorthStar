@@ -37,6 +37,13 @@ determines execution mode:|   sync_from_egm.py (VPN required)        |
 
 Device registry and service config: `scripts/envs/devices.json`
 
+## Skills are tracked
+
+`.claude/skills/` is committed to gitlab dev (see `.gitignore`). Skill changes
+flow through env-sync push like any code change — commit, push to gitlab,
+no docker rebuild needed. The other coding device gets the latest skills
+via `env-sync pull`.
+
 ## Execution Model
 
 On invocation, **immediately** (in the same message, before any user interaction):
@@ -180,6 +187,7 @@ After user approves the plan, execute each write action sequentially.
    - `frontend/**` changed → `docker compose up -d --build frontend`
    - `scripts/converter/**` changed → `docker compose up -d --build converter`
    - `docker-compose.yml` changed → `docker compose up -d --build`
+   - `.claude/**`, `scripts/envs/**`, `*.md`, `.gitignore` only → NO rebuild needed (config/skills/docs only)
    - If unsure → ask user which services to rebuild
 5. **Verify:** re-check `docker compose ps` after rebuild
 
