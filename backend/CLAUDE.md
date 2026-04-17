@@ -2,7 +2,7 @@
 
 See root `CLAUDE.md` for project-wide rules. This file only covers backend-specific conventions.
 
-- Entry: `app/main.py`, container port 8000 → host 8001
+- Entry: `app/main.py`. Backend runs in `network_mode: host` (so it can reach the corp Lenovo S3 endpoint via host VPN) — uvicorn binds directly to host port 8001. There is no internal-vs-host port mapping.
 - Two data backends: Postgres (`app/services/pg_client.py`) and Neo4j (`app/services/neo4j_client.py`)
 - Responses are **snake_case** — do NOT map to camelCase. Frontend consumes snake_case directly.
 - Wrap all responses in `ApiResponse[T]` from `app/models/schemas.py` (`{success, data, error}`).

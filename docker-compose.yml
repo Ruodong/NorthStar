@@ -43,12 +43,13 @@ services:
     image: northstar-converter
     container_name: northstar-converter
     restart: unless-stopped
-    # Intentionally NOT publishing a host port — the backend reaches
-    # this service only via the docker internal network at
-    # http://converter:8080. Exposing it to the host would allow
-    # arbitrary LAN clients to submit files for conversion.
-    expose:
-      - "8080"
+    # Bind ONLY to host loopback so the host-network backend can reach it
+    # at http://localhost:8080. We deliberately avoid 0.0.0.0:8080 because
+    # exposing the converter to LAN would let arbitrary clients submit
+    # files for conversion. Other containers on the bridge network still
+    # reach it as http://converter:8080 via the compose network.
+    ports:
+      - "127.0.0.1:8080:8080"
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=2)"]
       interval: 15s
@@ -61,8 +62,12 @@ services:
     image: northstar-backend
     container_name: northstar-backend
     restart: unless-stopped
-    ports:
-      - "8001:8000"
+    # network_mode: host so the backend can reach the corp Lenovo S3
+    # endpoint (oss2.xcloud.lenovo.com, only routable via host VPN).
+    # Bridge NAT silently drops these packets. Side effects:
+    #   - `ports:` is ignored; uvicorn binds directly to host:8001
+    #   - service-name DNS is gone; use localhost + published host ports
+    network_mode: host
     depends_on:
       neo4j:
         condition: service_healthy
@@ -71,10 +76,10 @@ services:
       converter:
         condition: service_healthy
     environment:
-      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_URI=bolt://localhost:7687
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=${NEO4J_PASSWORD}
-      - POSTGRES_DSN=postgresql://northstar:${POSTGRES_PASSWORD:-northstar_dev}@postgres:5432/northstar
+      - POSTGRES_DSN=postgresql://northstar:${POSTGRES_PASSWORD:-northstar_dev}@localhost:5434/northstar
       - CONFLUENCE_BASE_URL=${CONFLUENCE_BASE_URL:-}
       - CONFLUENCE_SEARCH_BASE_URL=${CONFLUENCE_SEARCH_BASE_URL:-}
       - CONFLUENCE_TOKEN=${CONFLUENCE_TOKEN:-}
@@ -95,7 +100,7 @@ services:
       - LOCAL_DRAWIO_ROOT=/data/local_drawio
       - ATTACHMENT_ROOT=/app_data
       - PREVIEW_CACHE_ROOT=/app_cache/preview
-      - CONVERTER_URL=http://converter:8080
+      - CONVERTER_URL=http://localhost:8080
       - CORS_ORIGINS=*
     volumes:
       - ./data/local_drawio:/data/local_drawio:ro
@@ -113,8 +118,12 @@ services:
       - "3003:3000"
     depends_on:
       - backend
+    # backend now runs on host network → no bridge DNS. Reach it via the
+    # host gateway from the bridge subnet on its published host port 8001.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
-      - BACKEND_URL=http://backend:8000
+      - BACKEND_URL=http://host.docker.internal:8001
       - NODE_ENV=production
 
 volumes:

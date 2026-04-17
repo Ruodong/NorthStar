@@ -10,7 +10,7 @@ NorthStar is Lenovo's internal IT architecture reference tool. It builds a query
 
 ## Project Structure
 
-- `backend/` — FastAPI (Python), entry: `backend/app/main.py`, container port 8000 → host 8001
+- `backend/` — FastAPI (Python), entry: `backend/app/main.py`. Runs in `network_mode: host` so it can reach Lenovo's internal S3 endpoint via host VPN — uvicorn binds directly to host port 8001 (no internal-vs-host mapping).
 - `backend/sql/` — flat SQL migrations, auto-applied on backend startup (see Schema Evolution below)
 - `frontend/` — Next.js 15 + React 19 + TypeScript, container port 3000 → host 3003
 - `api-tests/` — pytest API integration tests
