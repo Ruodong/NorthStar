@@ -36,6 +36,8 @@
     "node_modules", ".next", "venv", ".venv", ".venv-ingest",
     "__pycache__", ".git", ".claude", ".gstack",
     "data", "test-results", "frontend/tsconfig.tsbuildinfo",
-    ".gstack-screenshots"
-  ]
+    ".gstack-screenshots",
+    ".env", ".env.local"
+  ],
+  "_rsync_note": "When rsyncing TO 71, NEVER use --delete. The 71 side has local secrets (.env) that don't exist on coding machine. .env is also explicitly excluded as a safety belt."
 }

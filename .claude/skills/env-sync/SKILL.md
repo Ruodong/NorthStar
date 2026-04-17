@@ -80,7 +80,7 @@ When invoked without `pull`, `push`, or `status` argument, run Phase 1 first, th
 2. **All reads are automatic.** IP detection, git status, git fetch, Docker ps, migration check — all run without asking.
 3. **Only writes need confirmation.** git pull, git push, docker compose build, rsync — ONE confirmation for the full action plan.
 4. **Never `docker compose down -v`** — that nukes both databases. Only `up -d --build <service>`.
-5. **Never `rsync --delete` into local dir** — only outbound to server 71.
+5. **Never `rsync --delete` in either direction.** 71 holds local-only files (`.env` with neo4j/postgres passwords, secrets) that don't exist on coding machine. `--delete` will wipe them and break Neo4j auth. Always use additive rsync. Also explicitly exclude `.env*` in the rsync command.
 6. **Sequence: push code before rebuild** — ensures 71 has latest code before building images.
 
 ---
@@ -181,7 +181,19 @@ After user approves the plan, execute each write action sequentially.
 
 1. **If uncommitted changes exist** → ask: commit now / skip
 2. **If local ahead of gitlab/dev** → `git push gitlab dev`
-3. **Pull on 71:** `ssh northstar-server 'cd ~/NorthStar && git pull gitlab dev'`
+3. **Sync to 71 via rsync** (71 cannot reach gitlab.xpaas.lenovo.com — it has no Lenovo VPN). The coding machine acts as the relay:
+   ```bash
+   rsync -avz \
+     --exclude='node_modules' --exclude='.next' --exclude='venv' \
+     --exclude='.venv' --exclude='.venv-ingest' --exclude='__pycache__' \
+     --exclude='.git' --exclude='.gstack' --exclude='.claude' \
+     --exclude='data' --exclude='test-results' \
+     --exclude='.env' --exclude='.env.local' \
+     --exclude='.gstack-screenshots' \
+     --exclude='frontend/tsconfig.tsbuildinfo' \
+     /path/to/NorthStar/ ruodong@192.168.68.71:/home/ruodong/NorthStar/
+   ```
+   **NO `--delete` flag** (would wipe 71's `.env`).
 4. **Rebuild changed services:** Detect which services need rebuild based on changed files:
    - `backend/**` changed → `docker compose up -d --build backend`
    - `frontend/**` changed → `docker compose up -d --build frontend`
