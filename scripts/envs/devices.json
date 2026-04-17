@@ -1,0 +1,41 @@
+{
+  "devices": [
+    {
+      "name": "Mac Mini (Home)",
+      "ip": "192.168.68.59",
+      "execution": "remote",
+      "remote_host": "192.168.68.71",
+      "remote_user": "ruodong",
+      "remote_dir": "/home/ruodong/NorthStar"
+    },
+    {
+      "name": "MacBook Air (Office)",
+      "ip": "__TBD__",
+      "execution": "local"
+    }
+  ],
+  "git": {
+    "remote": "gitlab",
+    "url": "https://gitlab.xpaas.lenovo.com/enterprisearchitectureteam/northstar.git",
+    "dev_branch": "dev",
+    "main_branch": "main"
+  },
+  "server": {
+    "host": "192.168.68.71",
+    "user": "ruodong",
+    "dir": "/home/ruodong/NorthStar",
+    "services": {
+      "frontend":  { "container": "northstar-frontend",  "host_port": 3003 },
+      "backend":   { "container": "northstar-backend",   "host_port": 8001 },
+      "postgres":  { "container": "northstar-postgres",   "host_port": 5434 },
+      "neo4j":     { "container": "northstar-neo4j",      "host_port": 7687 },
+      "converter": { "container": "northstar-converter",  "host_port": null }
+    }
+  },
+  "rsync_excludes": [
+    "node_modules", ".next", "venv", ".venv", ".venv-ingest",
+    "__pycache__", ".git", ".claude", ".gstack",
+    "data", "test-results", "frontend/tsconfig.tsbuildinfo",
+    ".gstack-screenshots"
+  ]
+}

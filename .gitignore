@@ -27,9 +27,9 @@ data/local_drawio/*
 # Logs
 *.log
 
-# Claude workspace — commit the hook config, exclude local overrides + skills
+# Claude workspace — commit hook config + project skills, exclude local overrides
 .claude/*
 !.claude/settings.json
+!.claude/skills/
 .claude/settings.local.json
-.claude/skills/
 .gstack/
