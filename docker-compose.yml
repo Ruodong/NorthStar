@@ -49,7 +49,8 @@ services:
     # files for conversion. Other containers on the bridge network still
     # reach it as http://converter:8080 via the compose network.
     ports:
-      - "127.0.0.1:8080:8080"
+      # 8080 on 71 is taken by another drawio container — use 8090 host-side.
+      - "127.0.0.1:8090:8080"
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=2)"]
       interval: 15s
@@ -100,7 +101,7 @@ services:
       - LOCAL_DRAWIO_ROOT=/data/local_drawio
       - ATTACHMENT_ROOT=/app_data
       - PREVIEW_CACHE_ROOT=/app_cache/preview
-      - CONVERTER_URL=http://localhost:8080
+      - CONVERTER_URL=http://localhost:8090
       - CORS_ORIGINS=*
     volumes:
       - ./data/local_drawio:/data/local_drawio:ro
@@ -110,7 +111,12 @@ services:
       - ./data/preview_cache:/app_cache/preview
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        # MUST match the runtime env var below — next.config.mjs bakes
+        # this URL into the build via rewrites().
+        BACKEND_URL: http://host.docker.internal:8001
     image: northstar-frontend
     container_name: northstar-frontend
     restart: unless-stopped

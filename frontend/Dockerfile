@@ -7,7 +7,13 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-ENV NEXT_TELEMETRY_DISABLED=1
+# next.config.mjs reads BACKEND_URL during `next build` (it's used in
+# rewrites(), which Next bakes into the standalone build). Pass it as a
+# build ARG so changing it at compose `environment:` time alone is not
+# enough — the image must be rebuilt with the new ARG.
+ARG BACKEND_URL=http://backend:8000
+ENV BACKEND_URL=${BACKEND_URL} \
+    NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 FROM node:20-alpine AS runner
