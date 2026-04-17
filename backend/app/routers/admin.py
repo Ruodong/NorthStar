@@ -13,8 +13,9 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
+from app.config import settings
 from app.models.schemas import ApiResponse
 from app.services import converter_client, image_vision, pg_client
 
@@ -1893,14 +1894,64 @@ async def project_overview(project_id: str) -> ApiResponse:
     )
 
 
+# Inline-rendered mimetypes (iframe / img tag) — Content-Disposition: inline.
+# Everything else gets the default download behavior.
+_INLINE_MEDIA_TYPES = {
+    "application/pdf",
+    "image/png", "image/jpeg", "image/gif", "image/svg+xml", "image/webp",
+}
+
+
+def _attachment_response_headers(media_type: str, title: str) -> dict[str, str]:
+    """Build headers for the /raw response. Returns Content-Disposition only
+    when the media type is NOT browser-renderable (matches prior behavior)."""
+    if media_type in _INLINE_MEDIA_TYPES:
+        return {"Content-Disposition": "inline"}
+    # Plain download — FastAPI adds filename via the response itself for
+    # FileResponse; for StreamingResponse we set it here explicitly.
+    from urllib.parse import quote
+    encoded = quote(title or "attachment")
+    return {"Content-Disposition": f"attachment; filename*=utf-8''{encoded}"}
+
+
 @router.get("/confluence/attachments/{attachment_id}/raw")
 async def serve_attachment(attachment_id: str):
     row = await pg_client.fetchrow(
-        "SELECT title, media_type, local_path FROM northstar.confluence_attachment WHERE attachment_id = $1",
+        "SELECT title, media_type, local_path, s3_key "
+        "FROM northstar.confluence_attachment WHERE attachment_id = $1",
         attachment_id,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="attachment not found")
+
+    media_type = (
+        row["media_type"]
+        or mimetypes.guess_type(row["title"])[0]
+        or "application/octet-stream"
+    )
+    headers = _attachment_response_headers(media_type, row["title"])
+
+    # Preference 1: stream from S3 when configured and this attachment has
+    # been uploaded. Any S3-layer failure falls through to local FS.
+    if settings.s3_enabled and row["s3_key"]:
+        from app.services import s3_storage
+
+        stream = s3_storage.download_stream(row["s3_key"])
+        if stream is not None:
+            return StreamingResponse(
+                stream,
+                media_type=media_type,
+                headers=headers,
+            )
+        # If we get here, S3 was configured but the request failed. Log at
+        # warning level (s3_storage already logged the root cause) and fall
+        # through to filesystem so the user still sees the file.
+        logger.warning(
+            "S3 read failed for attachment_id=%s s3_key=%s — falling back to FS",
+            attachment_id, row["s3_key"],
+        )
+
+    # Preference 2: local filesystem (also the path when s3_enabled=False).
     if not row["local_path"]:
         raise HTTPException(
             status_code=404,
@@ -1909,18 +1960,8 @@ async def serve_attachment(attachment_id: str):
     full_path = ATTACHMENT_ROOT / Path(row["local_path"]).name
     if not full_path.exists():
         raise HTTPException(status_code=404, detail=f"file missing: {full_path}")
-    media_type = row["media_type"] or mimetypes.guess_type(row["title"])[0] or "application/octet-stream"
-    # PDFs and images should render inline in the browser (iframe / img tag),
-    # not trigger a download. Starlette's FileResponse defaults to
-    # content_disposition_type="attachment" which forces download. We must
-    # explicitly set "inline" for browser-renderable types.
-    inline_types = {"application/pdf", "image/png", "image/jpeg", "image/gif", "image/svg+xml", "image/webp"}
-    if media_type in inline_types:
-        return FileResponse(
-            str(full_path),
-            media_type=media_type,
-            headers={"Content-Disposition": "inline"},
-        )
+    if media_type in _INLINE_MEDIA_TYPES:
+        return FileResponse(str(full_path), media_type=media_type, headers=headers)
     return FileResponse(str(full_path), media_type=media_type, filename=row["title"])
 
 

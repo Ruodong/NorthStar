@@ -9,3 +9,4 @@ asyncpg==0.30.0
 beautifulsoup4==4.12.3
 Pillow==11.0.0
 defusedxml
+boto3>=1.36.0

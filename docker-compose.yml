@@ -83,6 +83,15 @@ services:
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_MODEL=${LLM_MODEL:-gpt-4o}
       - LLM_ENABLED=${LLM_ENABLED:-false}
+      # S3 attachment storage — disabled by default. See .env / .env.example
+      # and .specify/features/s3-attachments/spec.md.
+      - S3_ENABLED=${S3_ENABLED:-false}
+      - S3_ENDPOINT=${S3_ENDPOINT:-}
+      - S3_REGION=${S3_REGION:-us-east-1}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:-}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:-}
+      - S3_BUCKET=${S3_BUCKET:-}
+      - S3_PREFIX=${S3_PREFIX:-pm/northstar/attachments}
       - LOCAL_DRAWIO_ROOT=/data/local_drawio
       - ATTACHMENT_ROOT=/app_data
       - PREVIEW_CACHE_ROOT=/app_cache/preview

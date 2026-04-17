@@ -30,6 +30,19 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: str = "*"
 
+    # S3 attachment storage (see .specify/features/s3-attachments/spec.md).
+    # When s3_enabled=False, backend serves attachments exclusively from local FS —
+    # identical to pre-S3 behavior. When True, backend prefers S3 for attachments
+    # whose confluence_attachment.s3_key column is populated, with automatic
+    # fallback to local FS on any S3 error.
+    s3_enabled: bool = False
+    s3_endpoint: str = ""
+    s3_region: str = "us-east-1"
+    s3_access_key: str = ""
+    s3_secret_key: str = ""
+    s3_bucket: str = ""
+    s3_prefix: str = "pm/northstar/attachments"
+
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False, extra="ignore")
 
 
