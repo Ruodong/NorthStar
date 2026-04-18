@@ -18,8 +18,12 @@ import { useRouter } from "next/navigation";
 interface TemplateRow {
   attachment_id: number;
   title: string;
+  display_name?: string | null;
   file_kind: string;
   description?: string | null;
+  page_title?: string | null;
+  fiscal_year?: string | null;
+  project_id?: string | null;
 }
 
 interface AppSearchRow {
@@ -298,35 +302,48 @@ export default function DesignNewPage() {
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
         <Link href="/design" style={{ color: "var(--text-dim)", fontSize: 12, textDecoration: "none" }}>
-          \u2190 Designs
+          ← Designs
         </Link>
         <h1 style={{ margin: 0 }}>New Design</h1>
       </div>
 
-      {/* Stepper */}
+      {/* Tabs — freely clickable (not a linear stepper). The tabs are
+          independent except that Step 4 (Interfaces) needs apps selected. */}
       <div style={{ display: "flex", gap: 2, marginBottom: 20 }}>
-        {["Context", "Template", "Apps", "Interfaces", "Generate"].map((label, i) => {
+        {["Context", "Template", "Apps", "Interfaces", "Review"].map((label, i) => {
           const idx = i + 1;
           const active = step === idx;
-          const done = step > idx;
+
+          // Completion signal per tab
+          let complete = false;
+          if (idx === 1) complete = name.trim().length > 0;
+          if (idx === 2) complete = templateId !== null || name.trim().length > 0;
+          if (idx === 3) complete = scopeApps.length > 0;
+          if (idx === 4) complete = scopeApps.length > 0;
+
           return (
             <button
               key={idx}
-              onClick={() => idx < step && setStep(idx)}
-              disabled={idx > step}
+              onClick={() => setStep(idx)}
               style={{
                 flex: 1,
                 padding: "10px 14px",
-                border: "1px solid var(--border)",
-                background: active ? "var(--accent-dim)" : done ? "var(--surface)" : "transparent",
-                color: active ? "var(--accent)" : done ? "var(--text)" : "var(--text-dim)",
+                border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
+                background: active ? "var(--accent-dim)" : "transparent",
+                color: active ? "var(--accent)" : "var(--text)",
                 fontSize: 12,
                 fontFamily: "var(--font-mono)",
-                cursor: idx < step ? "pointer" : "default",
+                cursor: "pointer",
                 textAlign: "left",
+                position: "relative",
               }}
             >
-              <div style={{ fontSize: 10, color: "var(--text-dim)" }}>Step {idx}</div>
+              <div style={{ fontSize: 10, color: "var(--text-dim)", display: "flex", alignItems: "center", gap: 4 }}>
+                <span>Tab {idx}</span>
+                {complete && (
+                  <span style={{ color: "#5fc58a", fontSize: 10 }}>✓</span>
+                )}
+              </div>
               {label}
             </button>
           );
@@ -401,23 +418,36 @@ export default function DesignNewPage() {
 
       {/* ── Step 2: Template ── */}
       {step === 2 && (
-        <div style={{ display: "grid", gap: 12 }}>
-          <TemplateCard
-            title="Blank canvas"
-            description="Start with an empty drawio canvas — only your selected apps and interfaces will be drawn."
-            selected={templateId === null}
-            onSelect={() => setTemplateId(null)}
-          />
-          {templates.map(t => (
+        <div>
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+            gap: 12,
+          }}>
             <TemplateCard
-              key={t.attachment_id}
-              title={t.title}
-              description={t.description || t.file_kind}
-              selected={templateId === t.attachment_id}
-              onSelect={() => setTemplateId(t.attachment_id)}
-              previewUrl={`/api/admin/confluence/attachments/${t.attachment_id}/preview`}
+              title="Blank canvas"
+              subtitle="Start from scratch"
+              description="Empty drawio canvas — only your selected apps and interfaces will be drawn."
+              selected={templateId === null}
+              onSelect={() => setTemplateId(null)}
             />
-          ))}
+            {templates.map(t => (
+              <TemplateCard
+                key={t.attachment_id}
+                title={t.title}
+                subtitle={
+                  [t.fiscal_year, t.project_id, t.page_title && t.page_title !== t.title ? t.page_title : null]
+                    .filter(Boolean)
+                    .join(" · ") || null
+                }
+                description={t.description || `drawio · #${t.attachment_id}`}
+                selected={templateId === t.attachment_id}
+                onSelect={() => setTemplateId(t.attachment_id)}
+                previewUrl={`/api/admin/confluence/attachments/${t.attachment_id}/preview`}
+                thumbnailUrl={`/api/admin/confluence/attachments/${t.attachment_id}/preview`}
+              />
+            ))}
+          </div>
           {templates.length === 0 && (
             <div style={{ color: "var(--text-dim)", fontSize: 12, padding: 12 }}>
               No templates registered. You can proceed with a blank canvas.
@@ -597,23 +627,44 @@ export default function DesignNewPage() {
         </div>
       )}
 
-      {/* ── Footer navigation ── */}
-      <div style={{ display: "flex", gap: 8, marginTop: 20, justifyContent: "flex-end" }}>
+      {/* ── Footer: prev/next convenience + always-visible Generate ── */}
+      <div style={{
+        display: "flex",
+        gap: 8,
+        marginTop: 20,
+        alignItems: "center",
+        paddingTop: 16,
+        borderTop: "1px solid var(--border)",
+      }}>
         {step > 1 && (
           <button className="btn-secondary" onClick={() => setStep(step - 1)} disabled={submitting}>
-            \u2190 Back
+            ← Previous tab
           </button>
         )}
         {step < 5 && (
-          <button onClick={() => setStep(step + 1)} disabled={!canAdvance}>
-            Next \u2192
+          <button className="btn-secondary" onClick={() => setStep(step + 1)} disabled={submitting}>
+            Next tab →
           </button>
         )}
-        {step === 5 && (
-          <button onClick={submit} disabled={submitting} style={{ background: "var(--accent)", color: "#07090d", fontWeight: 600 }}>
-            {submitting ? "Generating…" : "Generate design"}
-          </button>
+        <div style={{ flex: 1 }} />
+        {/* Requirement hint for Generate button */}
+        {!(name.trim().length > 0 && scopeApps.length > 0) && (
+          <span style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
+            needs: {!name.trim() && "name"} {!name.trim() && !scopeApps.length && " + "} {!scopeApps.length && "≥1 app"}
+          </span>
         )}
+        <button
+          onClick={submit}
+          disabled={submitting || !name.trim() || scopeApps.length === 0}
+          style={{
+            background: (submitting || !name.trim() || scopeApps.length === 0) ? "var(--surface-hover)" : "var(--accent)",
+            color: (submitting || !name.trim() || scopeApps.length === 0) ? "var(--text-dim)" : "#07090d",
+            fontWeight: 600,
+            padding: "8px 16px",
+          }}
+        >
+          {submitting ? "Generating…" : "Generate design"}
+        </button>
       </div>
     </div>
   );
@@ -632,10 +683,15 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 function TemplateCard({
-  title, description, selected, onSelect, previewUrl,
+  title, subtitle, description, selected, onSelect, previewUrl, thumbnailUrl,
 }: {
-  title: string; description: string; selected: boolean;
-  onSelect: () => void; previewUrl?: string;
+  title: string;
+  subtitle?: string | null;
+  description: string;
+  selected: boolean;
+  onSelect: () => void;
+  previewUrl?: string;
+  thumbnailUrl?: string;
 }) {
   return (
     <div
@@ -643,22 +699,80 @@ function TemplateCard({
       style={{
         border: `2px solid ${selected ? "var(--accent)" : "var(--border)"}`,
         borderRadius: "var(--radius-md)",
-        padding: 14,
         cursor: "pointer",
         background: selected ? "var(--accent-dim)" : "var(--surface)",
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text)" }}>{title}</div>
-          <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 4 }}>{description}</div>
-        </div>
-        {previewUrl && (
-          <a href={previewUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}
-            style={{ color: "var(--accent)", fontSize: 11, textDecoration: "none" }}>
-            preview \u2197
-          </a>
+      {/* Thumbnail area */}
+      <div style={{
+        position: "relative",
+        width: "100%",
+        height: 160,
+        background: "#1b1d25",
+        borderBottom: "1px solid var(--border)",
+        overflow: "hidden",
+      }}>
+        {thumbnailUrl ? (
+          // Use native lazy loading — iframe only loads when scrolled near viewport
+          <iframe
+            src={thumbnailUrl}
+            loading="lazy"
+            style={{
+              width: "100%",
+              height: "100%",
+              border: 0,
+              pointerEvents: "none",  // disable interaction; whole card is clickable
+            }}
+            title={`${title} preview`}
+          />
+        ) : (
+          // Placeholder for blank canvas option
+          <div style={{
+            width: "100%",
+            height: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "var(--text-dim)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 11,
+            letterSpacing: 0.6,
+            background: "repeating-linear-gradient(45deg, transparent, transparent 8px, rgba(255,255,255,0.02) 8px, rgba(255,255,255,0.02) 16px)",
+          }}>
+            BLANK CANVAS
+          </div>
         )}
+      </div>
+
+      {/* Text area */}
+      <div style={{ padding: "10px 12px", display: "flex", flexDirection: "column", gap: 2 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {title}
+          </div>
+          {previewUrl && (
+            <a
+              href={previewUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              style={{ color: "var(--accent)", fontSize: 10, textDecoration: "none", whiteSpace: "nowrap" }}
+            >
+              open ↗
+            </a>
+          )}
+        </div>
+        {subtitle && (
+          <div style={{ fontSize: 11, color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {subtitle}
+          </div>
+        )}
+        <div style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
+          {description}
+        </div>
       </div>
     </div>
   );

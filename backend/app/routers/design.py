@@ -79,6 +79,9 @@ async def list_templates() -> ApiResponse:
       1. ref_architecture_template_source if present (architect-curated)
       2. Otherwise: confluence_attachment where file_kind='drawio' and
          (title ILIKE '%template%' OR title ILIKE '%模板%')
+
+    Each row is enriched with page context so architects can tell similar
+    "Application Architecture Template" entries apart by their source page.
     """
     templates: list[dict] = []
 
@@ -91,10 +94,16 @@ async def list_templates() -> ApiResponse:
                 a.title,
                 a.file_kind,
                 t.description,
-                t.tags
+                t.tags,
+                cp.title       AS page_title,
+                cp.fiscal_year AS fiscal_year,
+                cp.page_id::text AS page_id,
+                cp.project_id
             FROM northstar.ref_architecture_template_source t
             JOIN northstar.confluence_attachment a
               ON a.attachment_id = t.attachment_id
+            LEFT JOIN northstar.confluence_page cp
+              ON cp.page_id = a.page_id
             WHERE a.file_kind IN ('drawio', 'drawio_xml')
             ORDER BY t.updated_at DESC NULLS LAST, a.title
             """
@@ -110,21 +119,55 @@ async def list_templates() -> ApiResponse:
             matches = await pg_client.fetch(
                 """
                 SELECT
-                    attachment_id,
-                    title,
-                    file_kind,
+                    a.attachment_id,
+                    a.title,
+                    a.file_kind,
                     NULL AS description,
-                    NULL AS tags
-                FROM northstar.confluence_attachment
-                WHERE file_kind IN ('drawio', 'drawio_xml')
-                  AND (title ILIKE '%template%' OR title ILIKE '%模板%')
-                ORDER BY title
-                LIMIT 50
+                    NULL AS tags,
+                    cp.title       AS page_title,
+                    cp.fiscal_year AS fiscal_year,
+                    cp.page_id::text AS page_id,
+                    cp.project_id
+                FROM northstar.confluence_attachment a
+                LEFT JOIN northstar.confluence_page cp
+                  ON cp.page_id = a.page_id
+                WHERE a.file_kind IN ('drawio', 'drawio_xml')
+                  AND (a.title ILIKE '%template%' OR a.title ILIKE '%模板%')
+                ORDER BY a.title, cp.fiscal_year DESC NULLS LAST
+                LIMIT 200
                 """
             )
             templates.extend([dict(r) for r in matches])
         except Exception:
             pass
+
+    # Build a "display_name" that disambiguates duplicates by appending
+    # the source page / FY / project_id when titles collide.
+    from collections import defaultdict as _dd
+    by_title = _dd(list)
+    for t in templates:
+        by_title[t.get("title") or ""].append(t)
+
+    for title, group in by_title.items():
+        if len(group) == 1:
+            group[0]["display_name"] = title
+        else:
+            # Multiple templates share this title — add context
+            for t in group:
+                ctx_parts = []
+                if t.get("fiscal_year"):
+                    ctx_parts.append(t["fiscal_year"])
+                if t.get("project_id"):
+                    ctx_parts.append(t["project_id"])
+                elif t.get("page_title"):
+                    page_title = t["page_title"]
+                    if page_title and page_title != title:
+                        # Trim overly long page titles
+                        ctx_parts.append(
+                            page_title[:40] + "…" if len(page_title) > 40 else page_title
+                        )
+                ctx = " · ".join(ctx_parts) if ctx_parts else f"#{t['attachment_id']}"
+                t["display_name"] = f"{title} — {ctx}"
 
     return ApiResponse(data={
         "total": len(templates),

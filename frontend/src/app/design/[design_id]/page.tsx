@@ -185,7 +185,7 @@ export default function DesignEditorPage() {
           background: "var(--surface)",
         }}>
           <Link href="/design" style={{ color: "var(--text-dim)", fontSize: 12, textDecoration: "none" }}>
-            \u2190 Designs
+            ← Designs
           </Link>
           <h2 style={{ margin: 0, fontSize: 16 }}>{design.name}</h2>
           <span className="status-pill" style={{
@@ -207,7 +207,7 @@ export default function DesignEditorPage() {
             {saveStatus === "idle" && "auto-save on"}
           </span>
           <button onClick={regenerate} className="btn-secondary" style={{ fontSize: 11 }}>
-            \u21bb Regenerate AS-IS
+            ↻ Regenerate AS-IS
           </button>
           <button onClick={exportDrawio} className="btn-secondary" style={{ fontSize: 11 }}>
             Export .drawio

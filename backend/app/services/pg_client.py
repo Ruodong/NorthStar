@@ -56,3 +56,13 @@ async def execute_script(sql_script: str) -> None:
     pool = await connect()
     async with pool.acquire() as conn:
         await conn.execute(sql_script)
+
+
+async def execute(sql: str, *args: Any) -> str:
+    """Execute a parameterized statement (INSERT/UPDATE/DELETE).
+
+    Returns asyncpg's status string (e.g., 'INSERT 0 1', 'UPDATE 3').
+    """
+    pool = await connect()
+    async with pool.acquire() as conn:
+        return await conn.execute(sql, *args)

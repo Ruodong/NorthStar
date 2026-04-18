@@ -126,7 +126,7 @@ export default function DesignListPage() {
                     </span>
                   </td>
                   <td style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text-muted)" }}>
-                    {r.fiscal_year || "\u2014"}
+                    {r.fiscal_year || "—"}
                   </td>
                   <td style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>
                     {r.project_id ? (
@@ -134,13 +134,13 @@ export default function DesignListPage() {
                         {r.project_id}
                       </Link>
                     ) : (
-                      <span style={{ color: "var(--text-dim)" }}>\u2014</span>
+                      <span style={{ color: "var(--text-dim)" }}>—</span>
                     )}
                   </td>
                   <td style={{ textAlign: "right", fontFamily: "var(--font-mono)" }}>{r.app_count}</td>
                   <td style={{ textAlign: "right", fontFamily: "var(--font-mono)" }}>{r.iface_count}</td>
                   <td style={{ fontSize: 11, color: "var(--text-dim)" }}>
-                    {r.updated_at ? new Date(r.updated_at).toISOString().slice(0, 16).replace("T", " ") : "\u2014"}
+                    {r.updated_at ? new Date(r.updated_at).toISOString().slice(0, 16).replace("T", " ") : "—"}
                   </td>
                 </tr>
               ))}
