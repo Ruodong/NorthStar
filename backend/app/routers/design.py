@@ -380,8 +380,9 @@ async def list_catalog_interfaces(
     )
     coverage = {r["app_id"]: dict(r) for r in coverage_rows}
 
-    # Actual edges between scope apps
-    status_filter = "" if include_sunset else "AND (status IS NULL OR upper(status) != 'SUNSET')"
+    # Actual edges between scope apps. Qualify `status` as `i.status` since
+    # the joined ref_application tables also have a status column (ambiguous).
+    status_filter = "" if include_sunset else "AND (i.status IS NULL OR upper(i.status) != 'SUNSET')"
     rows = await pg_client.fetch(
         f"""
         SELECT
