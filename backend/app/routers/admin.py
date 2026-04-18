@@ -1706,7 +1706,7 @@ async def application_overview(app_id: str) -> ApiResponse:
         attachments = [dict(r) for r in rows]
 
     # 4) Neo4j: projects that INCLUDE this app + integrations
-    from app.services import neo4j_client as _n
+    from app.services import graph_client as _n
     projects = await _n.run_query(
         """
         MATCH (p:Project)-[:INCLUDES]->(a:Application {app_id: $id})
@@ -1853,7 +1853,7 @@ async def project_overview(project_id: str) -> ApiResponse:
         attachments = [dict(a) for a in att_rows]
 
     # 4) Neo4j applications + integrations for this project (read through backend Neo4j)
-    from app.services import neo4j_client as _n
+    from app.services import graph_client as _n
     apps_rows = await _n.run_query(
         """
         MATCH (p:Project {project_id: $pid})-[:INCLUDES]->(a:Application)

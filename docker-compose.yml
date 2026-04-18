@@ -1,26 +1,14 @@
 services:
-  neo4j:
-    image: neo4j:5-community
-    container_name: northstar-neo4j
-    restart: unless-stopped
-    ports:
-      - "7474:7474"   # Neo4j Browser
-      - "7687:7687"   # Bolt
-    volumes:
-      - neo4j_data:/data
-      - neo4j_logs:/logs
-    environment:
-      - NEO4J_AUTH=neo4j/${NEO4J_PASSWORD}
-      - NEO4J_server_memory_heap_initial__size=512M
-      - NEO4J_server_memory_heap_max__size=1G
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:7474"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
   postgres:
-    image: postgres:16
+    # apache/age:PG16_latest = postgres:16 + Apache AGE extension pre-built.
+    # Drop-in replacement for postgres:16 — same entrypoint, same initdb hooks,
+    # same data directory layout. The AGE extension is enabled on first
+    # backend startup via backend/sql/018_enable_age.sql (creates extension +
+    # `ns_graph` graph). Graph data lives in the same postgres_data volume.
+    # See .specify/features/age-migration/spec.md.
+    # TODO(post-cutover): pin to a specific digest (e.g.,
+    #   apache/age:release_PG16_1.5.0) before rolling to 71.
+    image: apache/age:PG16_latest
     container_name: northstar-postgres
     restart: unless-stopped
     ports:
@@ -70,16 +58,11 @@ services:
     #   - service-name DNS is gone; use localhost + published host ports
     network_mode: host
     depends_on:
-      neo4j:
-        condition: service_healthy
       postgres:
         condition: service_healthy
       converter:
         condition: service_healthy
     environment:
-      - NEO4J_URI=bolt://localhost:7687
-      - NEO4J_USER=neo4j
-      - NEO4J_PASSWORD=${NEO4J_PASSWORD}
       - POSTGRES_DSN=postgresql://northstar:${POSTGRES_PASSWORD:-northstar_dev}@localhost:5434/northstar
       - CONFLUENCE_BASE_URL=${CONFLUENCE_BASE_URL:-}
       - CONFLUENCE_SEARCH_BASE_URL=${CONFLUENCE_SEARCH_BASE_URL:-}
@@ -133,6 +116,4 @@ services:
       - NODE_ENV=production
 
 volumes:
-  neo4j_data:
-  neo4j_logs:
   postgres_data:

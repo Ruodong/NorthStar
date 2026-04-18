@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# weekly_sync.sh — NorthStar end-to-end sync + Neo4j refresh.
+# weekly_sync.sh — NorthStar end-to-end sync + graph refresh.
 #
 # Designed to be run from cron on server 71. Does the full cycle:
 #   1. Sync EGM/EAM master data into NorthStar Postgres
-#   2. Rebuild Neo4j from the new Postgres state (loader writes
-#      applications_history + ingestion_diffs so /whats-new stays fresh)
+#   2. Rebuild the AGE graph (ns_graph) from the new Postgres state. The
+#      loader also writes applications_history + ingestion_diffs so
+#      /whats-new stays fresh.
 #   3. (Optional) Refresh fuzzy merge candidates so the /admin/aliases
 #      queue picks up any newly-added non-CMDB apps
 #   4. (Optional) Sync EA documents from Confluence EA space
@@ -36,7 +37,7 @@ fail() {
     exit 1
 }
 
-# Load .env so EGM_PG_*, NEO4J_*, POSTGRES_PASSWORD are available
+# Load .env so EGM_PG_*, POSTGRES_PASSWORD are available
 if [[ -f "$REPO_ROOT/.env" ]]; then
     set -a
     # shellcheck disable=SC1091
@@ -56,12 +57,12 @@ log "===== starting weekly sync ====="
 log "stage 1/4: sync_from_egm.py"
 "$PYTHON" scripts/sync_from_egm.py || fail "sync_from_egm failed"
 
-# --- Stage 2: PG → Neo4j ---
+# --- Stage 2: PG relational → AGE graph (ns_graph) ---
 # --wipe is intentional: the loader is idempotent but starting clean guarantees
 # orphan nodes from previous runs are cleaned up (e.g., apps that no longer
 # appear in any diagram after an EGM master-data cleanup).
-log "stage 2/4: load_neo4j_from_pg.py --wipe"
-"$PYTHON" scripts/load_neo4j_from_pg.py --wipe || fail "load_neo4j_from_pg failed"
+log "stage 2/4: load_age_from_pg.py --wipe"
+"$PYTHON" scripts/load_age_from_pg.py --wipe || fail "load_age_from_pg failed"
 
 # --- Stage 3: refresh fuzzy merge candidates ---
 # Non-fatal: the aliases system is optional, we shouldn't fail the whole weekly

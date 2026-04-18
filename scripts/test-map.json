@@ -38,7 +38,13 @@
     "backend/app/services/graph_query.py": {
       "api": ["api-tests/test_ontology.py", "api-tests/test_graph.py"]
     },
-    "backend/app/services/neo4j_client.py": {
+    "backend/app/services/graph_client.py": {
+      "api": ["api-tests/test_unit_graph_client.py", "api-tests/test_ontology.py"]
+    },
+    "scripts/_age_session_adapter.py": {
+      "api": ["api-tests/test_ontology.py"]
+    },
+    "scripts/load_age_from_pg.py": {
       "api": ["api-tests/test_ontology.py"]
     },
     "backend/app/services/pg_client.py": {
@@ -68,12 +74,6 @@
   "scripts": {
     "scripts/sync_from_egm.py": {
       "api": ["api-tests/test_masters.py"]
-    },
-    "scripts/load_neo4j_from_pg.py": {
-      "api": ["api-tests/test_ontology.py"]
-    },
-    "scripts/load_neo4j_from_confluence.py": {
-      "api": ["api-tests/test_ontology.py"]
     },
     "scripts/scan_confluence.py": {
       "api": [
@@ -109,6 +109,7 @@
   },
   "wildcards": {
     "backend/sql/*.sql": ["api-tests/test_masters.py"],
+    "backend/sql/018_enable_age.sql": ["api-tests/test_age_setup.py"],
     "frontend/src/app/layout.tsx": [],
     "frontend/src/app/globals.css": [],
     "frontend/src/lib/api.ts": ["e2e-tests/smoke.spec.ts"]

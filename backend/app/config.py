@@ -5,12 +5,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    # Neo4j
-    neo4j_uri: str = "bolt://neo4j:7687"
-    neo4j_user: str = "neo4j"
-    neo4j_password: str = "northstar_dev"
-
-    # Postgres
+    # Postgres — holds both the relational layer (northstar.*) and the AGE
+    # graph (ns_graph). The graph_client shares this DSN via its own asyncpg
+    # pool so session-state (LOAD 'age') stays isolated from pg_client.
     postgres_dsn: str = "postgresql://northstar:northstar_dev@postgres:5432/northstar"
 
     # Confluence REST API

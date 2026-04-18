@@ -149,7 +149,7 @@ async def decide(merge_id: int, body: MergeDecisionRequest) -> ApiResponse:
             "merge_id": merge_id,
             "decision": body.decision,
             "aliases_written": aliases_written,
-            "note": "Re-run load_neo4j_from_pg.py to apply aliases to the graph",
+            "note": "Re-run load_age_from_pg.py to apply aliases to the graph",
         }
     )
 
@@ -201,6 +201,6 @@ async def delete_manual_alias(alias_id: str) -> ApiResponse:
         data={
             "alias_id": alias_id,
             "deleted": result.endswith("1"),
-            "note": "Re-run load_neo4j_from_pg.py to revert the merge in Neo4j",
+            "note": "Re-run load_age_from_pg.py to revert the merge in the graph",
         }
     )

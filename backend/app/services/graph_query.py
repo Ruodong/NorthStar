@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from app.services import neo4j_client, pg_client
+from app.services import graph_client, pg_client
 
 
 async def list_applications(
@@ -101,7 +101,7 @@ async def get_application(app_id: str) -> Optional[dict]:
                page_url: cp.page_url
            }) AS confluence_pages
     """
-    rows = await neo4j_client.run_query(cypher, {"app_id": app_id})
+    rows = await graph_client.run_query(cypher, {"app_id": app_id})
     has_neo4j = bool(rows)
     row = rows[0] if has_neo4j else None
 
@@ -372,7 +372,7 @@ async def get_neighbors(app_id: str, depth: int = 1) -> dict:
            [n IN neighbors WHERE n IS NOT NULL | n] AS nodes,
            [rel_list IN rels | [r IN rel_list | {{source: startNode(r).app_id, target: endNode(r).app_id, type: r.interaction_type, status: r.status}}]] AS edges
     """
-    rows = await neo4j_client.run_query(cypher, {"app_id": app_id})
+    rows = await graph_client.run_query(cypher, {"app_id": app_id})
     if not rows:
         return {"root": None, "nodes": [], "edges": []}
     row = rows[0]
@@ -409,7 +409,7 @@ async def list_edges(status: Optional[str] = None, interaction_type: Optional[st
            r.protocol AS protocol
     LIMIT 5000
     """
-    return await neo4j_client.run_query(cypher, params)
+    return await graph_client.run_query(cypher, params)
 
 
 async def full_graph(fiscal_year: Optional[str] = None, status: Optional[str] = None) -> dict:
@@ -440,7 +440,7 @@ async def full_graph(fiscal_year: Optional[str] = None, status: Optional[str] = 
             params["status"] = status
         node_cypher += " RETURN a LIMIT 5000"
 
-    nodes_rows = await neo4j_client.run_query(node_cypher, params)
+    nodes_rows = await graph_client.run_query(node_cypher, params)
     nodes = [row["a"] for row in nodes_rows]
     node_ids = {n.get("app_id") for n in nodes}
 
@@ -455,7 +455,7 @@ async def full_graph(fiscal_year: Optional[str] = None, status: Optional[str] = 
            r.protocol AS protocol
     LIMIT 10000
     """
-    edges_rows = await neo4j_client.run_query(edge_cypher, {"ids": list(node_ids)})
+    edges_rows = await graph_client.run_query(edge_cypher, {"ids": list(node_ids)})
     return {"nodes": nodes, "edges": edges_rows}
 
 
@@ -480,7 +480,7 @@ async def kpi_summary(current_fy: Optional[str] = None) -> dict:
     ) or 0
 
     # Integration count is the one thing only Neo4j knows
-    int_rows = await neo4j_client.run_query(
+    int_rows = await graph_client.run_query(
         "MATCH ()-[r:INTEGRATES_WITH]->() RETURN count(r) AS c"
     )
     total_integrations = int_rows[0]["c"] if int_rows else 0
@@ -523,7 +523,7 @@ async def fy_trend() -> list[dict]:
            sum(CASE WHEN a.status = 'Sunset' THEN 1 ELSE 0 END) AS sunset_count
     ORDER BY fiscal_year
     """
-    return await neo4j_client.run_query(cypher)
+    return await graph_client.run_query(cypher)
 
 
 async def top_hubs(limit: int = 10) -> list[dict]:
@@ -536,7 +536,7 @@ async def top_hubs(limit: int = 10) -> list[dict]:
     ORDER BY degree DESC
     LIMIT $limit
     """
-    return await neo4j_client.run_query(cypher, {"limit": limit})
+    return await graph_client.run_query(cypher, {"limit": limit})
 
 
 # ---------------------------------------------------------------------------
@@ -624,7 +624,7 @@ async def reverse_dependency(app_id: str, depth: int = 2) -> dict:
     depth = max(1, min(depth, 3))
 
     # 1. Verify the root app exists — gives a clean 404 path in the caller
-    root_row = await neo4j_client.run_query(
+    root_row = await graph_client.run_query(
         """
         MATCH (a:Application {app_id: $app_id})
         RETURN a.app_id AS app_id, a.name AS name, coalesce(a.status, '') AS status
@@ -635,7 +635,7 @@ async def reverse_dependency(app_id: str, depth: int = 2) -> dict:
         return {"root": None, "depth": depth, "by_distance": [], "business_objects": []}
 
     cypher = _REVERSE_CYPHER_BY_DEPTH[depth]
-    rows = await neo4j_client.run_query(
+    rows = await graph_client.run_query(
         cypher,
         {"app_id": app_id, "limit": IMPACT_TOTAL_LIMIT},
     )
