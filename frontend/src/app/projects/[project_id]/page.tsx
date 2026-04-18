@@ -202,7 +202,7 @@ export default function ProjectDetailPage() {
                 </Link>
                 {p.page_url && (
                   <a href={p.page_url} target="_blank" rel="noopener noreferrer" style={{ color: "var(--text-dim)", fontSize: 10 }}>
-                    Confluence \u2197
+                    Confluence {"\u2197"}
                   </a>
                 )}
               </div>
