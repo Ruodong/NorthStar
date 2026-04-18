@@ -2479,8 +2479,6 @@ function LandscapeMeBox({
     xOff: number,
     color: string,
     label: string,
-    count: number,
-    arrow: string,
   ) => (
     <g transform={`translate(${xOff}, ${portY})`}>
       <rect
@@ -2491,39 +2489,19 @@ function LandscapeMeBox({
         stroke={color}
         strokeWidth={1.5}
       />
-      {/* Rotated port label — smaller port fits 6-7 chars vertically */}
+      {/* Rotated port label — vertically + horizontally centered in the port */}
       <text
-        transform={`rotate(-90, ${portW / 2}, ${portH / 2 - 10})`}
+        transform={`rotate(-90, ${portW / 2}, ${portH / 2})`}
         x={portW / 2}
-        y={portH / 2 - 10}
+        y={portH / 2}
         textAnchor="middle"
+        dominantBaseline="central"
         fontFamily="var(--font-mono)"
-        fontSize="9"
-        fill={color}
-        style={{ letterSpacing: "2px", fontWeight: 600 }}
-      >
-        {label}
-      </text>
-      {/* Count near the bottom of the port */}
-      <text
-        x={portW / 2}
-        y={portH - 18}
-        textAnchor="middle"
-        fontFamily="var(--font-mono)"
-        fontSize="11"
-        fill={color}
-        style={{ fontWeight: 700 }}
-      >
-        {count}
-      </text>
-      <text
-        x={portW / 2}
-        y={portH - 5}
-        textAnchor="middle"
         fontSize="10"
         fill={color}
+        style={{ letterSpacing: "2.5px", fontWeight: 600 }}
       >
-        {arrow}
+        {label}
       </text>
     </g>
   );
@@ -2570,10 +2548,10 @@ function LandscapeMeBox({
       </g>
 
       {/* ── CONSUME port (overlaid on ME's LEFT edge) ── */}
-      {renderPort(leftPortX, BLUE, "CONSUME", consCount, "◀")}
+      {renderPort(leftPortX, BLUE, "CONSUME")}
 
       {/* ── PROVIDE port (overlaid on ME's RIGHT edge) ── */}
-      {renderPort(rightPortX, AMBER, "PROVIDE", provCount, "▶")}
+      {renderPort(rightPortX, AMBER, "PROVIDE")}
     </g>
   );
 }
