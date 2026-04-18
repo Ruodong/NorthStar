@@ -1,14 +1,13 @@
 services:
   postgres:
-    # apache/age:PG16_latest = postgres:16 + Apache AGE extension pre-built.
-    # Drop-in replacement for postgres:16 — same entrypoint, same initdb hooks,
-    # same data directory layout. The AGE extension is enabled on first
-    # backend startup via backend/sql/018_enable_age.sql (creates extension +
-    # `ns_graph` graph). Graph data lives in the same postgres_data volume.
-    # See .specify/features/age-migration/spec.md.
-    # TODO(post-cutover): pin to a specific digest (e.g.,
-    #   apache/age:release_PG16_1.5.0) before rolling to 71.
-    image: apache/age:PG16_latest
+    # apache/age:release_PG16_1.6.0 = postgres:16 + Apache AGE 1.6.0 extension
+    # pre-built. Drop-in replacement for postgres:16 — same entrypoint, same
+    # initdb hooks, same data directory layout. The AGE extension is enabled on
+    # first backend startup via backend/sql/018_enable_age.sql (creates
+    # extension + `ns_graph` graph). Graph data lives in the same
+    # postgres_data volume. See .specify/features/age-migration/spec.md.
+    # Pinned to a specific release tag (not `:latest`) for reproducibility.
+    image: apache/age:release_PG16_1.6.0
     container_name: northstar-postgres
     restart: unless-stopped
     ports:
