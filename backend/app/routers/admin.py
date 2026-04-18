@@ -1989,35 +1989,54 @@ async def serve_thumbnail(attachment_id: str):
             },
         )
 
-    # 2. Find the drawio attachment and its paired PNG
+    # 2. Find the drawio attachment and its paired PNG. Accept either a
+    # local-path PNG or an S3-only one (post-S3-migration rows have
+    # local_path=NULL but s3_key set).
     row = await pg_client.fetchrow(
         """
         SELECT d.title, d.page_id,
                img.local_path AS png_local_path,
+               img.s3_key     AS png_s3_key,
                img.attachment_id AS png_attachment_id
         FROM northstar.confluence_attachment d
         LEFT JOIN northstar.confluence_attachment img
           ON img.page_id = d.page_id
          AND img.file_kind = 'image'
          AND img.title = d.title || '.png'
-         AND img.local_path IS NOT NULL
+         AND (img.local_path IS NOT NULL OR img.s3_key IS NOT NULL)
         WHERE d.attachment_id = $1
         """,
         attachment_id,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="attachment not found")
-    if not row["png_local_path"]:
+    if not row["png_local_path"] and not row["png_s3_key"]:
         raise HTTPException(status_code=404, detail="no paired PNG preview available")
 
-    png_path = ATTACHMENT_ROOT / Path(row["png_local_path"]).name
-    if not png_path.exists():
-        raise HTTPException(status_code=404, detail="paired PNG not on disk")
+    # Resolve PNG bytes: S3 first (when configured), then local FS. Mirrors
+    # serve_attachment()'s fallback order so a row that has *both* will
+    # prefer S3 (the authoritative store after commit 4e34e9d).
+    png_bytes: bytes | None = None
+    if settings.s3_enabled and row["png_s3_key"]:
+        from app.services import s3_storage
+        png_bytes = s3_storage.download_bytes(row["png_s3_key"])
+        if png_bytes is None:
+            logger.warning(
+                "S3 thumbnail read failed for attachment_id=%s s3_key=%s — "
+                "falling back to FS", attachment_id, row["png_s3_key"],
+            )
+    if png_bytes is None and row["png_local_path"]:
+        png_path = ATTACHMENT_ROOT / Path(row["png_local_path"]).name
+        if png_path.exists():
+            png_bytes = png_path.read_bytes()
+    if png_bytes is None:
+        raise HTTPException(status_code=404, detail="paired PNG not available")
 
     # 3. Generate thumbnail (sync PIL call — fast for small output)
     try:
+        from io import BytesIO
         from PIL import Image
-        with Image.open(png_path) as im:
+        with Image.open(BytesIO(png_bytes)) as im:
             # Maintain aspect ratio
             ratio = THUMBNAIL_WIDTH / im.width
             new_h = max(1, int(im.height * ratio))
