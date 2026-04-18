@@ -526,11 +526,21 @@ async def get_application_integrations(
     SUNSET-status rows are filtered by default; pass include_sunset=true to
     include them.
     """
+    # LEFT JOIN ref_application for both sides — use CMDB canonical name
+    # when a CMDB ID is resolved. Excel-provided source_app_name / target_app_name
+    # are only a fallback for unlinked rows.
     sql = """
-        SELECT *
-        FROM northstar.integration_interface
-        WHERE source_cmdb_id = $1 OR target_cmdb_id = $1
-        ORDER BY integration_platform, interface_name, interface_id
+        SELECT
+            i.*,
+            ra_src.name AS _cmdb_source_name,
+            ra_tgt.name AS _cmdb_target_name
+        FROM northstar.integration_interface i
+        LEFT JOIN northstar.ref_application ra_src
+            ON ra_src.app_id = i.source_cmdb_id
+        LEFT JOIN northstar.ref_application ra_tgt
+            ON ra_tgt.app_id = i.target_cmdb_id
+        WHERE i.source_cmdb_id = $1 OR i.target_cmdb_id = $1
+        ORDER BY i.integration_platform, i.interface_name, i.interface_id
     """
     rows = await pg_client.fetch(sql, app_id)
 
@@ -541,6 +551,16 @@ async def get_application_integrations(
 
     for r in rows:
         d = dict(r)
+        # Name association: override Excel app names with CMDB canonical names
+        # whenever a CMDB ID is resolved. Falls back to Excel name only when
+        # the app is unlinked (no CMDB ID match).
+        if d.get("_cmdb_source_name"):
+            d["source_app_name"] = d["_cmdb_source_name"]
+        if d.get("_cmdb_target_name"):
+            d["target_app_name"] = d["_cmdb_target_name"]
+        d.pop("_cmdb_source_name", None)
+        d.pop("_cmdb_target_name", None)
+
         status = (d.get("status") or "").upper()
         if status == "SUNSET":
             sunset_count += 1
