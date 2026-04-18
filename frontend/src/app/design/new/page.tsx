@@ -215,8 +215,9 @@ export default function DesignNewPage() {
           }
         }
         setCatalog(ifaces);
-        // Default: all kept
-        setKeepIfaceIds(new Set(ifaces.map(i => i.interface_id)));
+        // Default: NONE selected — architect explicitly picks what belongs
+        // in the design. Prevents auto-bloat for apps with many interfaces.
+        setKeepIfaceIds(new Set());
       } catch (e) {
         setErr(String(e));
       }
@@ -567,8 +568,39 @@ export default function DesignNewPage() {
             </div>
           ) : (
             <>
-              <div style={{ fontSize: 11, color: "var(--text-dim)", marginBottom: 6 }}>
-                Found {catalog.length} interfaces. {keepIfaceIds.size} selected.
+              <div style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                fontSize: 11,
+                color: "var(--text-dim)",
+                marginBottom: 8,
+              }}>
+                <span>Found {catalog.length} interfaces. {keepIfaceIds.size} selected.</span>
+                <div style={{ flex: 1 }} />
+                <button
+                  onClick={() => setKeepIfaceIds(new Set(catalog.map(i => i.interface_id)))}
+                  style={{
+                    padding: "3px 10px", fontSize: 11, fontFamily: "var(--font-mono)",
+                    border: "1px solid var(--border)", background: "transparent",
+                    color: "var(--text-muted)", cursor: "pointer", borderRadius: 3,
+                  }}
+                >
+                  Select all
+                </button>
+                <button
+                  onClick={() => setKeepIfaceIds(new Set())}
+                  disabled={keepIfaceIds.size === 0}
+                  style={{
+                    padding: "3px 10px", fontSize: 11, fontFamily: "var(--font-mono)",
+                    border: "1px solid var(--border)", background: "transparent",
+                    color: keepIfaceIds.size === 0 ? "var(--text-dim)" : "var(--text-muted)",
+                    cursor: keepIfaceIds.size === 0 ? "default" : "pointer",
+                    borderRadius: 3,
+                  }}
+                >
+                  Clear
+                </button>
               </div>
               <div style={{ maxHeight: 450, overflowY: "auto" }}>
                 {catalog.map(iface => {

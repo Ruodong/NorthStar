@@ -178,13 +178,14 @@ async def list_templates() -> ApiResponse:
 @router.get("/templates/{attachment_id}")
 async def get_template_xml(attachment_id: int) -> Response:
     """Return the raw drawio XML of a template by attachment id."""
+    # confluence_attachment.attachment_id is VARCHAR; cast int → str for DB
     row = await pg_client.fetchrow(
         """
         SELECT title, file_kind, local_path, download_path
         FROM northstar.confluence_attachment
         WHERE attachment_id = $1
         """,
-        attachment_id,
+        str(attachment_id),
     )
     if row is None:
         raise HTTPException(status_code=404, detail="template not found")
@@ -309,7 +310,8 @@ async def create_design(payload: DesignCreate) -> ApiResponse:
             iface.platform, iface.interface_name, iface.planned_status,
         )
 
-    # 4. Fetch template XML if provided
+    # 4. Fetch template XML if provided. confluence_attachment.attachment_id
+    # is VARCHAR, so cast the int from the payload.
     template_xml = None
     if payload.template_attachment_id:
         tpl_row = await pg_client.fetchrow(
@@ -318,7 +320,7 @@ async def create_design(payload: DesignCreate) -> ApiResponse:
             FROM northstar.confluence_attachment
             WHERE attachment_id = $1
             """,
-            payload.template_attachment_id,
+            str(payload.template_attachment_id),
         )
         if tpl_row:
             path = tpl_row.get("local_path") or tpl_row.get("download_path")
@@ -565,7 +567,7 @@ async def regenerate_as_is(design_id: int) -> ApiResponse:
             FROM northstar.confluence_attachment
             WHERE attachment_id = $1
             """,
-            tpl_id,
+            str(tpl_id),
         )
         if tpl_row:
             path = tpl_row.get("local_path") or tpl_row.get("download_path")
