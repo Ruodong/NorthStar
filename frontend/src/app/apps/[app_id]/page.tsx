@@ -1162,67 +1162,83 @@ function Kpi({ label, value }: { label: string; value: number | string }) {
 }
 
 // ---------------- Integrations ----------------
-// Sourced from integration_catalog (WSO2/PO/Talend/APIH/KPaaS/Axway/Goanywhere/
-// Data Service). Grouped by integration_platform with platform-specific fields.
-// Replaces the previous drawio-extracted integration data.
+// Provider/Consumer split with fan-out aggregation per platform.
+// Data from /api/masters/applications/{app_id}/integrations (northstar.integration_interface).
 
-interface IntegrationRow {
+interface ConsumerEntry {
+  app_id: string | null;
+  app_name: string | null;
+  account_name?: string | null;
+  endpoint?: string | null;
+  status?: string | null;
   interface_id: number;
+}
+
+interface ProviderInterface {
+  key: string;
+  label: string;
   integration_platform: string;
-  interface_name: string | null;
-  source_cmdb_id?: string | null;
-  target_cmdb_id?: string | null;
-  source_app_name?: string | null;
-  target_app_name?: string | null;
-  source_account_name?: string | null;
-  target_account_name?: string | null;
-  source_endpoint?: string | null;
-  target_endpoint?: string | null;
-  source_connection_type?: string | null;
-  target_connection_type?: string | null;
-  source_authentication?: string | null;
-  target_authentication?: string | null;
-  source_dc?: string | null;
-  target_dc?: string | null;
-  source_owner?: string | null;
-  target_owner?: string | null;
-  source_application_type?: string | null;
-  target_application_type?: string | null;
-  source_payload_size?: string | null;
-  target_payload_size?: string | null;
-  api_payload_size?: string | null;
+  interface_name?: string | null;
   api_name?: string | null;
   topic_name?: string | null;
   instance?: string | null;
-  api_postman_url?: string | null;
-  api_spec?: string | null;
-  data_mapping_file?: string | null;
-  base?: string | null;
-  git_project?: string | null;
+  location?: string | null;
   business_area?: string | null;
   interface_description?: string | null;
+  api_postman_url?: string | null;
+  data_mapping_file?: string | null;
+  base?: string | null;
   frequency?: string | null;
-  schedule?: string | null;
-  developer?: string | null;
   interface_owner?: string | null;
-  location?: string | null;
-  tag?: string | null;
+  developer?: string | null;
+  endpoint?: string | null;
+  authentication?: string | null;
+  dc?: string | null;
+  application_type?: string | null;
+  account_name?: string | null;
+  statuses: string[];
+  consumers: ConsumerEntry[];
+}
+
+interface ConsumerRow {
+  interface_id: number;
+  label: string;
+  integration_platform: string;
+  interface_name?: string | null;
+  api_name?: string | null;
+  topic_name?: string | null;
+  instance?: string | null;
+  provider: { app_id: string | null; app_name: string | null; endpoint?: string | null };
+  my_account_name?: string | null;
+  my_endpoint?: string | null;
+  business_area?: string | null;
+  description?: string | null;
   status?: string | null;
-  [k: string]: unknown;
+  interface_owner?: string | null;
+  frequency?: string | null;
+  location?: string | null;
+  api_postman_url?: string | null;
+  data_mapping_file?: string | null;
+  base?: string | null;
 }
 
 interface IntegrationPayload {
   app_id: string;
-  total_interfaces: number;
-  total_outbound: number;
-  total_inbound: number;
   platforms: string[];
-  summary_by_platform: Record<
-    string,
-    { outbound: number; inbound: number; total: number }
-  >;
-  outbound_by_platform: Record<string, IntegrationRow[]>;
-  inbound_by_platform: Record<string, IntegrationRow[]>;
+  sunset_count: number;
+  include_sunset: boolean;
+  as_provider: {
+    total_interfaces: number;
+    total_consumers: number;
+    by_platform: Record<
+      string,
+      { total_interfaces: number; total_consumers: number; interfaces: ProviderInterface[] }
+    >;
+  };
+  as_consumer: {
+    total: number;
+    by_platform: Record<string, { total: number; rows: ConsumerRow[] }>;
+  };
 }
 
 const PLATFORM_COLORS: Record<string, string> = {
@@ -1238,26 +1254,57 @@ const PLATFORM_COLORS: Record<string, string> = {
   "Goanywhere-web user": "#6b7488",
 };
 
+function integrationStatusColor(status?: string | null): string {
+  if (!status) return "var(--text-muted)";
+  const s = status.toUpperCase();
+  if (s === "SUNSET") return "#6b7488";
+  if (s === "MTP") return "#5fc58a";
+  if (s === "INIT") return "#e8b458";
+  return "var(--text-muted)";
+}
+
+function IntegrationStatusPill({ status }: { status?: string | null }) {
+  if (!status) return null;
+  const color = integrationStatusColor(status);
+  return (
+    <span
+      className="status-pill"
+      style={{
+        fontSize: 10,
+        color,
+        background: `${color}26`,
+        padding: "2px 8px",
+      }}
+    >
+      {status}
+    </span>
+  );
+}
+
 function IntegrationsTab({ appId }: { appId: string }) {
   const [data, setData] = useState<IntegrationPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [activePlatform, setActivePlatform] = useState<string | null>(null);
+  const [includeSunset, setIncludeSunset] = useState(false);
+  const [selectedPlatforms, setSelectedPlatforms] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     (async () => {
       setLoading(true);
       setErr(null);
       try {
+        const params = new URLSearchParams();
+        if (includeSunset) params.set("include_sunset", "true");
         const r = await fetch(
-          `/api/masters/applications/${encodeURIComponent(appId)}/integrations`,
+          `/api/masters/applications/${encodeURIComponent(appId)}/integrations?${params}`,
           { cache: "no-store" },
         );
         const j = await r.json();
         if (!j.success) throw new Error(j.error || "Failed to load");
         setData(j.data);
-        if (j.data.platforms.length > 0) {
-          setActivePlatform(j.data.platforms[0]);
+        // Default: select all platforms on first load
+        if (j.data.platforms.length > 0 && selectedPlatforms.size === 0) {
+          setSelectedPlatforms(new Set(j.data.platforms));
         }
       } catch (e) {
         setErr(String(e));
@@ -1265,48 +1312,88 @@ function IntegrationsTab({ appId }: { appId: string }) {
         setLoading(false);
       }
     })();
-  }, [appId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appId, includeSunset]);
 
   if (loading) {
-    return (
-      <div style={{ color: "var(--text-dim)", padding: 20, fontSize: 13 }}>
-        Loading integrations…
-      </div>
-    );
+    return <div style={{ color: "var(--text-dim)", padding: 20, fontSize: 13 }}>Loading integrations…</div>;
   }
   if (err) {
+    return <div className="panel" style={{ borderColor: "#5b1f1f" }}>Error: {err}</div>;
+  }
+  if (!data) return null;
+
+  const totalProv = data.as_provider.total_interfaces;
+  const totalProvConsumers = data.as_provider.total_consumers;
+  const totalCons = data.as_consumer.total;
+
+  if (totalProv === 0 && totalCons === 0) {
     return (
-      <div className="panel" style={{ borderColor: "#5b1f1f" }}>
-        Error: {err}
+      <div style={{ display: "grid", gap: 12 }}>
+        <EmptyState>
+          No integration interfaces registered on any platform.
+        </EmptyState>
+        {data.sunset_count > 0 && !includeSunset && (
+          <button
+            onClick={() => setIncludeSunset(true)}
+            style={{
+              alignSelf: "start",
+              padding: "6px 12px",
+              background: "transparent",
+              border: "1px solid var(--border)",
+              borderRadius: 4,
+              color: "var(--text-muted)",
+              fontSize: 12,
+              cursor: "pointer",
+            }}
+          >
+            Show {data.sunset_count} SUNSET interface(s)
+          </button>
+        )}
       </div>
     );
   }
-  if (!data || data.total_interfaces === 0) {
-    return <EmptyState>No integration interfaces registered on any platform.</EmptyState>;
-  }
+
+  const togglePlatform = (p: string) => {
+    setSelectedPlatforms((prev) => {
+      const next = new Set(prev);
+      if (next.has(p)) next.delete(p);
+      else next.add(p);
+      return next;
+    });
+  };
+
+  const showAll = selectedPlatforms.size === data.platforms.length;
+  const setShowAll = () => setSelectedPlatforms(new Set(data.platforms));
+  const clearAll = () => setSelectedPlatforms(new Set());
+
+  const visiblePlatforms = data.platforms.filter((p) => selectedPlatforms.has(p));
 
   return (
-    <div style={{ display: "grid", gap: 16 }}>
-      {/* Platform filter pills */}
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-        <span
-          style={{
-            fontSize: 11,
-            color: "var(--text-dim)",
-            fontFamily: "var(--font-mono)",
-            marginRight: 4,
-          }}
-        >
+    <div style={{ display: "grid", gap: 20 }}>
+      {/* ── Toolbar ── */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          flexWrap: "wrap",
+          padding: "10px 14px",
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          borderRadius: "var(--radius-md)",
+        }}
+      >
+        <span style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
           PLATFORM
         </span>
         {data.platforms.map((p) => {
-          const active = activePlatform === p;
-          const s = data.summary_by_platform[p];
+          const active = selectedPlatforms.has(p);
           const color = PLATFORM_COLORS[p] || "#5f6a80";
           return (
             <button
               key={p}
-              onClick={() => setActivePlatform(p)}
+              onClick={() => togglePlatform(p)}
               style={{
                 border: `1px solid ${active ? color : "var(--border)"}`,
                 background: active ? `${color}26` : "transparent",
@@ -1317,127 +1404,196 @@ function IntegrationsTab({ appId }: { appId: string }) {
                 cursor: "pointer",
                 fontFamily: "var(--font-body)",
                 whiteSpace: "nowrap",
-                transition: "all 0.15s",
               }}
             >
-              {p}{" "}
-              <span style={{ opacity: 0.6, fontSize: 11 }}>
-                ({s.total})
-              </span>
+              {p}
             </button>
           );
         })}
-        <div style={{ flex: 1 }} />
-        <div
+        <button
+          onClick={showAll ? clearAll : setShowAll}
           style={{
-            fontSize: 11,
+            border: "none",
+            background: "transparent",
             color: "var(--text-dim)",
-            fontFamily: "var(--font-mono)",
+            fontSize: 11,
+            cursor: "pointer",
+            padding: "4px 8px",
           }}
         >
-          {data.total_outbound} outbound · {data.total_inbound} inbound · {data.total_interfaces} total
-        </div>
+          {showAll ? "clear all" : "select all"}
+        </button>
+
+        <div style={{ flex: 1 }} />
+
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 12,
+            color: "var(--text-muted)",
+            cursor: "pointer",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={includeSunset}
+            onChange={(e) => setIncludeSunset(e.target.checked)}
+            style={{ accentColor: "var(--accent)" }}
+          />
+          Include SUNSET
+          {data.sunset_count > 0 && (
+            <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
+              ({data.sunset_count})
+            </span>
+          )}
+        </label>
+
+        <span style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
+          {totalProv} provider · {totalCons} consumer
+        </span>
       </div>
 
-      {/* Platform section — outbound + inbound */}
-      {activePlatform && (
-        <PlatformSection
-          platform={activePlatform}
-          outbound={data.outbound_by_platform[activePlatform] || []}
-          inbound={data.inbound_by_platform[activePlatform] || []}
+      {/* ── AS PROVIDER section ── */}
+      {totalProv > 0 && (
+        <SectionHeader
+          icon="📤"
+          title="AS PROVIDER"
+          subtitle={`${totalProv} interfaces · ${totalProvConsumers} consumers`}
+          color="#f6a623"
         />
       )}
-    </div>
-  );
-}
+      {totalProv > 0 &&
+        visiblePlatforms.map((p) => {
+          const bucket = data.as_provider.by_platform[p];
+          if (!bucket || bucket.interfaces.length === 0) return null;
+          return <ProviderPlatformBlock key={p} platform={p} bucket={bucket} />;
+        })}
 
-function PlatformSection({
-  platform,
-  outbound,
-  inbound,
-}: {
-  platform: string;
-  outbound: IntegrationRow[];
-  inbound: IntegrationRow[];
-}) {
-  return (
-    <div style={{ display: "grid", gap: 16 }}>
-      <Panel title={`${platform} — Outgoing (${outbound.length})`}>
-        {outbound.length === 0 ? (
-          <EmptyState>No outgoing on {platform}.</EmptyState>
-        ) : (
-          <InterfaceList rows={outbound} platform={platform} direction="outbound" />
-        )}
-      </Panel>
-
-      <Panel title={`${platform} — Incoming (${inbound.length})`}>
-        {inbound.length === 0 ? (
-          <EmptyState>No incoming on {platform}.</EmptyState>
-        ) : (
-          <InterfaceList rows={inbound} platform={platform} direction="inbound" />
-        )}
-      </Panel>
-    </div>
-  );
-}
-
-function InterfaceList({
-  rows,
-  platform,
-  direction,
-}: {
-  rows: IntegrationRow[];
-  platform: string;
-  direction: "outbound" | "inbound";
-}) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {rows.map((r) => (
-        <InterfaceCard
-          key={r.interface_id}
-          row={r}
-          platform={platform}
-          direction={direction}
+      {/* ── AS CONSUMER section ── */}
+      {totalCons > 0 && (
+        <SectionHeader
+          icon="📥"
+          title="AS CONSUMER"
+          subtitle={`${totalCons} subscription${totalCons === 1 ? "" : "s"}`}
+          color="#6ba6e8"
         />
-      ))}
+      )}
+      {totalCons > 0 &&
+        visiblePlatforms.map((p) => {
+          const bucket = data.as_consumer.by_platform[p];
+          if (!bucket || bucket.rows.length === 0) return null;
+          return <ConsumerPlatformBlock key={p} platform={p} bucket={bucket} />;
+        })}
     </div>
   );
 }
 
-function InterfaceCard({
-  row,
-  platform,
-  direction,
+function SectionHeader({
+  icon,
+  title,
+  subtitle,
+  color,
 }: {
-  row: IntegrationRow;
-  platform: string;
-  direction: "outbound" | "inbound";
+  icon: string;
+  title: string;
+  subtitle: string;
+  color: string;
 }) {
-  const peerId =
-    direction === "outbound" ? row.target_cmdb_id : row.source_cmdb_id;
-  const peerName =
-    direction === "outbound" ? row.target_app_name : row.source_app_name;
-  const peerEndpoint =
-    direction === "outbound" ? row.target_endpoint : row.source_endpoint;
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "8px 0 6px",
+        borderBottom: `1px solid var(--border)`,
+        borderLeft: `3px solid ${color}`,
+        paddingLeft: 10,
+        marginBottom: 4,
+      }}
+    >
+      <span style={{ fontSize: 14 }}>{icon}</span>
+      <span
+        style={{
+          fontSize: 12,
+          fontFamily: "var(--font-mono)",
+          color,
+          fontWeight: 600,
+          letterSpacing: 0.6,
+        }}
+      >
+        {title}
+      </span>
+      <span style={{ color: "var(--text-dim)", fontSize: 11 }}>{subtitle}</span>
+    </div>
+  );
+}
 
-  // Platform-specific name display
-  const name =
-    platform === "APIH"
-      ? row.api_name || row.interface_name
-      : platform === "KPaaS"
-      ? row.topic_name || row.interface_name
-      : row.interface_name;
+function ProviderPlatformBlock({
+  platform,
+  bucket,
+}: {
+  platform: string;
+  bucket: { total_interfaces: number; total_consumers: number; interfaces: ProviderInterface[] };
+}) {
+  const color = PLATFORM_COLORS[platform] || "#5f6a80";
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <span style={{ color, fontSize: 12, fontWeight: 600, fontFamily: "var(--font-mono)" }}>
+          {platform}
+        </span>
+        <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
+          {bucket.total_interfaces} published · {bucket.total_consumers} consumer
+          {bucket.total_consumers === 1 ? "" : "s"}
+        </span>
+      </div>
+      <div style={{ display: "grid", gap: 8 }}>
+        {bucket.interfaces.map((iface) => (
+          <ProviderInterfaceCard key={iface.key} iface={iface} platform={platform} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProviderInterfaceCard({
+  iface,
+  platform,
+}: {
+  iface: ProviderInterface;
+  platform: string;
+}) {
+  const hasSunset = iface.statuses.some((s) => s.toUpperCase() === "SUNSET");
+  const primaryStatus = iface.statuses.find((s) => s.toUpperCase() !== "SUNSET") || iface.statuses[0];
+
+  // Platform-specific detail rows
+  const details: [string, string | null | undefined][] = [];
+  if (iface.instance) details.push(["Instance", iface.instance]);
+  if (iface.account_name) details.push(["Account", iface.account_name]);
+  if (iface.endpoint) details.push(["Endpoint", iface.endpoint]);
+  if (iface.authentication) details.push(["Auth", iface.authentication]);
+  if (iface.api_postman_url) details.push(["Postman URL", iface.api_postman_url]);
+  if (iface.dc) details.push(["DC", iface.dc]);
+  if (iface.business_area) details.push(["Business area", iface.business_area]);
+  if (iface.frequency) details.push(["Frequency", iface.frequency]);
+  if (iface.data_mapping_file) details.push(["Mapping file", iface.data_mapping_file]);
+  if (iface.base) details.push(["Base path", iface.base]);
+  if (iface.interface_description) details.push(["Description", iface.interface_description]);
 
   return (
     <div
       style={{
         border: "1px solid var(--border)",
         borderRadius: "var(--radius-md)",
-        padding: "10px 14px",
-        background: "var(--bg-elevated)",
+        padding: "12px 14px",
+        background: hasSunset ? "var(--bg-elevated)" : "var(--surface)",
+        opacity: hasSunset ? 0.7 : 1,
       }}
     >
-      {/* Header row — name + peer + status */}
+      {/* Header — interface name + status */}
       <div
         style={{
           display: "flex",
@@ -1450,206 +1606,259 @@ function InterfaceCard({
         <span
           style={{
             fontFamily: "var(--font-mono)",
+            fontSize: 13,
+            color: "var(--text)",
+            fontWeight: 600,
+            wordBreak: "break-all",
+          }}
+        >
+          {iface.label}
+        </span>
+        <div style={{ flex: 1 }} />
+        <IntegrationStatusPill status={primaryStatus} />
+      </div>
+
+      {/* Details grid */}
+      {details.length > 0 && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: "4px 16px",
+            fontSize: 11,
+            color: "var(--text-muted)",
+            marginBottom: 10,
+          }}
+        >
+          {details.map(([label, val]) => (
+            <div key={label} style={{ display: "flex", gap: 8, minWidth: 0 }}>
+              <span style={{ color: "var(--text-dim)", minWidth: 90, flexShrink: 0 }}>
+                {label}
+              </span>
+              <span
+                style={{
+                  color: "var(--text)",
+                  wordBreak: "break-all",
+                  fontFamily:
+                    label === "Endpoint" ||
+                    label === "Postman URL" ||
+                    label === "Mapping file" ||
+                    label === "Base path"
+                      ? "var(--font-mono)"
+                      : "inherit",
+                  fontSize: label === "Endpoint" || label === "Postman URL" ? 10 : 11,
+                }}
+              >
+                {val}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Consumers list */}
+      <div
+        style={{
+          borderTop: "1px dashed var(--border)",
+          paddingTop: 8,
+        }}
+      >
+        <div
+          style={{
+            fontSize: 10,
+            color: "var(--text-dim)",
+            fontFamily: "var(--font-mono)",
+            letterSpacing: 0.6,
+            marginBottom: 6,
+          }}
+        >
+          {platform === "KPaaS"
+            ? `SUBSCRIBERS (${iface.consumers.length})`
+            : `CONSUMERS (${iface.consumers.length})`}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {iface.consumers.map((c) => (
+            <div
+              key={c.interface_id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                fontSize: 12,
+                opacity: c.status?.toUpperCase() === "SUNSET" ? 0.5 : 1,
+              }}
+            >
+              <span style={{ color: "var(--text-dim)", fontSize: 12 }}>→</span>
+              {c.app_id ? (
+                <Link
+                  href={`/apps/${encodeURIComponent(c.app_id)}`}
+                  style={{
+                    color: "var(--accent)",
+                    fontFamily: "var(--font-mono)",
+                    fontSize: 12,
+                    minWidth: 80,
+                  }}
+                >
+                  {c.app_id}
+                </Link>
+              ) : (
+                <span style={{ color: "var(--text-dim)", fontSize: 12, minWidth: 80 }}>
+                  (unlinked)
+                </span>
+              )}
+              {c.app_name && (
+                <span style={{ color: "var(--text)", fontSize: 12 }}>{c.app_name}</span>
+              )}
+              {c.account_name && (
+                <span
+                  style={{
+                    color: "var(--text-dim)",
+                    fontSize: 11,
+                    fontFamily: "var(--font-mono)",
+                  }}
+                >
+                  ({c.account_name})
+                </span>
+              )}
+              <div style={{ flex: 1 }} />
+              <IntegrationStatusPill status={c.status} />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConsumerPlatformBlock({
+  platform,
+  bucket,
+}: {
+  platform: string;
+  bucket: { total: number; rows: ConsumerRow[] };
+}) {
+  const color = PLATFORM_COLORS[platform] || "#5f6a80";
+  return (
+    <div style={{ display: "grid", gap: 10 }}>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <span style={{ color, fontSize: 12, fontWeight: 600, fontFamily: "var(--font-mono)" }}>
+          {platform}
+        </span>
+        <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
+          {bucket.total} subscription{bucket.total === 1 ? "" : "s"}
+        </span>
+      </div>
+      <div style={{ display: "grid", gap: 6 }}>
+        {bucket.rows.map((row) => (
+          <ConsumerRowCard key={row.interface_id} row={row} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ConsumerRowCard({ row }: { row: ConsumerRow }) {
+  const isSunset = row.status?.toUpperCase() === "SUNSET";
+  const details: [string, string | null | undefined][] = [];
+  if (row.my_account_name) details.push(["My account", row.my_account_name]);
+  if (row.instance) details.push(["Provider instance", row.instance]);
+  if (row.provider.endpoint) details.push(["Provider endpoint", row.provider.endpoint]);
+  if (row.my_endpoint) details.push(["My endpoint", row.my_endpoint]);
+  if (row.business_area) details.push(["Business area", row.business_area]);
+  if (row.api_postman_url) details.push(["Postman URL", row.api_postman_url]);
+  if (row.data_mapping_file) details.push(["Mapping file", row.data_mapping_file]);
+  if (row.base) details.push(["Base path", row.base]);
+  if (row.description) details.push(["Description", row.description]);
+
+  return (
+    <div
+      style={{
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-md)",
+        padding: "10px 14px",
+        background: isSunset ? "var(--bg-elevated)" : "var(--surface)",
+        opacity: isSunset ? 0.7 : 1,
+      }}
+    >
+      {/* Header — interface label + provider + status */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          marginBottom: details.length > 0 ? 8 : 0,
+          flexWrap: "wrap",
+        }}
+      >
+        <span
+          style={{
+            fontFamily: "var(--font-mono)",
             fontSize: 12,
             color: "var(--text)",
             fontWeight: 500,
             wordBreak: "break-all",
           }}
         >
-          {name || "(unnamed)"}
+          {row.label}
         </span>
-        <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
-          {direction === "outbound" ? "→" : "←"}
-        </span>
-        {peerId ? (
+        <span style={{ color: "var(--text-dim)", fontSize: 11 }}>by</span>
+        {row.provider.app_id ? (
           <Link
-            href={`/apps/${encodeURIComponent(peerId)}`}
-            style={{
-              color: "var(--accent)",
-              fontFamily: "var(--font-mono)",
-              fontSize: 12,
-            }}
+            href={`/apps/${encodeURIComponent(row.provider.app_id)}`}
+            style={{ color: "var(--accent)", fontFamily: "var(--font-mono)", fontSize: 12 }}
           >
-            {peerId}
+            {row.provider.app_id}
           </Link>
         ) : (
-          <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
-            (unlinked)
-          </span>
+          <span style={{ color: "var(--text-dim)", fontSize: 11 }}>(unlinked)</span>
         )}
-        {peerName && (
+        {row.provider.app_name && (
           <span style={{ color: "var(--text-muted)", fontSize: 12 }}>
-            {peerName}
+            {row.provider.app_name}
           </span>
         )}
         <div style={{ flex: 1 }} />
-        {row.status && (
-          <span
-            className="status-pill"
-            style={{
-              fontSize: 10,
-              color:
-                row.status === "SUNSET"
-                  ? "#6b7488"
-                  : row.status === "MTP"
-                  ? "#5fc58a"
-                  : "var(--text-muted)",
-              background:
-                row.status === "SUNSET"
-                  ? "#6b748826"
-                  : row.status === "MTP"
-                  ? "#5fc58a26"
-                  : "var(--surface-hover)",
-            }}
-          >
-            {row.status}
-          </span>
-        )}
+        <IntegrationStatusPill status={row.status} />
       </div>
 
-      {/* Detail grid — platform-specific fields */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-          gap: "4px 16px",
-          fontSize: 11,
-          color: "var(--text-muted)",
-        }}
-      >
-        <PlatformFields row={row} platform={platform} peerEndpoint={peerEndpoint ?? null} />
-      </div>
+      {/* Details */}
+      {details.length > 0 && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: "4px 16px",
+            fontSize: 11,
+            color: "var(--text-muted)",
+          }}
+        >
+          {details.map(([label, val]) => (
+            <div key={label} style={{ display: "flex", gap: 8, minWidth: 0 }}>
+              <span style={{ color: "var(--text-dim)", minWidth: 110, flexShrink: 0 }}>
+                {label}
+              </span>
+              <span
+                style={{
+                  color: "var(--text)",
+                  wordBreak: "break-all",
+                  fontFamily:
+                    label === "Provider endpoint" ||
+                    label === "My endpoint" ||
+                    label === "Postman URL" ||
+                    label === "Mapping file" ||
+                    label === "Base path"
+                      ? "var(--font-mono)"
+                      : "inherit",
+                  fontSize: 11,
+                }}
+              >
+                {val}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
-  );
-}
-
-function PlatformFields({
-  row,
-  platform,
-  peerEndpoint,
-}: {
-  row: IntegrationRow;
-  platform: string;
-  peerEndpoint: string | null;
-}) {
-  // Map platform → ordered list of [label, value] pairs to display
-  const pairs: [string, string | null | undefined][] = [];
-
-  switch (platform) {
-    case "WSO2":
-      pairs.push(
-        ["Protocol", `${row.source_connection_type || "—"} → ${row.target_connection_type || "—"}`],
-        ["Auth (src→tgt)", `${row.source_authentication || "—"} → ${row.target_authentication || "—"}`],
-        ["Business area", row.business_area],
-        ["Payload size", row.api_payload_size || row.source_payload_size || null],
-        ["Endpoint", peerEndpoint],
-        ["Developer", row.developer],
-        ["Owner", row.interface_owner],
-        ["Location", row.location],
-        ...(row.api_postman_url ? [["Postman URL", row.api_postman_url] as [string, string | null | undefined]] : []),
-      );
-      break;
-
-    case "APIH":
-      pairs.push(
-        ["Pub account", row.source_account_name],
-        ["Sub account", row.target_account_name],
-        ["Instance", row.instance],
-        ["Description", row.interface_description],
-      );
-      break;
-
-    case "KPaaS":
-      pairs.push(
-        ["Pub account", row.source_account_name],
-        ["Sub account", row.target_account_name],
-        ["Instance", row.instance],
-        ["Description", row.interface_description],
-      );
-      break;
-
-    case "Talend":
-      pairs.push(
-        ["Endpoint", peerEndpoint],
-        ["DC (src→tgt)", `${row.source_dc || "—"} → ${row.target_dc || "—"}`],
-        ["Business area", row.business_area],
-      );
-      break;
-
-    case "PO":
-      pairs.push(
-        ["Protocol", `${row.source_connection_type || "—"} → ${row.target_connection_type || "—"}`],
-        ["Endpoint", peerEndpoint],
-        ["Mapping file", row.data_mapping_file],
-        ["Frequency", row.frequency],
-      );
-      break;
-
-    case "Data Service":
-      pairs.push(
-        ["Protocol", `${row.source_connection_type || "—"} → ${row.target_connection_type || "—"}`],
-        ["Endpoint", peerEndpoint],
-        ["Git project", row.git_project],
-        ["Owner", `${row.source_owner || "—"} → ${row.target_owner || "—"}`],
-      );
-      break;
-
-    case "Axway":
-    case "Axway MFT":
-      pairs.push(
-        ["Protocol", `${row.source_connection_type || "—"} → ${row.target_connection_type || "—"}`],
-        ["Endpoint", peerEndpoint],
-        ["Base path", row.base],
-        ["Mapping file", row.data_mapping_file],
-        ["Frequency", row.frequency],
-        ["Tag", row.tag],
-      );
-      break;
-
-    case "Goanywhere-job":
-    case "Goanywhere-web user":
-      pairs.push(
-        ["Endpoint", peerEndpoint],
-        ["Base path", row.base],
-        ["Frequency", row.frequency],
-        ["Owner", row.interface_owner],
-      );
-      break;
-
-    default:
-      // Generic fallback
-      pairs.push(
-        ["Protocol", `${row.source_connection_type || "—"} → ${row.target_connection_type || "—"}`],
-        ["Endpoint", peerEndpoint],
-        ["Status", row.status],
-      );
-  }
-
-  return (
-    <>
-      {pairs
-        .filter(([, v]) => v != null && v !== "" && v !== "— → —")
-        .map(([label, value]) => (
-          <div key={label} style={{ display: "flex", gap: 8, minWidth: 0 }}>
-            <span style={{ color: "var(--text-dim)", minWidth: 90, flexShrink: 0 }}>
-              {label}
-            </span>
-            <span
-              style={{
-                color: "var(--text)",
-                wordBreak: "break-all",
-                fontFamily:
-                  label === "Endpoint" || label === "Postman URL" || label === "Mapping file" || label === "Base path"
-                    ? "var(--font-mono)"
-                    : "inherit",
-                fontSize: label === "Endpoint" || label === "Postman URL" ? 10 : 11,
-              }}
-            >
-              {value}
-            </span>
-          </div>
-        ))}
-    </>
   );
 }
 

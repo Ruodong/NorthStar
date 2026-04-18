@@ -428,154 +428,291 @@ async def get_application_deployment(app_id: str) -> ApiResponse:
     })
 
 
-# Per-platform field selections — each platform has different "most useful"
-# columns. The frontend renders whichever of these are non-null.
-_PLATFORM_FIELD_SETS: dict[str, list[str]] = {
-    "WSO2": [
-        "interface_name", "api_postman_url", "source_connection_type",
-        "target_connection_type", "source_authentication", "target_authentication",
-        "business_area", "source_endpoint", "target_endpoint",
-        "source_payload_size", "target_payload_size",
-        "developer", "interface_owner", "location", "status",
-    ],
-    "APIH": [
-        "api_name", "source_account_name", "target_account_name",
-        "instance", "interface_description", "status",
-    ],
-    "KPaaS": [
-        "topic_name", "source_account_name", "target_account_name",
-        "instance", "interface_description", "status",
-    ],
-    "Talend": [
-        "interface_name", "source_endpoint", "target_endpoint",
-        "source_dc", "target_dc", "business_area", "status",
-    ],
-    "PO": [
-        "interface_name", "source_endpoint", "target_endpoint",
-        "source_connection_type", "target_connection_type",
-        "data_mapping_file", "frequency", "status",
-    ],
-    "Data Service": [
-        "interface_name", "source_endpoint", "target_endpoint",
-        "source_connection_type", "target_connection_type",
-        "source_owner", "target_owner", "git_project", "status",
-    ],
-    "Axway": [
-        "interface_name", "source_connection_type", "target_connection_type",
-        "data_mapping_file", "base", "tag", "status",
-    ],
-    "Axway MFT": [
-        "interface_name", "source_endpoint", "target_endpoint",
-        "base", "frequency", "tag", "status",
-    ],
-    "Goanywhere-job": [
-        "interface_name", "source_endpoint", "target_endpoint",
-        "base", "frequency", "tag", "status",
-    ],
-    "Goanywhere-web user": [
-        "interface_name", "interface_owner", "base", "frequency", "status",
-    ],
+# ---------------------------------------------------------------------------
+# Application integrations — Provider / Consumer model
+# ---------------------------------------------------------------------------
+#
+# Integration semantics per platform (who provides the endpoint = Provider):
+#
+#   APIH, KPaaS, Talend, PO, Data Service, Axway, Axway MFT,
+#   Goanywhere-job, Goanywhere-web user  → source is Provider
+#
+#   WSO2 → target is Provider (target_endpoint is the real service URL;
+#          source_endpoint is often N/A — the API is proxied via WSO2 to target)
+#
+# Provider-side aggregation (fan-out):
+#   APIH  → (api_name, instance)       # one API per cluster
+#   KPaaS → (topic_name, instance)     # one topic per cluster
+#   WSO2  → interface_name              # one interface
+#   others → interface_name
+
+# Platforms where "source" means the Provider (supplier of the endpoint/topic/data)
+_SOURCE_IS_PROVIDER: dict[str, bool] = {
+    "APIH": True,
+    "KPaaS": True,
+    "Talend": True,
+    "PO": True,
+    "Data Service": True,
+    "Axway": True,
+    "Axway MFT": True,
+    "Goanywhere-job": True,
+    "Goanywhere-web user": True,
+    "WSO2": False,  # target is Provider
 }
 
-# Always-included fields (regardless of platform) that the frontend uses
-# for rendering the header row of each interface card
-_CORE_FIELDS = [
-    "interface_id",
-    "integration_platform",
-    "interface_name",
-    "source_cmdb_id", "target_cmdb_id",
-    "source_app_name", "target_app_name",
-    "status",
+
+def _my_role(row: dict, app_id: str) -> str:
+    """Return 'provider' or 'consumer' from app_id's perspective for this row."""
+    platform = row.get("integration_platform", "")
+    src_is_provider = _SOURCE_IS_PROVIDER.get(platform, True)
+    am_source = row.get("source_cmdb_id") == app_id
+    if am_source:
+        return "provider" if src_is_provider else "consumer"
+    return "consumer" if src_is_provider else "provider"
+
+
+def _aggregation_key(row: dict) -> str:
+    """Stable key for grouping Provider rows into one interface/topic (fan-out)."""
+    platform = row.get("integration_platform", "")
+    if platform == "APIH":
+        return "|".join([
+            platform,
+            row.get("api_name") or row.get("interface_name") or "",
+            row.get("instance") or "",
+        ])
+    if platform == "KPaaS":
+        return "|".join([
+            platform,
+            row.get("topic_name") or row.get("interface_name") or "",
+            row.get("instance") or "",
+        ])
+    # All other platforms group by interface_name
+    return f"{platform}|{row.get('interface_name') or ''}"
+
+
+def _interface_label(row: dict) -> str:
+    """Human-readable label for one interface/topic/API."""
+    platform = row.get("integration_platform", "")
+    if platform == "APIH":
+        return row.get("api_name") or row.get("interface_name") or "(unnamed)"
+    if platform == "KPaaS":
+        return row.get("topic_name") or row.get("interface_name") or "(unnamed)"
+    return row.get("interface_name") or "(unnamed)"
+
+
+# Fields that describe the provided interface itself (shared across all rows
+# of the same aggregation key). Frontend shows these once per interface card.
+_INTERFACE_COMMON_FIELDS = [
+    "integration_platform", "interface_name", "api_name", "topic_name",
+    "instance", "location", "business_area", "interface_description",
+    "api_postman_url", "api_spec", "data_mapping_file", "base",
+    "git_project", "tag", "version", "frequency", "schedule",
+    "interface_owner", "developer",
 ]
 
 
 @router.get("/applications/{app_id}/integrations")
-async def get_application_integrations(app_id: str) -> ApiResponse:
-    """Integration interfaces for an application, grouped by platform.
+async def get_application_integrations(
+    app_id: str,
+    include_sunset: bool = Query(False, description="Include SUNSET-status interfaces"),
+) -> ApiResponse:
+    """Integration interfaces for an application.
 
-    Returns inbound (this app is target) and outbound (this app is source)
-    interface rows from northstar.integration_interface, grouped per
-    integration_platform with platform-specific useful fields.
+    Returns two sections:
+      - as_provider: interfaces I expose, grouped by (platform, interface_key),
+        each group listing consumers (fan-out).
+      - as_consumer: interfaces I use, one row per subscription.
 
-    Frontend renders each platform as a section with platform-appropriate
-    columns per _PLATFORM_FIELD_SETS.
+    SUNSET-status rows are filtered by default; pass include_sunset=true to
+    include them.
     """
-    rows = await pg_client.fetch(
-        """
+    sql = """
         SELECT *
         FROM northstar.integration_interface
         WHERE source_cmdb_id = $1 OR target_cmdb_id = $1
-        ORDER BY integration_platform, interface_name
-        """,
-        app_id,
-    )
+        ORDER BY integration_platform, interface_name, interface_id
+    """
+    rows = await pg_client.fetch(sql, app_id)
 
-    outbound: dict[str, list[dict]] = {}
-    inbound: dict[str, list[dict]] = {}
-    platforms_seen: set[str] = set()
+    # Bucket rows by role (from app_id's perspective)
+    provider_rows: list[dict] = []
+    consumer_rows: list[dict] = []
+    sunset_count = 0
 
     for r in rows:
         d = dict(r)
-        platform = d["integration_platform"]
-        platforms_seen.add(platform)
+        status = (d.get("status") or "").upper()
+        if status == "SUNSET":
+            sunset_count += 1
+            if not include_sunset:
+                continue
 
-        # Pick per-platform useful fields; always include core fields
-        wanted = set(_CORE_FIELDS + _PLATFORM_FIELD_SETS.get(platform, []))
-        # Counterpart side info
-        if d["source_cmdb_id"] == app_id:
-            # outbound — show target
-            wanted.update([
-                "target_cmdb_id", "target_app_name", "target_endpoint",
-                "target_connection_type", "target_authentication",
-                "target_account_name", "target_dc", "target_owner",
-                "target_application_type",
-            ])
-            bucket = outbound
+        role = _my_role(d, app_id)
+        if role == "provider":
+            provider_rows.append(d)
         else:
-            wanted.update([
-                "source_cmdb_id", "source_app_name", "source_endpoint",
-                "source_connection_type", "source_authentication",
-                "source_account_name", "source_dc", "source_owner",
-                "source_application_type",
-            ])
-            bucket = inbound
+            consumer_rows.append(d)
 
-        filtered = {k: v for k, v in d.items() if k in wanted and v is not None}
-        # Keep raw_fields nested if present and platform-relevant
-        if d.get("raw_fields"):
-            filtered["raw_fields"] = d["raw_fields"]
+    # ---- Provider side: aggregate by interface key ----
+    # {platform: {agg_key: {interface_info, consumers: [...]}}}
+    provider_by_platform: dict[str, dict[str, dict]] = {}
+    for r in provider_rows:
+        platform = r["integration_platform"]
+        key = _aggregation_key(r)
+        platform_bucket = provider_by_platform.setdefault(platform, {})
+        if key not in platform_bucket:
+            # First row for this interface — capture common fields
+            info = {k: r.get(k) for k in _INTERFACE_COMMON_FIELDS if r.get(k) is not None}
+            info["key"] = key
+            info["label"] = _interface_label(r)
+            # Provider-side endpoint: for WSO2 it's target_endpoint; for others source_endpoint
+            if platform == "WSO2":
+                info["endpoint"] = r.get("target_endpoint")
+                info["authentication"] = r.get("target_authentication")
+                info["dc"] = r.get("target_dc")
+                info["application_type"] = r.get("target_application_type")
+            else:
+                info["endpoint"] = r.get("source_endpoint")
+                info["authentication"] = r.get("source_authentication")
+                info["dc"] = r.get("source_dc")
+                info["application_type"] = r.get("source_application_type")
+            # My account name on provider side
+            if platform in ("APIH", "KPaaS"):
+                info["account_name"] = (
+                    r.get("target_account_name") if platform == "WSO2"
+                    else r.get("source_account_name")
+                )
+            # Statuses present across this interface's rows
+            info["statuses"] = set()
+            info["consumers"] = []
+            info["_seen_consumer_keys"] = set()
+            platform_bucket[key] = info
 
-        bucket.setdefault(platform, []).append(filtered)
+        info = platform_bucket[key]
+        # Consumer (the OTHER side of this row)
+        if platform == "WSO2":
+            consumer_id = r.get("source_cmdb_id")
+            consumer_name = r.get("source_app_name")
+            consumer_account = r.get("source_account_name")
+            consumer_endpoint = r.get("source_endpoint")
+        else:
+            consumer_id = r.get("target_cmdb_id")
+            consumer_name = r.get("target_app_name")
+            consumer_account = r.get("target_account_name")
+            consumer_endpoint = r.get("target_endpoint")
 
-    # Sort platforms in a stable preferred order, then alphabetical
+        consumer_key = f"{consumer_id or ''}|{consumer_account or ''}|{consumer_endpoint or ''}"
+        if consumer_key not in info["_seen_consumer_keys"]:
+            info["_seen_consumer_keys"].add(consumer_key)
+            info["consumers"].append({
+                "app_id": consumer_id,
+                "app_name": consumer_name,
+                "account_name": consumer_account,
+                "endpoint": consumer_endpoint,
+                "status": r.get("status"),
+                "interface_id": r["interface_id"],
+            })
+        if r.get("status"):
+            info["statuses"].add(r["status"])
+
+    # Sanitize: convert set → list, drop internal fields
+    provider_out: dict[str, dict] = {}
+    for platform, bucket in provider_by_platform.items():
+        interfaces = []
+        total_consumers = 0
+        for info in bucket.values():
+            info["statuses"] = sorted(info["statuses"])
+            info.pop("_seen_consumer_keys", None)
+            total_consumers += len(info["consumers"])
+            interfaces.append(info)
+        # Sort interfaces by consumer count DESC, then by label
+        interfaces.sort(key=lambda x: (-len(x["consumers"]), x["label"]))
+        provider_out[platform] = {
+            "total_interfaces": len(interfaces),
+            "total_consumers": total_consumers,
+            "interfaces": interfaces,
+        }
+
+    # ---- Consumer side: list per-row, grouped only by platform ----
+    consumer_out: dict[str, dict] = {}
+    for r in consumer_rows:
+        platform = r["integration_platform"]
+        # The Provider is the OTHER side
+        if platform == "WSO2":
+            provider_id = r.get("target_cmdb_id")
+            provider_name = r.get("target_app_name")
+            provider_endpoint = r.get("target_endpoint")
+            my_endpoint = r.get("source_endpoint")
+            my_account = r.get("source_account_name")
+        else:
+            provider_id = r.get("source_cmdb_id")
+            provider_name = r.get("source_app_name")
+            provider_endpoint = r.get("source_endpoint")
+            my_endpoint = r.get("target_endpoint")
+            my_account = r.get("target_account_name")
+
+        entry = {
+            "interface_id": r["interface_id"],
+            "label": _interface_label(r),
+            "integration_platform": platform,
+            "interface_name": r.get("interface_name"),
+            "api_name": r.get("api_name"),
+            "topic_name": r.get("topic_name"),
+            "instance": r.get("instance"),
+            "provider": {
+                "app_id": provider_id,
+                "app_name": provider_name,
+                "endpoint": provider_endpoint,
+            },
+            "my_account_name": my_account,
+            "my_endpoint": my_endpoint,
+            "business_area": r.get("business_area"),
+            "description": r.get("interface_description"),
+            "status": r.get("status"),
+            "interface_owner": r.get("interface_owner"),
+            "frequency": r.get("frequency"),
+            "location": r.get("location"),
+            "api_postman_url": r.get("api_postman_url"),
+            "data_mapping_file": r.get("data_mapping_file"),
+            "base": r.get("base"),
+        }
+        consumer_out.setdefault(platform, {"total": 0, "rows": []})
+        consumer_out[platform]["rows"].append(entry)
+
+    for platform, bucket in consumer_out.items():
+        bucket["total"] = len(bucket["rows"])
+        bucket["rows"].sort(key=lambda x: (x["label"], x["interface_id"]))
+
+    # Platform ordering — preferred then alphabetical
     PRIORITY = ["WSO2", "APIH", "KPaaS", "Talend", "PO", "Data Service",
                 "Axway", "Axway MFT", "Goanywhere-job", "Goanywhere-web user"]
-    platform_order = sorted(
-        platforms_seen,
+    all_platforms = sorted(
+        set(provider_out.keys()) | set(consumer_out.keys()),
         key=lambda p: (PRIORITY.index(p) if p in PRIORITY else 99, p),
     )
 
-    # Totals per platform + overall
-    summary = {
-        p: {
-            "outbound": len(outbound.get(p, [])),
-            "inbound": len(inbound.get(p, [])),
-            "total": len(outbound.get(p, [])) + len(inbound.get(p, [])),
-        }
-        for p in platform_order
-    }
-    total_outbound = sum(s["outbound"] for s in summary.values())
-    total_inbound = sum(s["inbound"] for s in summary.values())
+    total_provider_interfaces = sum(
+        v["total_interfaces"] for v in provider_out.values()
+    )
+    total_provider_consumers = sum(
+        v["total_consumers"] for v in provider_out.values()
+    )
+    total_consumer = sum(v["total"] for v in consumer_out.values())
 
     return ApiResponse(data={
         "app_id": app_id,
-        "total_interfaces": total_outbound + total_inbound,
-        "total_outbound": total_outbound,
-        "total_inbound": total_inbound,
-        "platforms": platform_order,
-        "summary_by_platform": summary,
-        "outbound_by_platform": outbound,
-        "inbound_by_platform": inbound,
+        "platforms": all_platforms,
+        "sunset_count": sunset_count,
+        "include_sunset": include_sunset,
+        "as_provider": {
+            "total_interfaces": total_provider_interfaces,
+            "total_consumers": total_provider_consumers,
+            "by_platform": provider_out,
+        },
+        "as_consumer": {
+            "total": total_consumer,
+            "by_platform": consumer_out,
+        },
     })
 
 
