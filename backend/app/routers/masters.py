@@ -511,6 +511,58 @@ _INTERFACE_COMMON_FIELDS = [
 ]
 
 
+@router.get("/applications/{app_id}/lifecycle")
+async def get_application_lifecycle(app_id: str) -> ApiResponse:
+    """Project-driven life-cycle changes for an application.
+
+    Returns one entry per distinct (project_id, application_status) where this
+    app is flagged Change / New / Sunset in a project's drawio — i.e. the
+    project is actively modifying, creating, or retiring it. `Keep`-status
+    entries are intentionally excluded — they're not a life-cycle change.
+
+    Spec: .specify/features/lifecycle-change/spec.md
+    """
+    # Existence check — 404 if unknown app_id. Matches /applications/{app_id}.
+    exists = await pg_client.fetchval(
+        "SELECT 1 FROM northstar.ref_application WHERE app_id = $1",
+        app_id,
+    )
+    if exists is None:
+        raise HTTPException(status_code=404, detail=f"{app_id} not found")
+
+    rows = await pg_client.fetch(
+        """
+        SELECT
+            cp.project_id,
+            rp.project_name,
+            NULLIF(rp.go_live_date, '')                      AS go_live_date,
+            MAX(cp.fiscal_year)                              AS fiscal_year,
+            cda.application_status                           AS status,
+            NULLIF(
+                string_agg(
+                    DISTINCT NULLIF(btrim(cda.functions), ''),
+                    E'\n'
+                ),
+                ''
+            )                                                AS change_description
+        FROM northstar.confluence_diagram_app cda
+        JOIN northstar.confluence_attachment  ca ON ca.attachment_id = cda.attachment_id
+        JOIN northstar.confluence_page        cp ON cp.page_id       = ca.page_id
+        LEFT JOIN northstar.ref_project       rp ON rp.project_id    = cp.project_id
+        WHERE COALESCE(cda.resolved_app_id, cda.standard_id) = $1
+          AND cda.application_status IN ('Change', 'New', 'Sunset')
+          AND cp.project_id IS NOT NULL
+        GROUP BY cp.project_id, rp.project_name, rp.go_live_date, cda.application_status
+        ORDER BY (NULLIF(rp.go_live_date, '') IS NULL),
+                 NULLIF(rp.go_live_date, '') DESC,
+                 cp.project_id
+        """,
+        app_id,
+    )
+    entries = [dict(r) for r in rows]
+    return ApiResponse(data={"app_id": app_id, "entries": entries})
+
+
 @router.get("/applications/{app_id}/integrations")
 async def get_application_integrations(
     app_id: str,

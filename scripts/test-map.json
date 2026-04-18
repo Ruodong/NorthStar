@@ -12,7 +12,7 @@
       "api": ["api-tests/test_ingestion.py"]
     },
     "backend/app/routers/masters.py": {
-      "api": ["api-tests/test_masters.py"]
+      "api": ["api-tests/test_masters.py", "api-tests/test_lifecycle.py"]
     },
     "backend/app/routers/ea_documents.py": {
       "api": ["api-tests/test_ea_documents.py"]

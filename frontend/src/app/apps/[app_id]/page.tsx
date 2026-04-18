@@ -393,7 +393,6 @@ export default function AppDetailPage() {
         <OverviewTab
           app={app}
           investments={investments}
-          diagrams={diagrams}
           confluencePages={confluence_pages}
           tco={tco}
         />
@@ -872,13 +871,11 @@ function EmptyState({ children }: { children: React.ReactNode }) {
 function OverviewTab({
   app,
   investments,
-  diagrams,
   confluencePages,
   tco,
 }: {
   app: AppNode;
   investments: Investment[];
-  diagrams: DiagramRef[];
   confluencePages: ConfluencePageRef[];
   tco?: TcoData | null;
 }) {
@@ -1013,19 +1010,9 @@ function OverviewTab({
         )}
       </Panel>
 
-      <Panel title="At a glance">
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr 1fr",
-            gap: 16,
-          }}
-        >
-          <Kpi label="Investments" value={investments.length} />
-          <Kpi label="Diagrams" value={diagrams.length} />
-          <Kpi label="Conf. pages" value={confluencePages.length} />
-        </div>
-      </Panel>
+      <div style={{ gridColumn: "1 / -1" }}>
+        <LifeCycleChangePanel appId={app.app_id} />
+      </div>
 
       {confluencePages.length > 0 && (
         <Panel title="Confluence pages">
@@ -1159,6 +1146,273 @@ function Kpi({ label, value }: { label: string; value: number | string }) {
       </div>
     </div>
   );
+}
+
+// ---------------- Life Cycle Change ----------------
+// Spec: .specify/features/lifecycle-change/spec.md
+// Lists every project where the app is Change / New / Sunset (a "major app"
+// for that project), sorted by go-live date DESC, NULL last.
+
+interface LifecycleEntry {
+  project_id: string;
+  project_name: string | null;
+  go_live_date: string | null;
+  fiscal_year: string | null;
+  status: "Change" | "New" | "Sunset";
+  change_description: string | null;
+}
+
+const LIFECYCLE_INITIAL_LIMIT = 6;
+const LIFECYCLE_COLLAPSE_THRESHOLD = 10;
+
+function LifeCycleChangePanel({ appId }: { appId: string }) {
+  const [entries, setEntries] = useState<LifecycleEntry[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setEntries(null);
+      setErr(null);
+      try {
+        const r = await fetch(
+          `/api/masters/applications/${encodeURIComponent(appId)}/lifecycle`,
+        );
+        const j = await r.json();
+        if (cancelled) return;
+        if (!j.success) {
+          setErr(j.error || "API error");
+          return;
+        }
+        setEntries(j.data?.entries || []);
+      } catch (e) {
+        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [appId]);
+
+  if (err) {
+    return (
+      <Panel title="Life cycle change">
+        <EmptyState>Failed to load: {err}</EmptyState>
+      </Panel>
+    );
+  }
+  if (entries === null) {
+    return (
+      <Panel title="Life cycle change">
+        <EmptyState>Loading…</EmptyState>
+      </Panel>
+    );
+  }
+  if (entries.length === 0) {
+    return (
+      <Panel title="Life cycle change">
+        <EmptyState>
+          This application has no project-driven life-cycle changes on record.
+        </EmptyState>
+      </Panel>
+    );
+  }
+
+  const shouldCollapse = entries.length > LIFECYCLE_COLLAPSE_THRESHOLD;
+  const visible = !shouldCollapse || expanded
+    ? entries
+    : entries.slice(0, LIFECYCLE_INITIAL_LIMIT);
+
+  // Group by go-live-date YEAR (string "2026" / "2025" / "Unscheduled").
+  // Dates that aren't ISO-parseable (e.g. "Q2 FY26") also fall into Unscheduled.
+  const groups: { label: string; items: LifecycleEntry[] }[] = [];
+  const byYear = new Map<string, LifecycleEntry[]>();
+  for (const e of visible) {
+    const year = yearOfGoLive(e.go_live_date);
+    if (!byYear.has(year)) byYear.set(year, []);
+    byYear.get(year)!.push(e);
+  }
+  const yearsDesc = [...byYear.keys()]
+    .filter((y) => y !== "Unscheduled")
+    .sort((a, b) => b.localeCompare(a));
+  for (const y of yearsDesc) groups.push({ label: y, items: byYear.get(y)! });
+  if (byYear.has("Unscheduled")) {
+    groups.push({ label: "Unscheduled", items: byYear.get("Unscheduled")! });
+  }
+
+  return (
+    <Panel title="Life cycle change">
+      <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+        {groups.map((g) => (
+          <div key={g.label}>
+            <div
+              style={{
+                fontSize: 10,
+                textTransform: "uppercase",
+                letterSpacing: 0.6,
+                color: "var(--text-dim)",
+                marginBottom: 10,
+                fontFamily: "var(--font-mono)",
+              }}
+            >
+              {g.label}
+            </div>
+            <div style={{ position: "relative", paddingLeft: 20 }}>
+              {/* vertical timeline rail */}
+              <div
+                style={{
+                  position: "absolute",
+                  left: 5,
+                  top: 6,
+                  bottom: 6,
+                  width: 1,
+                  background: "var(--border)",
+                }}
+              />
+              <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                {g.items.map((e, idx) => (
+                  <LifecycleRow
+                    key={`${e.project_id}-${e.status}-${idx}`}
+                    entry={e}
+                    dated={Boolean(e.go_live_date)}
+                  />
+                ))}
+              </div>
+            </div>
+          </div>
+        ))}
+
+        {shouldCollapse && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            style={{
+              alignSelf: "flex-start",
+              background: "transparent",
+              border: "none",
+              padding: "4px 0",
+              cursor: "pointer",
+              color: "var(--accent)",
+              fontSize: 12,
+              fontFamily: "var(--font-mono)",
+              textDecoration: "underline",
+            }}
+          >
+            {expanded
+              ? `Show only the latest ${LIFECYCLE_INITIAL_LIMIT}`
+              : `Show all ${entries.length} changes`}
+          </button>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
+function LifecycleRow({ entry, dated }: { entry: LifecycleEntry; dated: boolean }) {
+  const color = STATUS_COLORS[entry.status] || "var(--text-muted)";
+  return (
+    <div style={{ position: "relative" }}>
+      {/* timeline dot — filled when dated, hollow otherwise */}
+      <div
+        style={{
+          position: "absolute",
+          left: -19,
+          top: 4,
+          width: 9,
+          height: 9,
+          borderRadius: "50%",
+          background: dated ? color : "transparent",
+          border: `1.5px solid ${color}`,
+        }}
+      />
+      <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+        <span
+          style={{
+            fontSize: 9,
+            fontWeight: 700,
+            letterSpacing: 0.8,
+            textTransform: "uppercase",
+            padding: "2px 8px",
+            border: `1px solid ${color}`,
+            color,
+            background: "transparent",
+            borderRadius: "var(--radius-sm)",
+            fontFamily: "var(--font-mono)",
+          }}
+        >
+          {entry.status}
+        </span>
+        <span
+          style={{
+            fontSize: 12,
+            fontFamily: "var(--font-mono)",
+            color: dated ? "var(--text)" : "var(--text-dim)",
+            fontVariantNumeric: "tabular-nums",
+          }}
+        >
+          {entry.go_live_date || "No go-live date"}
+        </span>
+        {entry.fiscal_year && (
+          <span
+            style={{
+              fontSize: 10,
+              fontFamily: "var(--font-mono)",
+              padding: "2px 6px",
+              background: "var(--bg-elevated)",
+              border: "1px solid var(--border)",
+              borderRadius: "var(--radius-sm)",
+              color: "var(--text-muted)",
+            }}
+          >
+            {entry.fiscal_year}
+          </span>
+        )}
+      </div>
+      <div style={{ marginTop: 4, display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+        <Link
+          href={`/projects/${encodeURIComponent(entry.project_id)}`}
+          style={{
+            fontFamily: "var(--font-display)",
+            fontSize: 15,
+            fontWeight: 600,
+            color: "var(--text)",
+            textDecoration: "none",
+          }}
+        >
+          {entry.project_name || entry.project_id}
+        </Link>
+        <span
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: 11,
+            color: "var(--text-dim)",
+          }}
+        >
+          {entry.project_id}
+        </span>
+      </div>
+      <div
+        style={{
+          marginTop: 4,
+          fontSize: 12,
+          lineHeight: 1.5,
+          color: entry.change_description ? "var(--text-muted)" : "var(--text-dim)",
+          fontStyle: entry.change_description ? "normal" : "italic",
+          whiteSpace: "pre-wrap",
+        }}
+      >
+        {entry.change_description || "No explicit change notes captured."}
+      </div>
+    </div>
+  );
+}
+
+function yearOfGoLive(raw: string | null): string {
+  if (!raw) return "Unscheduled";
+  const m = raw.match(/^(\d{4})-\d{2}-\d{2}/);
+  if (m) return m[1];
+  const d = new Date(raw);
+  if (!Number.isNaN(d.getTime())) return String(d.getFullYear());
+  return "Unscheduled";
 }
 
 // ---------------- Integrations ----------------
