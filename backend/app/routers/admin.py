@@ -2124,6 +2124,28 @@ async def preview_attachment(attachment_id: str):
             headers={"Cache-Control": "public, max-age=3600, must-revalidate"},
         )
 
+    # Drawio path: return an HTML page that embeds viewer.diagrams.net.
+    # The viewer fetches the raw XML from our own /raw endpoint and renders
+    # it client-side — no server-side conversion needed.
+    if row["file_kind"] in ("drawio", "drawio_xml"):
+        raw_url = f"/api/admin/confluence/attachments/{attachment_id}/raw"
+        html = (
+            "<!DOCTYPE html><html><head>"
+            '<meta charset="utf-8">'
+            "<style>*{margin:0;padding:0}html,body,iframe{width:100%;height:100%;border:0}</style>"
+            "</head><body>"
+            f'<script>fetch("{raw_url}").then(r=>r.text()).then(xml=>{{'
+            'var src="https://viewer.diagrams.net/?lightbox=1&layers=1&nav=1&highlight=0000ff#R"+encodeURIComponent(xml);'
+            'document.body.innerHTML=\'<iframe src="\'+src+\'" style="width:100%;height:100%;border:0"></iframe>\';'
+            "})</script>"
+            "</body></html>"
+        )
+        return Response(
+            content=html,
+            media_type="text/html",
+            headers={"Cache-Control": "public, max-age=3600, must-revalidate"},
+        )
+
     # PDF path: PPTX / DOCX. Everything else falls through to 415.
     if media_type not in _PREVIEW_PDF_MEDIA_TYPES:
         return _preview_error(
