@@ -28,6 +28,44 @@ const STATUS_COLORS: Record<string, string> = {
   archived: "#6b7488",
 };
 
+/* Small icon-only action button — tooltip shows the action label. */
+function IconButton({
+  title, color, onClick, children,
+}: {
+  title: string;
+  color: string;
+  onClick: (e: React.MouseEvent) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      title={title}
+      onClick={onClick}
+      style={{
+        width: 22,
+        height: 22,
+        padding: 0,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "transparent",
+        border: "1px solid var(--border)",
+        color,
+        fontSize: 12,
+        lineHeight: 1,
+        cursor: "pointer",
+        borderRadius: 3,
+        marginLeft: 4,
+        transition: "border-color var(--t-hover) var(--ease)",
+      }}
+      onMouseOver={(e) => { (e.currentTarget as HTMLElement).style.borderColor = color; }}
+      onMouseOut={(e) => { (e.currentTarget as HTMLElement).style.borderColor = "var(--border)"; }}
+    >
+      {children}
+    </button>
+  );
+}
+
 export default function DesignListPage() {
   const [rows, setRows] = useState<DesignRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -97,7 +135,7 @@ export default function DesignListPage() {
                 <th style={{ width: 70, textAlign: "right" }}>Apps</th>
                 <th style={{ width: 80, textAlign: "right" }}>Ifaces</th>
                 <th style={{ width: 140 }}>Updated</th>
-                <th style={{ width: 110 }}></th>
+                <th style={{ width: 60 }}></th>
               </tr>
             </thead>
             <tbody>
@@ -143,9 +181,11 @@ export default function DesignListPage() {
                   <td style={{ fontSize: 11, color: "var(--text-dim)" }}>
                     {r.updated_at ? new Date(r.updated_at).toISOString().slice(0, 16).replace("T", " ") : "—"}
                   </td>
-                  <td style={{ textAlign: "right" }}>
-                    <button
+                  <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                    {/* Icon-only action buttons — tooltip shows label */}
+                    <IconButton
                       title="Download as .drawio"
+                      color="var(--accent)"
                       onClick={async (e) => {
                         e.preventDefault();
                         e.stopPropagation();
@@ -163,22 +203,12 @@ export default function DesignListPage() {
                           alert("Download failed: " + e);
                         }
                       }}
-                      style={{
-                        background: "transparent",
-                        border: "1px solid var(--border)",
-                        color: "var(--accent)",
-                        padding: "3px 8px",
-                        fontSize: 10,
-                        fontFamily: "var(--font-mono)",
-                        cursor: "pointer",
-                        borderRadius: 3,
-                        marginRight: 4,
-                      }}
                     >
-                      ↓ .drawio
-                    </button>
-                    <button
+                      ↓
+                    </IconButton>
+                    <IconButton
                       title="Delete design"
+                      color="#e8716b"
                       onClick={async (e) => {
                         e.preventDefault();
                         e.stopPropagation();
@@ -192,19 +222,9 @@ export default function DesignListPage() {
                           alert("Delete failed: " + e);
                         }
                       }}
-                      style={{
-                        background: "transparent",
-                        border: "1px solid var(--border)",
-                        color: "#e8716b",
-                        padding: "3px 8px",
-                        fontSize: 10,
-                        fontFamily: "var(--font-mono)",
-                        cursor: "pointer",
-                        borderRadius: 3,
-                      }}
                     >
-                      ✕ delete
-                    </button>
+                      ✕
+                    </IconButton>
                   </td>
                 </tr>
               ))}
