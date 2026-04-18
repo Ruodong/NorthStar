@@ -135,20 +135,44 @@ SYNCS = [
             ],
         ),
     ),
-    # Business Capability master
+    # Business Capability master — PK=id (bigint) preserves multi-version
+    # rows; bc_id is NOT unique across data_versions in bcpf_master_data.
     (
         "ref_business_capability",
-        ["bc_id"],
+        ["id"],
         "eam",
         (
-            """SELECT bc_id, parent_bc_id, bc_name, bc_name_cn, level, alias,
+            """SELECT id, bc_id, parent_bc_id, bc_name, bc_name_cn, level, alias,
                       bc_description, biz_group, geo, biz_owner, biz_team,
-                      dt_owner, dt_team, data_version
+                      dt_owner, dt_team, data_version,
+                      lv1_domain, lv2_sub_domain, lv3_capability_group, remark,
+                      create_time AS source_created_at
                FROM eam.bcpf_master_data""",
             [
-                "bc_id", "parent_bc_id", "bc_name", "bc_name_cn", "level", "alias",
+                "id", "bc_id", "parent_bc_id", "bc_name", "bc_name_cn", "level", "alias",
                 "bc_description", "biz_group", "geo", "biz_owner", "biz_team",
                 "dt_owner", "dt_team", "data_version",
+                "lv1_domain", "lv2_sub_domain", "lv3_capability_group", "remark",
+                "source_created_at",
+            ],
+        ),
+    ),
+    # Business Capability → Application mapping (many-to-many, L3 leaves only)
+    (
+        "ref_app_business_capability",
+        ["id"],
+        "eam",
+        (
+            """SELECT id, app_id, bcpf_master_id, bc_id, data_version,
+                      create_by  AS source_create_by,
+                      update_by  AS source_update_by,
+                      create_at  AS source_created_at,
+                      update_at  AS source_updated_at
+               FROM eam.biz_cap_map""",
+            [
+                "id", "app_id", "bcpf_master_id", "bc_id", "data_version",
+                "source_create_by", "source_update_by",
+                "source_created_at", "source_updated_at",
             ],
         ),
     ),
