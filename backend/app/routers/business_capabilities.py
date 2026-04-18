@@ -46,48 +46,30 @@ async def list_business_capabilities() -> ApiResponse:
         }, ...
       ]
     """
-    # Load all BCs
+    # The ref_business_capability table holds multiple data_versions of the
+    # same BC. Dedup by bc_id, keeping the latest-synced row. We do this as
+    # a subquery; same approach for app mappings.
     bcs = await pg_client.fetch(
         """
-        SELECT
-            bc.bc_id,
-            bc.parent_bc_id,
-            bc.bc_name,
-            bc.bc_name_cn,
-            bc.level,
-            bc.bc_description
-        FROM northstar.ref_business_capability bc
-        ORDER BY bc.level, bc.bc_id
+        SELECT DISTINCT ON (bc_id)
+            bc_id, parent_bc_id, bc_name, bc_name_cn, level, bc_description
+        FROM northstar.ref_business_capability
+        ORDER BY bc_id, synced_at DESC, data_version DESC
         """
     )
 
-    # Compute app counts per BC (direct mappings). For L1/L2 the count is
-    # the union of descendants' app counts.
-    try:
-        counts_rows = await pg_client.fetch(
-            """
-            SELECT bc.bc_id, count(DISTINCT m.app_id) AS cnt
-            FROM northstar.ref_app_business_capability m
-            JOIN northstar.ref_business_capability bc
-              ON bc.bc_id = m.bc_id OR bc.id = m.bcpf_master_id
-            GROUP BY bc.bc_id
-            """
-        )
-        direct_counts = {r["bc_id"]: r["cnt"] for r in counts_rows}
-    except Exception:  # mapping table may be empty
-        direct_counts = {}
-
-    # Build tree with rollup counts. For each BC we want app_count =
-    # direct + sum(children.app_count), but without double-counting apps
-    # that are mapped to both a leaf and its ancestor. Simplest: rollup
-    # the APP SETS, not just counts.
+    # Load all unique (bc_id → app_id) pairs. JOIN on bc_id (not the bigint
+    # master_id) since the master_id is version-specific but bc_id is stable.
     try:
         app_rows = await pg_client.fetch(
             """
-            SELECT bc.bc_id, m.app_id
+            SELECT DISTINCT
+                COALESCE(m.bc_id, bc.bc_id) AS bc_id,
+                m.app_id
             FROM northstar.ref_app_business_capability m
-            JOIN northstar.ref_business_capability bc
-              ON bc.bc_id = m.bc_id OR bc.id = m.bcpf_master_id
+            LEFT JOIN northstar.ref_business_capability bc
+              ON bc.id = m.bcpf_master_id
+            WHERE COALESCE(m.bc_id, bc.bc_id) IS NOT NULL
             """
         )
         bc_to_apps: dict[str, set[str]] = {}
@@ -169,16 +151,22 @@ async def get_apps_by_business_capability(
     if include_descendants:
         bc_ids_rows = await pg_client.fetch(
             """
-            WITH RECURSIVE descendants AS (
-                SELECT bc_id, parent_bc_id, bc_name, level
+            WITH RECURSIVE latest_bc AS (
+                SELECT DISTINCT ON (bc_id)
+                    bc_id, parent_bc_id, bc_name, level
                 FROM northstar.ref_business_capability
+                ORDER BY bc_id, synced_at DESC, data_version DESC
+            ),
+            descendants AS (
+                SELECT bc_id, parent_bc_id, bc_name, level
+                FROM latest_bc
                 WHERE bc_id = $1
                 UNION ALL
                 SELECT b.bc_id, b.parent_bc_id, b.bc_name, b.level
-                FROM northstar.ref_business_capability b
+                FROM latest_bc b
                 JOIN descendants d ON b.parent_bc_id = d.bc_id
             )
-            SELECT bc_id FROM descendants
+            SELECT DISTINCT bc_id FROM descendants
             """,
             bc_id,
         )
@@ -189,33 +177,46 @@ async def get_apps_by_business_capability(
     if not target_ids:
         return ApiResponse(data={"bc_id": bc_id, "apps": [], "total": 0})
 
-    # Load the root BC details
+    # Load the root BC details — dedup by bc_id, keep latest synced
     root = await pg_client.fetchrow(
         """
-        SELECT bc_id, bc_name, bc_name_cn, level, bc_description
+        SELECT DISTINCT ON (bc_id)
+            bc_id, bc_name, bc_name_cn, level, bc_description
         FROM northstar.ref_business_capability
         WHERE bc_id = $1
+        ORDER BY bc_id, synced_at DESC, data_version DESC
         """,
         bc_id,
     )
 
-    # Fetch mapped apps joined with ref_application for display fields
+    # Fetch mapped apps. Match on bc_id (stable) not bigint id (version-specific).
+    # Dedup by app_id — keep one row per app even if the mapping table has
+    # multiple rows across data versions.
     try:
         app_rows = await pg_client.fetch(
             """
-            SELECT DISTINCT
+            WITH latest_bc AS (
+                SELECT DISTINCT ON (bc_id)
+                    bc_id, bc_name, level
+                FROM northstar.ref_business_capability
+                ORDER BY bc_id, synced_at DESC, data_version DESC
+            )
+            SELECT DISTINCT ON (a.app_id)
                 a.app_id, a.name, a.status, a.app_ownership,
                 a.u_service_area, a.portfolio_mgt,
                 bc.bc_id    AS mapped_bc_id,
                 bc.bc_name  AS mapped_bc_name,
                 bc.level    AS mapped_bc_level
             FROM northstar.ref_app_business_capability m
-            JOIN northstar.ref_business_capability bc
-              ON bc.bc_id = m.bc_id OR bc.id = m.bcpf_master_id
+            JOIN latest_bc bc
+              ON bc.bc_id = COALESCE(m.bc_id, (
+                SELECT bc2.bc_id FROM northstar.ref_business_capability bc2
+                WHERE bc2.id = m.bcpf_master_id LIMIT 1
+              ))
             JOIN northstar.ref_application a
               ON a.app_id = m.app_id
             WHERE bc.bc_id = ANY($1::text[])
-            ORDER BY a.app_id
+            ORDER BY a.app_id, bc.level DESC
             """,
             target_ids,
         )
