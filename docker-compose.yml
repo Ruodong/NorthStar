@@ -20,7 +20,14 @@ services:
       retries: 10
 
   postgres:
-    image: postgres:16
+    # apache/age:release_PG16_1.6.0 = postgres:16 + Apache AGE 1.6.0 pre-built.
+    # Drop-in for postgres:16 (same entrypoint, same initdb hooks, same data
+    # directory layout). The AGE extension is enabled on backend startup via
+    # backend/sql/018_enable_age.sql, which creates the `ns_graph` graph.
+    # Neo4j service coexists while graph code is being rewritten onto AGE;
+    # when the rewrite lands, the neo4j service can be removed without
+    # touching this image or the postgres_data volume.
+    image: apache/age:release_PG16_1.6.0
     container_name: northstar-postgres
     restart: unless-stopped
     ports:
