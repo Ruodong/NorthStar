@@ -1016,6 +1016,52 @@ function TemplateCard({
 /* ── Template step: Standard templates | Project solutions (filtered) ── */
 /* ── Interfaces step: show all interfaces touching scope, grouped by
    scope_app + role. Checking a row adds the counterparty app to scope. ── */
+// Three-level tree: platform → interface → counterparty.
+// Default all collapsed; search auto-expands matches.
+type PlatformBranch = {
+  platform: string;
+  interfaces: Array<{
+    name: string;
+    rows: ScopedIfaceRow[];
+  }>;
+};
+
+function buildPlatformBranches(rows: ScopedIfaceRow[]): PlatformBranch[] {
+  const byPlatform = new Map<string, Map<string, ScopedIfaceRow[]>>();
+  for (const r of rows) {
+    let platformMap = byPlatform.get(r.platform);
+    if (!platformMap) {
+      platformMap = new Map();
+      byPlatform.set(r.platform, platformMap);
+    }
+    const key = r.interface_name || "(unnamed)";
+    if (!platformMap.has(key)) platformMap.set(key, []);
+    platformMap.get(key)!.push(r);
+  }
+  const branches: PlatformBranch[] = [];
+  for (const [platform, platformMap] of byPlatform) {
+    const interfaces: PlatformBranch["interfaces"] = [];
+    for (const [name, ifaceRows] of platformMap) {
+      interfaces.push({ name, rows: ifaceRows });
+    }
+    interfaces.sort((a, b) => a.name.localeCompare(b.name));
+    branches.push({ platform, interfaces });
+  }
+  branches.sort((a, b) => a.platform.localeCompare(b.platform));
+  return branches;
+}
+
+function rowMatchesSearch(row: ScopedIfaceRow, q: string): boolean {
+  if (!q) return true;
+  const needle = q.toLowerCase();
+  return (
+    (row.interface_name || "").toLowerCase().includes(needle) ||
+    (row.counter_app_id || "").toLowerCase().includes(needle) ||
+    (row.counter_app_name || "").toLowerCase().includes(needle) ||
+    row.platform.toLowerCase().includes(needle)
+  );
+}
+
 function InterfacesStep({
   scopeApps,
   scopedRows,
@@ -1035,16 +1081,69 @@ function InterfacesStep({
 }) {
   const scopeSet = new Set(scopeApps.map(a => a.app_id));
 
-  // Group rows: map<scope_app_id, {provider: rows[], consumer: rows[]}>
-  const groups = new Map<string, { provider: ScopedIfaceRow[]; consumer: ScopedIfaceRow[] }>();
+  // Expansion state — one global set, keys = full path.
+  // Platform key: `${app_id}|${role}|${platform}`
+  // Interface key: `${app_id}|${role}|${platform}|${interface_name}`
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
+  const needle = search.trim();
+
+  const toggleExpand = (key: string) => {
+    setExpanded(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  // Group: Map<scope_app_id, {provider: PlatformBranch[], consumer: PlatformBranch[]}>
+  const byApp = new Map<string, { provider: PlatformBranch[]; consumer: PlatformBranch[] }>();
   for (const app of scopeApps) {
-    groups.set(app.app_id, { provider: [], consumer: [] });
+    const appRows = scopedRows.filter(r => r.scope_app_id === app.app_id);
+    byApp.set(app.app_id, {
+      provider: buildPlatformBranches(appRows.filter(r => r.role === "provider")),
+      consumer: buildPlatformBranches(appRows.filter(r => r.role === "consumer")),
+    });
   }
-  for (const r of scopedRows) {
-    const g = groups.get(r.scope_app_id);
-    if (!g) continue;
-    if (r.role === "provider") g.provider.push(r);
-    else g.consumer.push(r);
+
+  // Build all possible keys so expand-all / collapse-all work
+  const allKeys = (() => {
+    const keys: string[] = [];
+    for (const [appId, g] of byApp) {
+      for (const side of ["provider", "consumer"] as const) {
+        const branches = side === "provider" ? g.provider : g.consumer;
+        for (const b of branches) {
+          keys.push(`${appId}|${side}|${b.platform}`);
+          for (const i of b.interfaces) {
+            keys.push(`${appId}|${side}|${b.platform}|${i.name}`);
+          }
+        }
+      }
+    }
+    return keys;
+  })();
+
+  const expandAll = () => setExpanded(new Set(allKeys));
+  const collapseAll = () => setExpanded(new Set());
+
+  // If searching, auto-expand matching branches (computed on-the-fly,
+  // not written to state so clearing search returns to user's previous state).
+  const effectiveExpanded = new Set(expanded);
+  if (needle) {
+    for (const [appId, g] of byApp) {
+      for (const side of ["provider", "consumer"] as const) {
+        const branches = side === "provider" ? g.provider : g.consumer;
+        for (const b of branches) {
+          for (const i of b.interfaces) {
+            if (i.rows.some(r => rowMatchesSearch(r, needle))) {
+              effectiveExpanded.add(`${appId}|${side}|${b.platform}`);
+              effectiveExpanded.add(`${appId}|${side}|${b.platform}|${i.name}`);
+            }
+          }
+        }
+      }
+    }
   }
 
   if (scopeApps.length === 0) {
@@ -1075,16 +1174,40 @@ function InterfacesStep({
           gap: 10,
           fontSize: 11,
           color: "var(--text-muted)",
+          flexWrap: "wrap",
         }}
       >
-        <span>
-          {scopedRows.length} interface rows across {scopeApps.length} scope apps.
-          {" "}{keepIfaceIds.size} selected.
-        </span>
-        <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
-          💡 Checking a row auto-adds the counterparty app to scope.
-        </span>
+        <input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Filter by platform / interface name / app id / app name…"
+          style={{
+            flex: 1,
+            minWidth: 260,
+            padding: "4px 10px",
+            fontSize: 12,
+          }}
+        />
+        <button
+          onClick={expandAll}
+          style={{
+            padding: "3px 10px", fontSize: 11, fontFamily: "var(--font-mono)",
+            border: "1px solid var(--border)", background: "transparent",
+            color: "var(--text-muted)", cursor: "pointer", borderRadius: 3,
+          }}
+        >
+          Expand all
+        </button>
+        <button
+          onClick={collapseAll}
+          style={{
+            padding: "3px 10px", fontSize: 11, fontFamily: "var(--font-mono)",
+            border: "1px solid var(--border)", background: "transparent",
+            color: "var(--text-muted)", cursor: "pointer", borderRadius: 3,
+          }}
+        >
+          Collapse all
+        </button>
         <button
           onClick={onClearAll}
           disabled={keepIfaceIds.size === 0}
@@ -1096,14 +1219,20 @@ function InterfacesStep({
             borderRadius: 3,
           }}
         >
-          Clear
+          Clear ({keepIfaceIds.size})
         </button>
+        <div style={{ flexBasis: "100%", height: 0 }} />
+        <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+          💡 Checking a row auto-adds the counterparty app to scope. All groups are collapsed by default — click a platform row to expand.
+        </span>
       </div>
 
       {scopeApps.map(app => {
-        const g = groups.get(app.app_id)!;
+        const g = byApp.get(app.app_id)!;
         const cov = coverage[app.app_id] || { total_catalog: 0 };
-        const hasAny = g.provider.length > 0 || g.consumer.length > 0;
+        const providerTotal = g.provider.reduce((s, b) => s + b.interfaces.reduce((a, i) => a + i.rows.length, 0), 0);
+        const consumerTotal = g.consumer.reduce((s, b) => s + b.interfaces.reduce((a, i) => a + i.rows.length, 0), 0);
+        const hasAny = providerTotal + consumerTotal > 0;
 
         return (
           <div key={app.app_id} className="panel" style={{ padding: 0, overflow: "hidden" }}>
@@ -1125,9 +1254,7 @@ function InterfacesStep({
               <span style={{ fontSize: 13, fontWeight: 600 }}>{app.name}</span>
               <div style={{ flex: 1 }} />
               <span style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
-                {cov.total_catalog} catalog entries ·
-                {" "}{g.provider.length} as provider ·
-                {" "}{g.consumer.length} as consumer
+                {cov.total_catalog} catalog · {providerTotal} provider · {consumerTotal} consumer
               </span>
             </div>
 
@@ -1135,30 +1262,40 @@ function InterfacesStep({
               <div style={{ padding: 14, color: "var(--text-dim)", fontSize: 12 }}>
                 {cov.total_catalog === 0
                   ? <>This app has <strong style={{ color: "#e8716b" }}>no catalog entries</strong> (not registered on any integration platform).</>
-                  : "No interfaces on this platform filter."}
+                  : "No interfaces match the current filter."}
               </div>
             )}
 
-            {/* As provider */}
+            {/* AS PROVIDER */}
             {g.provider.length > 0 && (
-              <IfaceRoleSection
+              <IfaceRoleTree
+                scopeAppId={app.app_id}
+                role="provider"
                 title="📤 AS PROVIDER — interfaces this app exposes"
-                rows={g.provider}
+                color="#f6a623"
+                branches={g.provider}
+                expanded={effectiveExpanded}
+                onToggleExpand={toggleExpand}
                 keepIfaceIds={keepIfaceIds}
                 scopeSet={scopeSet}
-                onToggle={onToggle}
-                color="#f6a623"
+                onToggleRow={onToggle}
+                search={needle}
               />
             )}
-            {/* As consumer */}
+            {/* AS CONSUMER */}
             {g.consumer.length > 0 && (
-              <IfaceRoleSection
+              <IfaceRoleTree
+                scopeAppId={app.app_id}
+                role="consumer"
                 title="📥 AS CONSUMER — interfaces this app uses"
-                rows={g.consumer}
+                color="#6ba6e8"
+                branches={g.consumer}
+                expanded={effectiveExpanded}
+                onToggleExpand={toggleExpand}
                 keepIfaceIds={keepIfaceIds}
                 scopeSet={scopeSet}
-                onToggle={onToggle}
-                color="#6ba6e8"
+                onToggleRow={onToggle}
+                search={needle}
               />
             )}
           </div>
@@ -1168,22 +1305,26 @@ function InterfacesStep({
   );
 }
 
-function IfaceRoleSection({
-  title, rows, keepIfaceIds, scopeSet, onToggle, color,
+function IfaceRoleTree({
+  scopeAppId, role, title, color, branches,
+  expanded, onToggleExpand,
+  keepIfaceIds, scopeSet, onToggleRow,
+  search,
 }: {
+  scopeAppId: string;
+  role: "provider" | "consumer";
   title: string;
-  rows: ScopedIfaceRow[];
+  color: string;
+  branches: PlatformBranch[];
+  expanded: Set<string>;
+  onToggleExpand: (key: string) => void;
   keepIfaceIds: Set<number>;
   scopeSet: Set<string>;
-  onToggle: (row: ScopedIfaceRow) => void;
-  color: string;
+  onToggleRow: (row: ScopedIfaceRow) => void;
+  search: string;
 }) {
-  // Group within a role by platform for compactness
-  const byPlatform = new Map<string, ScopedIfaceRow[]>();
-  for (const r of rows) {
-    if (!byPlatform.has(r.platform)) byPlatform.set(r.platform, []);
-    byPlatform.get(r.platform)!.push(r);
-  }
+  // Count total interfaces for role header
+  const totalInterfaces = branches.reduce((s, b) => s + b.interfaces.length, 0);
 
   return (
     <div>
@@ -1196,82 +1337,163 @@ function IfaceRoleSection({
         letterSpacing: 0.6,
         fontWeight: 600,
       }}>
-        {title} ({rows.length})
+        {title} ({totalInterfaces} interfaces)
       </div>
-      {[...byPlatform.entries()].map(([platform, pRows]) => {
-        const pColor = PLATFORM_COLORS[platform] || "#5f6a80";
+
+      {branches.map(branch => {
+        const pColor = PLATFORM_COLORS[branch.platform] || "#5f6a80";
+        const l1Key = `${scopeAppId}|${role}|${branch.platform}`;
+        const l1Open = expanded.has(l1Key);
+
+        // When searching, only show branches that have matching leaves
+        const visibleInterfaces = search
+          ? branch.interfaces.filter(i => i.rows.some(r => rowMatchesSearch(r, search)))
+          : branch.interfaces;
+        if (visibleInterfaces.length === 0) return null;
+
         return (
-          <div key={platform}>
-            {pRows.map(row => {
-              const kept = keepIfaceIds.has(row.interface_id);
-              const counterInScope = row.counter_app_id ? scopeSet.has(row.counter_app_id) : false;
-              const counterUnlinked = !row.counter_app_id || row.counter_app_id === "__UNLINKED__";
+          <div key={branch.platform}>
+            {/* L1: platform row */}
+            <button
+              onClick={() => onToggleExpand(l1Key)}
+              style={{
+                display: "flex", alignItems: "center", gap: 8,
+                width: "100%",
+                padding: "6px 14px",
+                background: "transparent",
+                border: "none",
+                borderTop: "1px solid var(--border)",
+                color: "var(--text)",
+                cursor: "pointer",
+                textAlign: "left",
+              }}
+            >
+              <span style={{
+                width: 14, textAlign: "center",
+                color: l1Open ? color : "var(--text-dim)",
+                fontSize: 11, fontFamily: "var(--font-mono)",
+              }}>
+                {l1Open ? "▾" : "▸"}
+              </span>
+              <span className="status-pill" style={{
+                fontSize: 10, color: pColor,
+                background: `${pColor}26`,
+                padding: "2px 8px", minWidth: 64, textAlign: "center",
+                fontFamily: "var(--font-mono)", fontWeight: 600,
+              }}>
+                {branch.platform}
+              </span>
+              <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
+                ({visibleInterfaces.length} interface{visibleInterfaces.length === 1 ? "" : "s"})
+              </span>
+            </button>
+
+            {/* L2: interface rows */}
+            {l1Open && visibleInterfaces.map(iface => {
+              const l2Key = `${scopeAppId}|${role}|${branch.platform}|${iface.name}`;
+              const l2Open = expanded.has(l2Key);
+
+              const visibleRows = search
+                ? iface.rows.filter(r => rowMatchesSearch(r, search))
+                : iface.rows;
+
+              const counterLabel = role === "provider" ? "consumer" : "provider";
+              const kept = iface.rows.some(r => keepIfaceIds.has(r.interface_id));
+
               return (
-                <div
-                  key={`${row.scope_app_id}-${row.role}-${row.interface_id}-${row.counter_app_id || "u"}`}
-                  style={{
-                    display: "flex", alignItems: "center", gap: 8,
-                    padding: "6px 14px", borderTop: "1px solid var(--border)",
-                    opacity: kept ? 1 : 0.75,
-                    background: kept ? `${color}08` : "transparent",
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={kept}
-                    disabled={counterUnlinked}
-                    onChange={() => onToggle(row)}
-                    title={counterUnlinked ? "Counterparty is unlinked; can't add to scope" : undefined}
-                  />
-                  <span className="status-pill" style={{
-                    fontSize: 9, color: pColor,
-                    background: `${pColor}26`,
-                    padding: "2px 6px", minWidth: 56, textAlign: "center",
-                  }}>
-                    {platform}
-                  </span>
-                  <span style={{
-                    fontFamily: "var(--font-mono)", fontSize: 12,
-                    flex: 1, wordBreak: "break-all",
-                  }}>
-                    {row.interface_name || "(unnamed)"}
-                  </span>
-                  <span style={{ color: "var(--text-dim)", fontSize: 12 }}>
-                    {row.role === "provider" ? "→" : "←"}
-                  </span>
-                  {counterUnlinked ? (
-                    <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
-                      (unlinked)
+                <div key={iface.name}>
+                  <button
+                    onClick={() => onToggleExpand(l2Key)}
+                    style={{
+                      display: "flex", alignItems: "center", gap: 8,
+                      width: "100%",
+                      padding: "5px 14px 5px 36px",
+                      background: kept ? `${color}08` : "transparent",
+                      border: "none",
+                      borderTop: "1px dashed var(--border)",
+                      color: "var(--text)",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    <span style={{
+                      width: 14, textAlign: "center",
+                      color: l2Open ? color : "var(--text-dim)",
+                      fontSize: 11, fontFamily: "var(--font-mono)",
+                    }}>
+                      {l2Open ? "▾" : "▸"}
                     </span>
-                  ) : (
-                    <>
-                      <code style={{
-                        fontFamily: "var(--font-mono)", fontSize: 11,
-                        color: "var(--accent)",
-                      }}>
-                        {row.counter_app_id}
-                      </code>
-                      {row.counter_app_name && (
-                        <span style={{ color: "var(--text-muted)", fontSize: 11 }}>
-                          {row.counter_app_name}
+                    <span style={{
+                      fontFamily: "var(--font-mono)", fontSize: 12,
+                      wordBreak: "break-all", flex: 1,
+                    }}>
+                      {iface.name}
+                    </span>
+                    <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
+                      ({visibleRows.length} {counterLabel}{visibleRows.length === 1 ? "" : "s"})
+                    </span>
+                  </button>
+
+                  {/* L3: counterparty rows */}
+                  {l2Open && visibleRows.map(row => {
+                    const rowKept = keepIfaceIds.has(row.interface_id);
+                    const counterInScope = row.counter_app_id ? scopeSet.has(row.counter_app_id) : false;
+                    const counterUnlinked = !row.counter_app_id || row.counter_app_id === "__UNLINKED__";
+                    return (
+                      <div
+                        key={`${row.interface_id}-${row.counter_app_id || "u"}`}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 8,
+                          padding: "5px 14px 5px 62px",
+                          borderTop: "1px dotted var(--border)",
+                          background: rowKept ? `${color}12` : "transparent",
+                          opacity: rowKept ? 1 : 0.88,
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={rowKept}
+                          disabled={counterUnlinked}
+                          onChange={() => onToggleRow(row)}
+                          title={counterUnlinked ? "Counterparty is unlinked; can't add to scope" : undefined}
+                        />
+                        <span style={{ color: "var(--text-dim)", fontSize: 12 }}>
+                          {row.role === "provider" ? "→" : "←"}
                         </span>
-                      )}
-                      {!counterInScope && (
-                        <span
-                          title="Will be added to scope when you check this row"
-                          style={{
-                            fontSize: 10, color: "#5fc58a",
-                            fontFamily: "var(--font-mono)",
-                            padding: "2px 6px",
-                            border: "1px solid #5fc58a",
-                            borderRadius: 3,
-                          }}
-                        >
-                          +scope
-                        </span>
-                      )}
-                    </>
-                  )}
+                        {counterUnlinked ? (
+                          <span style={{ color: "var(--text-dim)", fontSize: 11 }}>(unlinked)</span>
+                        ) : (
+                          <>
+                            <code style={{
+                              fontFamily: "var(--font-mono)", fontSize: 11,
+                              color: "var(--accent)", minWidth: 72,
+                            }}>
+                              {row.counter_app_id}
+                            </code>
+                            {row.counter_app_name && (
+                              <span style={{ color: "var(--text)", fontSize: 12, flex: 1 }}>
+                                {row.counter_app_name}
+                              </span>
+                            )}
+                            {!counterInScope && (
+                              <span
+                                title="Will be added to scope when you check this row"
+                                style={{
+                                  fontSize: 10, color: "#5fc58a",
+                                  fontFamily: "var(--font-mono)",
+                                  padding: "2px 6px",
+                                  border: "1px solid #5fc58a",
+                                  borderRadius: 3,
+                                }}
+                              >
+                                +scope
+                              </span>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })}
