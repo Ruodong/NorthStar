@@ -89,6 +89,24 @@ interface CatalogInterface {
   status: string | null;
 }
 
+// An interface row from the perspective of ONE scope app
+interface ScopedIfaceRow {
+  interface_id: number;
+  platform: string;
+  interface_name: string | null;
+  // The scope app this row pivots on
+  scope_app_id: string;
+  scope_app_name: string;
+  // scope app's role for this interface: 'provider' = scope app exposes it;
+  // 'consumer' = scope app uses it.
+  role: "provider" | "consumer";
+  // The other end
+  counter_app_id: string | null;
+  counter_app_name: string | null;
+  counter_account: string | null;
+  status: string | null;
+}
+
 const PLATFORM_COLORS: Record<string, string> = {
   WSO2: "#f6a623", APIH: "#6ba6e8", KPaaS: "#5fc58a",
   Talend: "#e8716b", PO: "#a8b0c0", "Data Service": "#e8b458",
@@ -125,8 +143,8 @@ export default function DesignNewPage() {
   const [bcApps, setBcApps] = useState<BCAppRow[]>([]);
   const [bcLoading, setBcLoading] = useState(false);
 
-  // Step 4: Interfaces
-  const [catalog, setCatalog] = useState<CatalogInterface[]>([]);
+  // Step 3: Interfaces — scoped rows, one per (scope_app, direction, counter)
+  const [scopedRows, setScopedRows] = useState<ScopedIfaceRow[]>([]);
   const [keepIfaceIds, setKeepIfaceIds] = useState<Set<number>>(new Set());
   const [catalogLoading, setCatalogLoading] = useState(false);
 
@@ -187,45 +205,81 @@ export default function DesignNewPage() {
     })();
   }, [selectedBcId]);
 
-  // Load catalog interfaces for selected apps (Tab 3). Uses the dedicated
-  // /catalog-interfaces endpoint for a direct, correct query (the previous
-  // approach only scanned as_provider side and missed some edges).
-  const [coverage, setCoverage] = useState<Record<string, { total_catalog: number; in_scope_connected: number }>>({});
+  // Load interfaces: for each scope app, fetch its /integrations endpoint
+  // and flatten into ScopedIfaceRow[]. Each row pivots on ONE scope app +
+  // its role (provider/consumer) + the counterparty. The UI lets the
+  // architect check a row to include that interface AND auto-add the
+  // counterparty app to scope.
+  const [coverage, setCoverage] = useState<Record<string, { total_catalog: number }>>({});
   useEffect(() => {
     if (step !== 3 || scopeApps.length === 0) return;
     setCatalogLoading(true);
     (async () => {
       try {
-        const appIds = scopeApps.map(a => a.app_id).join(",");
-        const res = await fetch(
-          `/api/design/catalog-interfaces?app_ids=${encodeURIComponent(appIds)}`,
-          { cache: "no-store" },
+        const results = await Promise.all(
+          scopeApps.map(a =>
+            fetch(
+              `/api/masters/applications/${encodeURIComponent(a.app_id)}/integrations?include_sunset=false`,
+              { cache: "no-store" }
+            ).then(r => r.json()).then(j => ({ scope: a, data: j.success ? j.data : null }))
+          )
         );
-        const j = await res.json();
-        if (!j.success) throw new Error(j.error || "fetch failed");
-        const ifaces: CatalogInterface[] = (j.data.interfaces || []).map((r: {
-          interface_id: number;
-          integration_platform: string;
-          interface_name: string | null;
-          source_cmdb_id: string | null;
-          target_cmdb_id: string | null;
-          source_app_name: string | null;
-          target_app_name: string | null;
-          status: string | null;
-        }) => ({
-          interface_id: r.interface_id,
-          integration_platform: r.integration_platform,
-          interface_name: r.interface_name,
-          source_cmdb_id: r.source_cmdb_id,
-          target_cmdb_id: r.target_cmdb_id,
-          source_app_name: r.source_app_name,
-          target_app_name: r.target_app_name,
-          status: r.status,
-        }));
-        setCatalog(ifaces);
-        setCoverage(j.data.per_app_coverage || {});
-        // Default: NONE selected — architect explicitly picks what belongs.
-        setKeepIfaceIds(new Set());
+
+        const rows: ScopedIfaceRow[] = [];
+        const cov: Record<string, { total_catalog: number }> = {};
+        for (const { scope, data } of results) {
+          if (!data) continue;
+
+          // Count total catalog entries touching this scope app (provider + consumer sides)
+          let total = 0;
+          // AS PROVIDER side
+          for (const platform of Object.keys(data.as_provider?.by_platform || {})) {
+            const bucket = data.as_provider.by_platform[platform];
+            for (const iface of (bucket.interfaces || [])) {
+              for (const c of (iface.consumers || [])) {
+                total++;
+                rows.push({
+                  interface_id: c.interface_id,
+                  platform,
+                  interface_name: iface.interface_name || iface.label || null,
+                  scope_app_id: scope.app_id,
+                  scope_app_name: scope.name,
+                  role: "provider",
+                  counter_app_id: c.app_id || null,
+                  counter_app_name: c.app_name || null,
+                  counter_account: c.account_name || null,
+                  status: c.status ?? null,
+                });
+              }
+            }
+          }
+          // AS CONSUMER side
+          for (const platform of Object.keys(data.as_consumer?.by_platform || {})) {
+            const bucket = data.as_consumer.by_platform[platform];
+            for (const row of (bucket.rows || [])) {
+              total++;
+              rows.push({
+                interface_id: row.interface_id,
+                platform,
+                interface_name: row.interface_name || row.label || null,
+                scope_app_id: scope.app_id,
+                scope_app_name: scope.name,
+                role: "consumer",
+                counter_app_id: row.provider?.app_id || null,
+                counter_app_name: row.provider?.app_name || null,
+                counter_account: row.my_account_name || null,
+                status: row.status ?? null,
+              });
+            }
+          }
+          cov[scope.app_id] = { total_catalog: total };
+        }
+
+        setScopedRows(rows);
+        setCoverage(cov);
+        // Keep existing checked ids that are still valid; drop stale ones
+        const validIds = new Set(rows.map(r => r.interface_id));
+        setKeepIfaceIds(prev => new Set([...prev].filter(id => validIds.has(id))));
       } catch (e) {
         setErr(String(e));
       }
@@ -255,12 +309,29 @@ export default function DesignNewPage() {
     });
   };
 
-  const toggleIface = (id: number) => {
+  // Toggling an interface row also auto-adds the counterparty app to scope
+  // (if not already there). This lets architects discover and expand scope
+  // through the Interfaces tab instead of guessing upfront in the Apps tab.
+  const toggleIface = (row: ScopedIfaceRow) => {
     setKeepIfaceIds(prev => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
+      if (next.has(row.interface_id)) next.delete(row.interface_id);
+      else next.add(row.interface_id);
       return next;
     });
+    // Only add counter on CHECK (not uncheck) — and only if app is CMDB-valid
+    const checking = !keepIfaceIds.has(row.interface_id);
+    if (checking && row.counter_app_id && row.counter_app_id !== row.scope_app_id) {
+      setScopeApps(prev => {
+        if (prev.some(a => a.app_id === row.counter_app_id)) return prev;
+        return [...prev, {
+          app_id: row.counter_app_id!,
+          name: row.counter_app_name || row.counter_app_id!,
+          role: "related",
+          planned_status: "keep",
+        }];
+      });
+    }
   };
 
   const submit = async () => {
@@ -276,16 +347,38 @@ export default function DesignNewPage() {
         apps: scopeApps.map(a => ({
           app_id: a.app_id, role: a.role, planned_status: a.planned_status, bc_id: a.bc_id ?? null,
         })),
-        interfaces: catalog
-          .filter(i => keepIfaceIds.has(i.interface_id))
-          .map(i => ({
-            interface_id: i.interface_id,
-            from_app: i.source_cmdb_id,
-            to_app: i.target_cmdb_id,
-            platform: i.integration_platform,
-            interface_name: i.interface_name,
-            planned_status: "keep",
-          })),
+        // Dedup by interface_id: same underlying interface may appear
+        // multiple times (once per scope app perspective).
+        interfaces: Array.from(
+          new Map(
+            scopedRows
+              .filter(r => keepIfaceIds.has(r.interface_id))
+              .map(r => {
+                // Normalize to (from_app, to_app) pair using role:
+                // provider role means the scope app SUPPLIES the endpoint;
+                // but the integration flow direction depends on platform.
+                // For design-edge rendering, use source→target from the
+                // original data: when scope app is provider for platforms
+                // where source=Provider (APIH/KPaaS/etc.), scope→counter;
+                // for WSO2, target=Provider so counter→scope.
+                const providerSide = (r.platform === "WSO2") ? "target" : "source";
+                const fromApp = r.role === "provider"
+                  ? (providerSide === "source" ? r.scope_app_id : r.counter_app_id)
+                  : (providerSide === "source" ? r.counter_app_id : r.scope_app_id);
+                const toApp = r.role === "provider"
+                  ? (providerSide === "source" ? r.counter_app_id : r.scope_app_id)
+                  : (providerSide === "source" ? r.scope_app_id : r.counter_app_id);
+                return [r.interface_id, {
+                  interface_id: r.interface_id,
+                  from_app: fromApp,
+                  to_app: toApp,
+                  platform: r.platform,
+                  interface_name: r.interface_name,
+                  planned_status: "keep",
+                }];
+              })
+          ).values()
+        ),
       };
       const r = await fetch("/api/design", {
         method: "POST",
@@ -534,120 +627,15 @@ export default function DesignNewPage() {
 
       {/* ── Step 3 (now): Interfaces ── */}
       {step === 3 && (
-        <div className="panel" style={{ padding: 14 }}>
-          <h3 style={{ marginTop: 0, fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>
-            Existing interfaces between scope apps
-          </h3>
-          {catalogLoading ? (
-            <div style={{ color: "var(--text-dim)", padding: 20 }}>Loading interfaces…</div>
-          ) : catalog.length === 0 ? (
-            <div style={{ color: "var(--text-dim)", fontSize: 12 }}>
-              <div style={{ marginBottom: 8 }}>
-                No existing catalog interfaces found between the selected apps.
-                You can still add new ones on the canvas.
-              </div>
-              {/* Per-app coverage — explain WHY the list is empty */}
-              {Object.keys(coverage).length > 0 && (
-                <div style={{
-                  border: "1px solid var(--border)",
-                  borderRadius: 4,
-                  padding: "8px 10px",
-                  fontFamily: "var(--font-mono)",
-                  fontSize: 11,
-                  color: "var(--text-muted)",
-                }}>
-                  <div style={{ color: "var(--text-dim)", marginBottom: 4 }}>
-                    Catalog coverage per scope app:
-                  </div>
-                  {scopeApps.map(a => {
-                    const c = coverage[a.app_id] || { total_catalog: 0, in_scope_connected: 0 };
-                    const zero = c.total_catalog === 0;
-                    return (
-                      <div key={a.app_id} style={{
-                        display: "flex", gap: 8, padding: "2px 0",
-                        color: zero ? "#e8716b" : "var(--text-muted)",
-                      }}>
-                        <code style={{ color: "var(--accent)", minWidth: 80 }}>{a.app_id}</code>
-                        <span style={{ flex: 1 }}>{a.name}</span>
-                        <span>{c.total_catalog} total</span>
-                        <span>·</span>
-                        <span>{c.in_scope_connected} in scope</span>
-                        {zero && <span style={{ color: "#e8716b" }}>no catalog entries</span>}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          ) : (
-            <>
-              <div style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                fontSize: 11,
-                color: "var(--text-dim)",
-                marginBottom: 8,
-              }}>
-                <span>Found {catalog.length} interfaces. {keepIfaceIds.size} selected.</span>
-                <div style={{ flex: 1 }} />
-                <button
-                  onClick={() => setKeepIfaceIds(new Set(catalog.map(i => i.interface_id)))}
-                  style={{
-                    padding: "3px 10px", fontSize: 11, fontFamily: "var(--font-mono)",
-                    border: "1px solid var(--border)", background: "transparent",
-                    color: "var(--text-muted)", cursor: "pointer", borderRadius: 3,
-                  }}
-                >
-                  Select all
-                </button>
-                <button
-                  onClick={() => setKeepIfaceIds(new Set())}
-                  disabled={keepIfaceIds.size === 0}
-                  style={{
-                    padding: "3px 10px", fontSize: 11, fontFamily: "var(--font-mono)",
-                    border: "1px solid var(--border)", background: "transparent",
-                    color: keepIfaceIds.size === 0 ? "var(--text-dim)" : "var(--text-muted)",
-                    cursor: keepIfaceIds.size === 0 ? "default" : "pointer",
-                    borderRadius: 3,
-                  }}
-                >
-                  Clear
-                </button>
-              </div>
-              <div style={{ maxHeight: 450, overflowY: "auto" }}>
-                {catalog.map(iface => {
-                  const color = PLATFORM_COLORS[iface.integration_platform] || "#5f6a80";
-                  const kept = keepIfaceIds.has(iface.interface_id);
-                  return (
-                    <div key={iface.interface_id} style={{
-                      display: "flex", alignItems: "center", gap: 8,
-                      padding: "6px 8px", borderBottom: "1px solid var(--border)",
-                      opacity: kept ? 1 : 0.5,
-                    }}>
-                      <input type="checkbox" checked={kept} onChange={() => toggleIface(iface.interface_id)} />
-                      <span className="status-pill" style={{
-                        fontSize: 9, color, background: `${color}26`, padding: "2px 6px", minWidth: 48, textAlign: "center",
-                      }}>
-                        {iface.integration_platform}
-                      </span>
-                      <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, flex: 1, wordBreak: "break-all" }}>
-                        {iface.interface_name || "(unnamed)"}
-                      </span>
-                      <code style={{ fontFamily: "var(--font-mono)", color: "var(--accent)", fontSize: 11 }}>
-                        {iface.source_cmdb_id}
-                      </code>
-                      <span style={{ color: "var(--text-dim)", fontSize: 11 }}>→</span>
-                      <code style={{ fontFamily: "var(--font-mono)", color: "var(--accent)", fontSize: 11 }}>
-                        {iface.target_cmdb_id}
-                      </code>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          )}
-        </div>
+        <InterfacesStep
+          scopeApps={scopeApps}
+          scopedRows={scopedRows}
+          keepIfaceIds={keepIfaceIds}
+          coverage={coverage}
+          loading={catalogLoading}
+          onToggle={toggleIface}
+          onClearAll={() => setKeepIfaceIds(new Set())}
+        />
       )}
 
       {/* ── Step 5: Generate ── */}
@@ -663,7 +651,7 @@ export default function DesignNewPage() {
             <dt style={{ color: "var(--text-dim)" }}>Apps in scope</dt>
             <dd>{scopeApps.length}</dd>
             <dt style={{ color: "var(--text-dim)" }}>Interfaces kept</dt>
-            <dd>{keepIfaceIds.size} of {catalog.length}</dd>
+            <dd>{keepIfaceIds.size} of {scopedRows.length}</dd>
           </dl>
           <div style={{ marginTop: 20, padding: 12, background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 4, fontSize: 12, color: "var(--text-muted)" }}>
             The system will generate an AS-IS drawio canvas from these inputs.
@@ -680,7 +668,7 @@ export default function DesignNewPage() {
         templates={templates}
         templateId={templateId}
         scopeApps={scopeApps}
-        catalogCount={catalog.length}
+        catalogCount={scopedRows.length}
         keptCount={keepIfaceIds.size}
         onJumpTab={setStep}
       />
@@ -1004,6 +992,274 @@ function TemplateCard({
 }
 
 /* ── Template step: Standard templates | Project solutions (filtered) ── */
+/* ── Interfaces step: show all interfaces touching scope, grouped by
+   scope_app + role. Checking a row adds the counterparty app to scope. ── */
+function InterfacesStep({
+  scopeApps,
+  scopedRows,
+  keepIfaceIds,
+  coverage,
+  loading,
+  onToggle,
+  onClearAll,
+}: {
+  scopeApps: ScopeApp[];
+  scopedRows: ScopedIfaceRow[];
+  keepIfaceIds: Set<number>;
+  coverage: Record<string, { total_catalog: number }>;
+  loading: boolean;
+  onToggle: (row: ScopedIfaceRow) => void;
+  onClearAll: () => void;
+}) {
+  const scopeSet = new Set(scopeApps.map(a => a.app_id));
+
+  // Group rows: map<scope_app_id, {provider: rows[], consumer: rows[]}>
+  const groups = new Map<string, { provider: ScopedIfaceRow[]; consumer: ScopedIfaceRow[] }>();
+  for (const app of scopeApps) {
+    groups.set(app.app_id, { provider: [], consumer: [] });
+  }
+  for (const r of scopedRows) {
+    const g = groups.get(r.scope_app_id);
+    if (!g) continue;
+    if (r.role === "provider") g.provider.push(r);
+    else g.consumer.push(r);
+  }
+
+  if (scopeApps.length === 0) {
+    return (
+      <div className="panel" style={{ padding: 14, color: "var(--text-dim)", fontSize: 12 }}>
+        No apps in scope yet. Go to the Apps tab first.
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="panel" style={{ padding: 20, color: "var(--text-dim)", fontSize: 12 }}>
+        Loading interfaces…
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      {/* Toolbar */}
+      <div
+        className="panel"
+        style={{
+          padding: "10px 14px",
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          fontSize: 11,
+          color: "var(--text-muted)",
+        }}
+      >
+        <span>
+          {scopedRows.length} interface rows across {scopeApps.length} scope apps.
+          {" "}{keepIfaceIds.size} selected.
+        </span>
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+          💡 Checking a row auto-adds the counterparty app to scope.
+        </span>
+        <button
+          onClick={onClearAll}
+          disabled={keepIfaceIds.size === 0}
+          style={{
+            padding: "3px 10px", fontSize: 11, fontFamily: "var(--font-mono)",
+            border: "1px solid var(--border)", background: "transparent",
+            color: keepIfaceIds.size === 0 ? "var(--text-dim)" : "var(--text-muted)",
+            cursor: keepIfaceIds.size === 0 ? "default" : "pointer",
+            borderRadius: 3,
+          }}
+        >
+          Clear
+        </button>
+      </div>
+
+      {scopeApps.map(app => {
+        const g = groups.get(app.app_id)!;
+        const cov = coverage[app.app_id] || { total_catalog: 0 };
+        const hasAny = g.provider.length > 0 || g.consumer.length > 0;
+
+        return (
+          <div key={app.app_id} className="panel" style={{ padding: 0, overflow: "hidden" }}>
+            {/* App header */}
+            <div style={{
+              padding: "8px 14px",
+              borderBottom: "1px solid var(--border)",
+              background: "var(--bg-elevated)",
+              display: "flex",
+              alignItems: "center",
+              gap: 10,
+            }}>
+              <code style={{
+                fontFamily: "var(--font-mono)", color: "var(--accent)",
+                fontSize: 12, fontWeight: 600,
+              }}>
+                {app.app_id}
+              </code>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>{app.name}</span>
+              <div style={{ flex: 1 }} />
+              <span style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
+                {cov.total_catalog} catalog entries ·
+                {" "}{g.provider.length} as provider ·
+                {" "}{g.consumer.length} as consumer
+              </span>
+            </div>
+
+            {!hasAny && (
+              <div style={{ padding: 14, color: "var(--text-dim)", fontSize: 12 }}>
+                {cov.total_catalog === 0
+                  ? <>This app has <strong style={{ color: "#e8716b" }}>no catalog entries</strong> (not registered on any integration platform).</>
+                  : "No interfaces on this platform filter."}
+              </div>
+            )}
+
+            {/* As provider */}
+            {g.provider.length > 0 && (
+              <IfaceRoleSection
+                title="📤 AS PROVIDER — interfaces this app exposes"
+                rows={g.provider}
+                keepIfaceIds={keepIfaceIds}
+                scopeSet={scopeSet}
+                onToggle={onToggle}
+                color="#f6a623"
+              />
+            )}
+            {/* As consumer */}
+            {g.consumer.length > 0 && (
+              <IfaceRoleSection
+                title="📥 AS CONSUMER — interfaces this app uses"
+                rows={g.consumer}
+                keepIfaceIds={keepIfaceIds}
+                scopeSet={scopeSet}
+                onToggle={onToggle}
+                color="#6ba6e8"
+              />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function IfaceRoleSection({
+  title, rows, keepIfaceIds, scopeSet, onToggle, color,
+}: {
+  title: string;
+  rows: ScopedIfaceRow[];
+  keepIfaceIds: Set<number>;
+  scopeSet: Set<string>;
+  onToggle: (row: ScopedIfaceRow) => void;
+  color: string;
+}) {
+  // Group within a role by platform for compactness
+  const byPlatform = new Map<string, ScopedIfaceRow[]>();
+  for (const r of rows) {
+    if (!byPlatform.has(r.platform)) byPlatform.set(r.platform, []);
+    byPlatform.get(r.platform)!.push(r);
+  }
+
+  return (
+    <div>
+      <div style={{
+        padding: "6px 14px",
+        borderLeft: `3px solid ${color}`,
+        fontSize: 10,
+        fontFamily: "var(--font-mono)",
+        color,
+        letterSpacing: 0.6,
+        fontWeight: 600,
+      }}>
+        {title} ({rows.length})
+      </div>
+      {[...byPlatform.entries()].map(([platform, pRows]) => {
+        const pColor = PLATFORM_COLORS[platform] || "#5f6a80";
+        return (
+          <div key={platform}>
+            {pRows.map(row => {
+              const kept = keepIfaceIds.has(row.interface_id);
+              const counterInScope = row.counter_app_id ? scopeSet.has(row.counter_app_id) : false;
+              const counterUnlinked = !row.counter_app_id || row.counter_app_id === "__UNLINKED__";
+              return (
+                <div
+                  key={`${row.scope_app_id}-${row.role}-${row.interface_id}-${row.counter_app_id || "u"}`}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 8,
+                    padding: "6px 14px", borderTop: "1px solid var(--border)",
+                    opacity: kept ? 1 : 0.75,
+                    background: kept ? `${color}08` : "transparent",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={kept}
+                    disabled={counterUnlinked}
+                    onChange={() => onToggle(row)}
+                    title={counterUnlinked ? "Counterparty is unlinked; can't add to scope" : undefined}
+                  />
+                  <span className="status-pill" style={{
+                    fontSize: 9, color: pColor,
+                    background: `${pColor}26`,
+                    padding: "2px 6px", minWidth: 56, textAlign: "center",
+                  }}>
+                    {platform}
+                  </span>
+                  <span style={{
+                    fontFamily: "var(--font-mono)", fontSize: 12,
+                    flex: 1, wordBreak: "break-all",
+                  }}>
+                    {row.interface_name || "(unnamed)"}
+                  </span>
+                  <span style={{ color: "var(--text-dim)", fontSize: 12 }}>
+                    {row.role === "provider" ? "→" : "←"}
+                  </span>
+                  {counterUnlinked ? (
+                    <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
+                      (unlinked)
+                    </span>
+                  ) : (
+                    <>
+                      <code style={{
+                        fontFamily: "var(--font-mono)", fontSize: 11,
+                        color: "var(--accent)",
+                      }}>
+                        {row.counter_app_id}
+                      </code>
+                      {row.counter_app_name && (
+                        <span style={{ color: "var(--text-muted)", fontSize: 11 }}>
+                          {row.counter_app_name}
+                        </span>
+                      )}
+                      {!counterInScope && (
+                        <span
+                          title="Will be added to scope when you check this row"
+                          style={{
+                            fontSize: 10, color: "#5fc58a",
+                            fontFamily: "var(--font-mono)",
+                            padding: "2px 6px",
+                            border: "1px solid #5fc58a",
+                            borderRadius: 3,
+                          }}
+                        >
+                          +scope
+                        </span>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function TemplateStep({
   scopeApps,
   templates,
