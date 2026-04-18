@@ -187,50 +187,44 @@ export default function DesignNewPage() {
     })();
   }, [selectedBcId]);
 
-  // Load catalog interfaces for selected apps (Step 4)
+  // Load catalog interfaces for selected apps (Tab 3). Uses the dedicated
+  // /catalog-interfaces endpoint for a direct, correct query (the previous
+  // approach only scanned as_provider side and missed some edges).
+  const [coverage, setCoverage] = useState<Record<string, { total_catalog: number; in_scope_connected: number }>>({});
   useEffect(() => {
     if (step !== 3 || scopeApps.length === 0) return;
     setCatalogLoading(true);
     (async () => {
-      // Query all interfaces where source or target is in our scope
-      const appIds = scopeApps.map(a => a.app_id);
       try {
-        const res = await Promise.all(
-          appIds.map(id =>
-            fetch(`/api/masters/applications/${encodeURIComponent(id)}/integrations?include_sunset=false`, { cache: "no-store" })
-              .then(r => r.json())
-          )
+        const appIds = scopeApps.map(a => a.app_id).join(",");
+        const res = await fetch(
+          `/api/design/catalog-interfaces?app_ids=${encodeURIComponent(appIds)}`,
+          { cache: "no-store" },
         );
-        // Collect unique interface rows between in-scope apps
-        const scopeSet = new Set(appIds);
-        const seen = new Set<number>();
-        const ifaces: CatalogInterface[] = [];
-        for (const r of res) {
-          if (!r.success) continue;
-          const d = r.data;
-          for (const platform of Object.keys(d.as_provider.by_platform)) {
-            for (const iface of d.as_provider.by_platform[platform].interfaces) {
-              for (const c of iface.consumers) {
-                if (!c.app_id || !scopeSet.has(c.app_id)) continue;
-                if (seen.has(c.interface_id)) continue;
-                seen.add(c.interface_id);
-                ifaces.push({
-                  interface_id: c.interface_id,
-                  integration_platform: platform,
-                  interface_name: iface.interface_name || iface.label,
-                  source_cmdb_id: d.app_id,
-                  target_cmdb_id: c.app_id,
-                  source_app_name: null,
-                  target_app_name: c.app_name,
-                  status: c.status ?? null,
-                });
-              }
-            }
-          }
-        }
+        const j = await res.json();
+        if (!j.success) throw new Error(j.error || "fetch failed");
+        const ifaces: CatalogInterface[] = (j.data.interfaces || []).map((r: {
+          interface_id: number;
+          integration_platform: string;
+          interface_name: string | null;
+          source_cmdb_id: string | null;
+          target_cmdb_id: string | null;
+          source_app_name: string | null;
+          target_app_name: string | null;
+          status: string | null;
+        }) => ({
+          interface_id: r.interface_id,
+          integration_platform: r.integration_platform,
+          interface_name: r.interface_name,
+          source_cmdb_id: r.source_cmdb_id,
+          target_cmdb_id: r.target_cmdb_id,
+          source_app_name: r.source_app_name,
+          target_app_name: r.target_app_name,
+          status: r.status,
+        }));
         setCatalog(ifaces);
-        // Default: NONE selected — architect explicitly picks what belongs
-        // in the design. Prevents auto-bloat for apps with many interfaces.
+        setCoverage(j.data.per_app_coverage || {});
+        // Default: NONE selected — architect explicitly picks what belongs.
         setKeepIfaceIds(new Set());
       } catch (e) {
         setErr(String(e));
@@ -548,7 +542,42 @@ export default function DesignNewPage() {
             <div style={{ color: "var(--text-dim)", padding: 20 }}>Loading interfaces…</div>
           ) : catalog.length === 0 ? (
             <div style={{ color: "var(--text-dim)", fontSize: 12 }}>
-              No existing interfaces found among the selected apps. You can add new ones on the canvas.
+              <div style={{ marginBottom: 8 }}>
+                No existing catalog interfaces found between the selected apps.
+                You can still add new ones on the canvas.
+              </div>
+              {/* Per-app coverage — explain WHY the list is empty */}
+              {Object.keys(coverage).length > 0 && (
+                <div style={{
+                  border: "1px solid var(--border)",
+                  borderRadius: 4,
+                  padding: "8px 10px",
+                  fontFamily: "var(--font-mono)",
+                  fontSize: 11,
+                  color: "var(--text-muted)",
+                }}>
+                  <div style={{ color: "var(--text-dim)", marginBottom: 4 }}>
+                    Catalog coverage per scope app:
+                  </div>
+                  {scopeApps.map(a => {
+                    const c = coverage[a.app_id] || { total_catalog: 0, in_scope_connected: 0 };
+                    const zero = c.total_catalog === 0;
+                    return (
+                      <div key={a.app_id} style={{
+                        display: "flex", gap: 8, padding: "2px 0",
+                        color: zero ? "#e8716b" : "var(--text-muted)",
+                      }}>
+                        <code style={{ color: "var(--accent)", minWidth: 80 }}>{a.app_id}</code>
+                        <span style={{ flex: 1 }}>{a.name}</span>
+                        <span>{c.total_catalog} total</span>
+                        <span>·</span>
+                        <span>{c.in_scope_connected} in scope</span>
+                        {zero && <span style={{ color: "#e8716b" }}>no catalog entries</span>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           ) : (
             <>
@@ -643,6 +672,19 @@ export default function DesignNewPage() {
         </div>
       )}
 
+      {/* ── Persistent summary bar — always visible, shows current selections ── */}
+      <SummaryBar
+        name={name}
+        fiscalYear={fiscalYear}
+        projectId={projectId}
+        templates={templates}
+        templateId={templateId}
+        scopeApps={scopeApps}
+        catalogCount={catalog.length}
+        keptCount={keepIfaceIds.size}
+        onJumpTab={setStep}
+      />
+
       {/* ── Footer: prev/next convenience + always-visible Generate ── */}
       <div style={{
         display: "flex",
@@ -710,6 +752,150 @@ export default function DesignNewPage() {
 }
 
 // ── Small components ────────────────────────────────────────────
+/* ── SummaryBar: persistent footer showing current selections across tabs ── */
+function SummaryBar({
+  name, fiscalYear, projectId, templates, templateId,
+  scopeApps, catalogCount, keptCount, onJumpTab,
+}: {
+  name: string;
+  fiscalYear: string;
+  projectId: string | null;
+  templates: TemplateRow[];
+  templateId: number | null;
+  scopeApps: ScopeApp[];
+  catalogCount: number;
+  keptCount: number;
+  onJumpTab: (idx: number) => void;
+}) {
+  const templateName = templateId === null
+    ? "Blank canvas"
+    : (templates.find(t => t.attachment_id === templateId)?.title || `#${templateId}`);
+
+  const appPreview = scopeApps.slice(0, 3).map(a => a.app_id).join(", ");
+  const moreApps = Math.max(0, scopeApps.length - 3);
+
+  return (
+    <div style={{
+      marginTop: 16,
+      padding: "10px 14px",
+      background: "var(--bg-elevated)",
+      border: "1px solid var(--border)",
+      borderRadius: "var(--radius-md)",
+      display: "grid",
+      gridTemplateColumns: "repeat(5, 1fr)",
+      gap: 10,
+      fontSize: 11,
+    }}>
+      <SummaryCell label="Context" onJump={() => onJumpTab(1)} filled={name.trim().length > 0}>
+        {name.trim() ? (
+          <>
+            <div style={{ color: "var(--text)", fontWeight: 500 }}>{name}</div>
+            <div style={{ color: "var(--text-dim)", fontSize: 10 }}>
+              {fiscalYear}
+              {projectId && <> · <code style={{ fontFamily: "var(--font-mono)", color: "var(--accent)" }}>{projectId}</code></>}
+            </div>
+          </>
+        ) : (
+          <span style={{ color: "var(--text-dim)" }}>(unnamed)</span>
+        )}
+      </SummaryCell>
+
+      <SummaryCell label="Apps" onJump={() => onJumpTab(2)} filled={scopeApps.length > 0}>
+        {scopeApps.length === 0 ? (
+          <span style={{ color: "var(--text-dim)" }}>none</span>
+        ) : (
+          <>
+            <div style={{ color: "var(--text)" }}>
+              <strong>{scopeApps.length}</strong> app{scopeApps.length === 1 ? "" : "s"}
+            </div>
+            <div style={{ color: "var(--text-dim)", fontSize: 10, fontFamily: "var(--font-mono)" }}>
+              {appPreview}{moreApps > 0 && ` +${moreApps}`}
+            </div>
+          </>
+        )}
+      </SummaryCell>
+
+      <SummaryCell label="Interfaces" onJump={() => onJumpTab(3)} filled={keptCount > 0}>
+        {catalogCount === 0 && scopeApps.length > 0 ? (
+          <span style={{ color: "var(--text-dim)" }}>none in catalog</span>
+        ) : (
+          <>
+            <div style={{ color: "var(--text)" }}>
+              <strong>{keptCount}</strong> of {catalogCount} kept
+            </div>
+            <div style={{ color: "var(--text-dim)", fontSize: 10 }}>
+              {scopeApps.length > 0 ? "from catalog" : "pick apps first"}
+            </div>
+          </>
+        )}
+      </SummaryCell>
+
+      <SummaryCell label="Template" onJump={() => onJumpTab(4)} filled={true}>
+        <div style={{
+          color: "var(--text)",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}>
+          {templateName}
+        </div>
+        <div style={{ color: "var(--text-dim)", fontSize: 10 }}>
+          {templateId === null ? "blank canvas" : "as starting point"}
+        </div>
+      </SummaryCell>
+
+      <SummaryCell label="Review" onJump={() => onJumpTab(5)} filled={name.trim().length > 0 && scopeApps.length > 0}>
+        <div style={{
+          color: name.trim().length > 0 && scopeApps.length > 0 ? "#5fc58a" : "#e8b458",
+          fontWeight: 500,
+        }}>
+          {name.trim().length > 0 && scopeApps.length > 0
+            ? "Ready to generate"
+            : "Missing required fields"}
+        </div>
+      </SummaryCell>
+    </div>
+  );
+}
+
+function SummaryCell({
+  label, children, onJump, filled,
+}: {
+  label: string;
+  children: React.ReactNode;
+  onJump: () => void;
+  filled: boolean;
+}) {
+  return (
+    <button
+      onClick={onJump}
+      style={{
+        background: "transparent",
+        border: "none",
+        padding: "4px 6px",
+        textAlign: "left",
+        cursor: "pointer",
+        borderLeft: `2px solid ${filled ? "var(--accent)" : "var(--border-strong)"}`,
+        display: "flex",
+        flexDirection: "column",
+        gap: 2,
+        minWidth: 0,
+      }}
+    >
+      <div style={{
+        fontSize: 9,
+        color: "var(--text-dim)",
+        fontFamily: "var(--font-mono)",
+        letterSpacing: 0.6,
+        textTransform: "uppercase",
+      }}>
+        {label}
+      </div>
+      {children}
+    </button>
+  );
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label style={{ display: "block" }}>

@@ -340,6 +340,82 @@ async def get_template_xml(attachment_id: int) -> Response:
 
 
 # ──────────────────────────────────────────────────────────────────
+# Catalog interfaces — fetch edges between apps in scope
+# ──────────────────────────────────────────────────────────────────
+@router.get("/catalog-interfaces")
+async def list_catalog_interfaces(
+    app_ids: str = Query("", description="Comma-separated app IDs in scope"),
+    include_sunset: bool = False,
+) -> ApiResponse:
+    """All integration_interface rows where both endpoints are in scope.
+
+    Direct PG query — scoped to (source_cmdb_id IN scope AND target_cmdb_id
+    IN scope). Returns interfaces in either direction and gives per-app
+    coverage stats so the UI can explain empty results.
+    """
+    ids = [i.strip() for i in app_ids.split(",") if i.strip()]
+    if not ids:
+        return ApiResponse(data={
+            "total": 0, "interfaces": [], "per_app_coverage": {},
+        })
+
+    # Per-app totals (catalog presence, regardless of scope)
+    coverage_rows = await pg_client.fetch(
+        """
+        SELECT a.app_id,
+               count(*) FILTER (
+                   WHERE i.source_cmdb_id = a.app_id OR i.target_cmdb_id = a.app_id
+               ) AS total_catalog,
+               count(*) FILTER (
+                   WHERE (i.source_cmdb_id = a.app_id OR i.target_cmdb_id = a.app_id)
+                     AND (i.source_cmdb_id = ANY($1::text[])
+                          AND i.target_cmdb_id = ANY($1::text[]))
+               ) AS in_scope_connected
+        FROM unnest($1::text[]) AS a(app_id)
+        LEFT JOIN northstar.integration_interface i
+          ON i.source_cmdb_id = a.app_id OR i.target_cmdb_id = a.app_id
+        GROUP BY a.app_id
+        """,
+        ids,
+    )
+    coverage = {r["app_id"]: dict(r) for r in coverage_rows}
+
+    # Actual edges between scope apps
+    status_filter = "" if include_sunset else "AND (status IS NULL OR upper(status) != 'SUNSET')"
+    rows = await pg_client.fetch(
+        f"""
+        SELECT
+            i.interface_id,
+            i.integration_platform,
+            i.interface_name,
+            i.source_cmdb_id,
+            i.target_cmdb_id,
+            COALESCE(ra_src.name, i.source_app_name) AS source_app_name,
+            COALESCE(ra_tgt.name, i.target_app_name) AS target_app_name,
+            i.status,
+            i.business_area,
+            i.interface_description
+        FROM northstar.integration_interface i
+        LEFT JOIN northstar.ref_application ra_src ON ra_src.app_id = i.source_cmdb_id
+        LEFT JOIN northstar.ref_application ra_tgt ON ra_tgt.app_id = i.target_cmdb_id
+        WHERE i.source_cmdb_id = ANY($1::text[])
+          AND i.target_cmdb_id = ANY($1::text[])
+          AND i.source_cmdb_id <> i.target_cmdb_id
+          {status_filter}
+        ORDER BY i.integration_platform, i.interface_name, i.interface_id
+        """,
+        ids,
+    )
+
+    return ApiResponse(data={
+        "total": len(rows),
+        "scope_app_ids": ids,
+        "interfaces": [dict(r) for r in rows],
+        "per_app_coverage": coverage,
+    })
+
+
+# ──────────────────────────────────────────────────────────────────
 # Design CRUD
 # ──────────────────────────────────────────────────────────────────
 @router.get("")
