@@ -238,8 +238,7 @@ export default function AppDetailPage() {
     );
   }
 
-  const { app, outbound, inbound, investments, diagrams, confluence_pages, tco, review_pages } = data;
-  const totalIntegrations = outbound.length + inbound.length;
+  const { app, investments, diagrams, confluence_pages, tco, review_pages } = data;
   const reviewCount = (review_pages || []).length;
 
   return (
@@ -365,7 +364,7 @@ export default function AppDetailPage() {
         <TabButton current={tab} value="overview" onClick={setTab}>
           Overview
         </TabButton>
-        <TabButton current={tab} value="integrations" onClick={setTab} count={totalIntegrations}>
+        <TabButton current={tab} value="integrations" onClick={setTab}>
           Integrations
         </TabButton>
         <TabButton current={tab} value="deployment" onClick={setTab}
@@ -394,14 +393,12 @@ export default function AppDetailPage() {
         <OverviewTab
           app={app}
           investments={investments}
-          outbound={outbound}
-          inbound={inbound}
           diagrams={diagrams}
           confluencePages={confluence_pages}
           tco={tco}
         />
       )}
-      {tab === "integrations" && <IntegrationsTab outbound={outbound} inbound={inbound} />}
+      {tab === "integrations" && <IntegrationsTab appId={app.app_id} />}
       {tab === "impact" && <ImpactTab appId={app.app_id} />}
       {tab === "investments" && <InvestmentsTab investments={investments} />}
       {tab === "diagrams" && <DiagramsTab diagrams={diagrams} />}
@@ -875,16 +872,12 @@ function EmptyState({ children }: { children: React.ReactNode }) {
 function OverviewTab({
   app,
   investments,
-  outbound,
-  inbound,
   diagrams,
   confluencePages,
   tco,
 }: {
   app: AppNode;
   investments: Investment[];
-  outbound: OutboundEdge[];
-  inbound: InboundEdge[];
   diagrams: DiagramRef[];
   confluencePages: ConfluencePageRef[];
   tco?: TcoData | null;
@@ -1029,8 +1022,6 @@ function OverviewTab({
           }}
         >
           <Kpi label="Investments" value={investments.length} />
-          <Kpi label="Outgoing" value={outbound.length} />
-          <Kpi label="Incoming" value={inbound.length} />
           <Kpi label="Diagrams" value={diagrams.length} />
           <Kpi label="Conf. pages" value={confluencePages.length} />
         </div>
@@ -1171,120 +1162,494 @@ function Kpi({ label, value }: { label: string; value: number | string }) {
 }
 
 // ---------------- Integrations ----------------
-function IntegrationsTab({
+// Sourced from integration_catalog (WSO2/PO/Talend/APIH/KPaaS/Axway/Goanywhere/
+// Data Service). Grouped by integration_platform with platform-specific fields.
+// Replaces the previous drawio-extracted integration data.
+
+interface IntegrationRow {
+  interface_id: number;
+  integration_platform: string;
+  interface_name: string | null;
+  source_cmdb_id?: string | null;
+  target_cmdb_id?: string | null;
+  source_app_name?: string | null;
+  target_app_name?: string | null;
+  source_account_name?: string | null;
+  target_account_name?: string | null;
+  source_endpoint?: string | null;
+  target_endpoint?: string | null;
+  source_connection_type?: string | null;
+  target_connection_type?: string | null;
+  source_authentication?: string | null;
+  target_authentication?: string | null;
+  source_dc?: string | null;
+  target_dc?: string | null;
+  source_owner?: string | null;
+  target_owner?: string | null;
+  source_application_type?: string | null;
+  target_application_type?: string | null;
+  source_payload_size?: string | null;
+  target_payload_size?: string | null;
+  api_payload_size?: string | null;
+  api_name?: string | null;
+  topic_name?: string | null;
+  instance?: string | null;
+  api_postman_url?: string | null;
+  api_spec?: string | null;
+  data_mapping_file?: string | null;
+  base?: string | null;
+  git_project?: string | null;
+  business_area?: string | null;
+  interface_description?: string | null;
+  frequency?: string | null;
+  schedule?: string | null;
+  developer?: string | null;
+  interface_owner?: string | null;
+  location?: string | null;
+  tag?: string | null;
+  status?: string | null;
+  [k: string]: unknown;
+}
+
+interface IntegrationPayload {
+  app_id: string;
+  total_interfaces: number;
+  total_outbound: number;
+  total_inbound: number;
+  platforms: string[];
+  summary_by_platform: Record<
+    string,
+    { outbound: number; inbound: number; total: number }
+  >;
+  outbound_by_platform: Record<string, IntegrationRow[]>;
+  inbound_by_platform: Record<string, IntegrationRow[]>;
+}
+
+const PLATFORM_COLORS: Record<string, string> = {
+  WSO2: "#f6a623",
+  APIH: "#6ba6e8",
+  KPaaS: "#5fc58a",
+  Talend: "#e8716b",
+  PO: "#a8b0c0",
+  "Data Service": "#e8b458",
+  Axway: "#9aa4b8",
+  "Axway MFT": "#9aa4b8",
+  "Goanywhere-job": "#6b7488",
+  "Goanywhere-web user": "#6b7488",
+};
+
+function IntegrationsTab({ appId }: { appId: string }) {
+  const [data, setData] = useState<IntegrationPayload | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [activePlatform, setActivePlatform] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      setErr(null);
+      try {
+        const r = await fetch(
+          `/api/masters/applications/${encodeURIComponent(appId)}/integrations`,
+          { cache: "no-store" },
+        );
+        const j = await r.json();
+        if (!j.success) throw new Error(j.error || "Failed to load");
+        setData(j.data);
+        if (j.data.platforms.length > 0) {
+          setActivePlatform(j.data.platforms[0]);
+        }
+      } catch (e) {
+        setErr(String(e));
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [appId]);
+
+  if (loading) {
+    return (
+      <div style={{ color: "var(--text-dim)", padding: 20, fontSize: 13 }}>
+        Loading integrations…
+      </div>
+    );
+  }
+  if (err) {
+    return (
+      <div className="panel" style={{ borderColor: "#5b1f1f" }}>
+        Error: {err}
+      </div>
+    );
+  }
+  if (!data || data.total_interfaces === 0) {
+    return <EmptyState>No integration interfaces registered on any platform.</EmptyState>;
+  }
+
+  return (
+    <div style={{ display: "grid", gap: 16 }}>
+      {/* Platform filter pills */}
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        <span
+          style={{
+            fontSize: 11,
+            color: "var(--text-dim)",
+            fontFamily: "var(--font-mono)",
+            marginRight: 4,
+          }}
+        >
+          PLATFORM
+        </span>
+        {data.platforms.map((p) => {
+          const active = activePlatform === p;
+          const s = data.summary_by_platform[p];
+          const color = PLATFORM_COLORS[p] || "#5f6a80";
+          return (
+            <button
+              key={p}
+              onClick={() => setActivePlatform(p)}
+              style={{
+                border: `1px solid ${active ? color : "var(--border)"}`,
+                background: active ? `${color}26` : "transparent",
+                color: active ? color : "var(--text-dim)",
+                padding: "4px 12px",
+                borderRadius: 4,
+                fontSize: 12,
+                cursor: "pointer",
+                fontFamily: "var(--font-body)",
+                whiteSpace: "nowrap",
+                transition: "all 0.15s",
+              }}
+            >
+              {p}{" "}
+              <span style={{ opacity: 0.6, fontSize: 11 }}>
+                ({s.total})
+              </span>
+            </button>
+          );
+        })}
+        <div style={{ flex: 1 }} />
+        <div
+          style={{
+            fontSize: 11,
+            color: "var(--text-dim)",
+            fontFamily: "var(--font-mono)",
+          }}
+        >
+          {data.total_outbound} outbound · {data.total_inbound} inbound · {data.total_interfaces} total
+        </div>
+      </div>
+
+      {/* Platform section — outbound + inbound */}
+      {activePlatform && (
+        <PlatformSection
+          platform={activePlatform}
+          outbound={data.outbound_by_platform[activePlatform] || []}
+          inbound={data.inbound_by_platform[activePlatform] || []}
+        />
+      )}
+    </div>
+  );
+}
+
+function PlatformSection({
+  platform,
   outbound,
   inbound,
 }: {
-  outbound: OutboundEdge[];
-  inbound: InboundEdge[];
+  platform: string;
+  outbound: IntegrationRow[];
+  inbound: IntegrationRow[];
 }) {
   return (
-    <div style={{ display: "grid", gap: 20 }}>
-      <Panel title={`Outgoing — calls these (${outbound.length})`}>
+    <div style={{ display: "grid", gap: 16 }}>
+      <Panel title={`${platform} — Outgoing (${outbound.length})`}>
         {outbound.length === 0 ? (
-          <EmptyState>No outgoing integrations.</EmptyState>
+          <EmptyState>No outgoing on {platform}.</EmptyState>
         ) : (
-          <IntegrationTable
-            rows={outbound.map((e) => ({
-              peer_id: e.target,
-              peer_name: e.target_name,
-              type: e.type,
-              business_object: e.business_object,
-              protocol: e.protocol,
-            }))}
-          />
+          <InterfaceList rows={outbound} platform={platform} direction="outbound" />
         )}
       </Panel>
 
-      <Panel title={`Incoming — called by these (${inbound.length})`}>
+      <Panel title={`${platform} — Incoming (${inbound.length})`}>
         {inbound.length === 0 ? (
-          <EmptyState>No incoming integrations.</EmptyState>
+          <EmptyState>No incoming on {platform}.</EmptyState>
         ) : (
-          <IntegrationTable
-            rows={inbound.map((e) => ({
-              peer_id: e.source,
-              peer_name: e.source_name,
-              type: e.type,
-              business_object: e.business_object,
-              protocol: e.protocol,
-            }))}
-          />
+          <InterfaceList rows={inbound} platform={platform} direction="inbound" />
         )}
       </Panel>
     </div>
   );
 }
 
-interface IntegRow {
-  peer_id: string;
-  peer_name: string;
-  type: string;
-  business_object: string;
-  protocol: string;
+function InterfaceList({
+  rows,
+  platform,
+  direction,
+}: {
+  rows: IntegrationRow[];
+  platform: string;
+  direction: "outbound" | "inbound";
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {rows.map((r) => (
+        <InterfaceCard
+          key={r.interface_id}
+          row={r}
+          platform={platform}
+          direction={direction}
+        />
+      ))}
+    </div>
+  );
 }
 
-function IntegrationTable({ rows }: { rows: IntegRow[] }) {
+function InterfaceCard({
+  row,
+  platform,
+  direction,
+}: {
+  row: IntegrationRow;
+  platform: string;
+  direction: "outbound" | "inbound";
+}) {
+  const peerId =
+    direction === "outbound" ? row.target_cmdb_id : row.source_cmdb_id;
+  const peerName =
+    direction === "outbound" ? row.target_app_name : row.source_app_name;
+  const peerEndpoint =
+    direction === "outbound" ? row.target_endpoint : row.source_endpoint;
+
+  // Platform-specific name display
+  const name =
+    platform === "APIH"
+      ? row.api_name || row.interface_name
+      : platform === "KPaaS"
+      ? row.topic_name || row.interface_name
+      : row.interface_name;
+
   return (
-    <table
+    <div
       style={{
-        width: "100%",
-        borderCollapse: "collapse",
-        fontSize: 12,
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-md)",
+        padding: "10px 14px",
+        background: "var(--bg-elevated)",
       }}
     >
-      <thead>
-        <tr style={{ color: "var(--text-dim)", textTransform: "uppercase", fontSize: 10 }}>
-          <th style={{ textAlign: "left", padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
-            App
-          </th>
-          <th style={{ textAlign: "left", padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
-            Type
-          </th>
-          <th style={{ textAlign: "left", padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
-            Business object
-          </th>
-          <th style={{ textAlign: "left", padding: "8px 12px", borderBottom: "1px solid var(--border)" }}>
-            Protocol
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r, idx) => (
-          <tr key={`${r.peer_id}-${idx}`}>
-            <td
+      {/* Header row — name + peer + status */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          marginBottom: 8,
+          flexWrap: "wrap",
+        }}
+      >
+        <span
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: 12,
+            color: "var(--text)",
+            fontWeight: 500,
+            wordBreak: "break-all",
+          }}
+        >
+          {name || "(unnamed)"}
+        </span>
+        <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
+          {direction === "outbound" ? "→" : "←"}
+        </span>
+        {peerId ? (
+          <Link
+            href={`/apps/${encodeURIComponent(peerId)}`}
+            style={{
+              color: "var(--accent)",
+              fontFamily: "var(--font-mono)",
+              fontSize: 12,
+            }}
+          >
+            {peerId}
+          </Link>
+        ) : (
+          <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
+            (unlinked)
+          </span>
+        )}
+        {peerName && (
+          <span style={{ color: "var(--text-muted)", fontSize: 12 }}>
+            {peerName}
+          </span>
+        )}
+        <div style={{ flex: 1 }} />
+        {row.status && (
+          <span
+            className="status-pill"
+            style={{
+              fontSize: 10,
+              color:
+                row.status === "SUNSET"
+                  ? "#6b7488"
+                  : row.status === "MTP"
+                  ? "#5fc58a"
+                  : "var(--text-muted)",
+              background:
+                row.status === "SUNSET"
+                  ? "#6b748826"
+                  : row.status === "MTP"
+                  ? "#5fc58a26"
+                  : "var(--surface-hover)",
+            }}
+          >
+            {row.status}
+          </span>
+        )}
+      </div>
+
+      {/* Detail grid — platform-specific fields */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          gap: "4px 16px",
+          fontSize: 11,
+          color: "var(--text-muted)",
+        }}
+      >
+        <PlatformFields row={row} platform={platform} peerEndpoint={peerEndpoint ?? null} />
+      </div>
+    </div>
+  );
+}
+
+function PlatformFields({
+  row,
+  platform,
+  peerEndpoint,
+}: {
+  row: IntegrationRow;
+  platform: string;
+  peerEndpoint: string | null;
+}) {
+  // Map platform → ordered list of [label, value] pairs to display
+  const pairs: [string, string | null | undefined][] = [];
+
+  switch (platform) {
+    case "WSO2":
+      pairs.push(
+        ["Protocol", `${row.source_connection_type || "—"} → ${row.target_connection_type || "—"}`],
+        ["Auth (src→tgt)", `${row.source_authentication || "—"} → ${row.target_authentication || "—"}`],
+        ["Business area", row.business_area],
+        ["Payload size", row.api_payload_size || row.source_payload_size || null],
+        ["Endpoint", peerEndpoint],
+        ["Developer", row.developer],
+        ["Owner", row.interface_owner],
+        ["Location", row.location],
+        ...(row.api_postman_url ? [["Postman URL", row.api_postman_url] as [string, string | null | undefined]] : []),
+      );
+      break;
+
+    case "APIH":
+      pairs.push(
+        ["Pub account", row.source_account_name],
+        ["Sub account", row.target_account_name],
+        ["Instance", row.instance],
+        ["Description", row.interface_description],
+      );
+      break;
+
+    case "KPaaS":
+      pairs.push(
+        ["Pub account", row.source_account_name],
+        ["Sub account", row.target_account_name],
+        ["Instance", row.instance],
+        ["Description", row.interface_description],
+      );
+      break;
+
+    case "Talend":
+      pairs.push(
+        ["Endpoint", peerEndpoint],
+        ["DC (src→tgt)", `${row.source_dc || "—"} → ${row.target_dc || "—"}`],
+        ["Business area", row.business_area],
+      );
+      break;
+
+    case "PO":
+      pairs.push(
+        ["Protocol", `${row.source_connection_type || "—"} → ${row.target_connection_type || "—"}`],
+        ["Endpoint", peerEndpoint],
+        ["Mapping file", row.data_mapping_file],
+        ["Frequency", row.frequency],
+      );
+      break;
+
+    case "Data Service":
+      pairs.push(
+        ["Protocol", `${row.source_connection_type || "—"} → ${row.target_connection_type || "—"}`],
+        ["Endpoint", peerEndpoint],
+        ["Git project", row.git_project],
+        ["Owner", `${row.source_owner || "—"} → ${row.target_owner || "—"}`],
+      );
+      break;
+
+    case "Axway":
+    case "Axway MFT":
+      pairs.push(
+        ["Protocol", `${row.source_connection_type || "—"} → ${row.target_connection_type || "—"}`],
+        ["Endpoint", peerEndpoint],
+        ["Base path", row.base],
+        ["Mapping file", row.data_mapping_file],
+        ["Frequency", row.frequency],
+        ["Tag", row.tag],
+      );
+      break;
+
+    case "Goanywhere-job":
+    case "Goanywhere-web user":
+      pairs.push(
+        ["Endpoint", peerEndpoint],
+        ["Base path", row.base],
+        ["Frequency", row.frequency],
+        ["Owner", row.interface_owner],
+      );
+      break;
+
+    default:
+      // Generic fallback
+      pairs.push(
+        ["Protocol", `${row.source_connection_type || "—"} → ${row.target_connection_type || "—"}`],
+        ["Endpoint", peerEndpoint],
+        ["Status", row.status],
+      );
+  }
+
+  return (
+    <>
+      {pairs
+        .filter(([, v]) => v != null && v !== "" && v !== "— → —")
+        .map(([label, value]) => (
+          <div key={label} style={{ display: "flex", gap: 8, minWidth: 0 }}>
+            <span style={{ color: "var(--text-dim)", minWidth: 90, flexShrink: 0 }}>
+              {label}
+            </span>
+            <span
               style={{
-                padding: "8px 12px",
-                borderBottom: "1px solid var(--border)",
-                fontFamily: "var(--font-mono)",
+                color: "var(--text)",
+                wordBreak: "break-all",
+                fontFamily:
+                  label === "Endpoint" || label === "Postman URL" || label === "Mapping file" || label === "Base path"
+                    ? "var(--font-mono)"
+                    : "inherit",
+                fontSize: label === "Endpoint" || label === "Postman URL" ? 10 : 11,
               }}
             >
-              <Link href={`/apps/${encodeURIComponent(r.peer_id)}`} style={{ color: "var(--accent)" }}>
-                {r.peer_id}
-              </Link>
-              <span style={{ marginLeft: 10, color: "var(--text-muted)", fontFamily: "var(--font-body)" }}>
-                {r.peer_name}
-              </span>
-            </td>
-            <td style={{ padding: "8px 12px", borderBottom: "1px solid var(--border)", color: "var(--text-muted)" }}>
-              {r.type || "—"}
-            </td>
-            <td style={{ padding: "8px 12px", borderBottom: "1px solid var(--border)", color: "var(--text-muted)" }}>
-              {r.business_object || "—"}
-            </td>
-            <td
-              style={{
-                padding: "8px 12px",
-                borderBottom: "1px solid var(--border)",
-                color: "var(--text-muted)",
-                fontFamily: "var(--font-mono)",
-              }}
-            >
-              {r.protocol || "—"}
-            </td>
-          </tr>
+              {value}
+            </span>
+          </div>
         ))}
-      </tbody>
-    </table>
+    </>
   );
 }
 

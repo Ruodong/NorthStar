@@ -428,6 +428,157 @@ async def get_application_deployment(app_id: str) -> ApiResponse:
     })
 
 
+# Per-platform field selections — each platform has different "most useful"
+# columns. The frontend renders whichever of these are non-null.
+_PLATFORM_FIELD_SETS: dict[str, list[str]] = {
+    "WSO2": [
+        "interface_name", "api_postman_url", "source_connection_type",
+        "target_connection_type", "source_authentication", "target_authentication",
+        "business_area", "source_endpoint", "target_endpoint",
+        "source_payload_size", "target_payload_size",
+        "developer", "interface_owner", "location", "status",
+    ],
+    "APIH": [
+        "api_name", "source_account_name", "target_account_name",
+        "instance", "interface_description", "status",
+    ],
+    "KPaaS": [
+        "topic_name", "source_account_name", "target_account_name",
+        "instance", "interface_description", "status",
+    ],
+    "Talend": [
+        "interface_name", "source_endpoint", "target_endpoint",
+        "source_dc", "target_dc", "business_area", "status",
+    ],
+    "PO": [
+        "interface_name", "source_endpoint", "target_endpoint",
+        "source_connection_type", "target_connection_type",
+        "data_mapping_file", "frequency", "status",
+    ],
+    "Data Service": [
+        "interface_name", "source_endpoint", "target_endpoint",
+        "source_connection_type", "target_connection_type",
+        "source_owner", "target_owner", "git_project", "status",
+    ],
+    "Axway": [
+        "interface_name", "source_connection_type", "target_connection_type",
+        "data_mapping_file", "base", "tag", "status",
+    ],
+    "Axway MFT": [
+        "interface_name", "source_endpoint", "target_endpoint",
+        "base", "frequency", "tag", "status",
+    ],
+    "Goanywhere-job": [
+        "interface_name", "source_endpoint", "target_endpoint",
+        "base", "frequency", "tag", "status",
+    ],
+    "Goanywhere-web user": [
+        "interface_name", "interface_owner", "base", "frequency", "status",
+    ],
+}
+
+# Always-included fields (regardless of platform) that the frontend uses
+# for rendering the header row of each interface card
+_CORE_FIELDS = [
+    "interface_id",
+    "integration_platform",
+    "interface_name",
+    "source_cmdb_id", "target_cmdb_id",
+    "source_app_name", "target_app_name",
+    "status",
+]
+
+
+@router.get("/applications/{app_id}/integrations")
+async def get_application_integrations(app_id: str) -> ApiResponse:
+    """Integration interfaces for an application, grouped by platform.
+
+    Returns inbound (this app is target) and outbound (this app is source)
+    interface rows from northstar.integration_interface, grouped per
+    integration_platform with platform-specific useful fields.
+
+    Frontend renders each platform as a section with platform-appropriate
+    columns per _PLATFORM_FIELD_SETS.
+    """
+    rows = await pg_client.fetch(
+        """
+        SELECT *
+        FROM northstar.integration_interface
+        WHERE source_cmdb_id = $1 OR target_cmdb_id = $1
+        ORDER BY integration_platform, interface_name
+        """,
+        app_id,
+    )
+
+    outbound: dict[str, list[dict]] = {}
+    inbound: dict[str, list[dict]] = {}
+    platforms_seen: set[str] = set()
+
+    for r in rows:
+        d = dict(r)
+        platform = d["integration_platform"]
+        platforms_seen.add(platform)
+
+        # Pick per-platform useful fields; always include core fields
+        wanted = set(_CORE_FIELDS + _PLATFORM_FIELD_SETS.get(platform, []))
+        # Counterpart side info
+        if d["source_cmdb_id"] == app_id:
+            # outbound — show target
+            wanted.update([
+                "target_cmdb_id", "target_app_name", "target_endpoint",
+                "target_connection_type", "target_authentication",
+                "target_account_name", "target_dc", "target_owner",
+                "target_application_type",
+            ])
+            bucket = outbound
+        else:
+            wanted.update([
+                "source_cmdb_id", "source_app_name", "source_endpoint",
+                "source_connection_type", "source_authentication",
+                "source_account_name", "source_dc", "source_owner",
+                "source_application_type",
+            ])
+            bucket = inbound
+
+        filtered = {k: v for k, v in d.items() if k in wanted and v is not None}
+        # Keep raw_fields nested if present and platform-relevant
+        if d.get("raw_fields"):
+            filtered["raw_fields"] = d["raw_fields"]
+
+        bucket.setdefault(platform, []).append(filtered)
+
+    # Sort platforms in a stable preferred order, then alphabetical
+    PRIORITY = ["WSO2", "APIH", "KPaaS", "Talend", "PO", "Data Service",
+                "Axway", "Axway MFT", "Goanywhere-job", "Goanywhere-web user"]
+    platform_order = sorted(
+        platforms_seen,
+        key=lambda p: (PRIORITY.index(p) if p in PRIORITY else 99, p),
+    )
+
+    # Totals per platform + overall
+    summary = {
+        p: {
+            "outbound": len(outbound.get(p, [])),
+            "inbound": len(inbound.get(p, [])),
+            "total": len(outbound.get(p, [])) + len(inbound.get(p, [])),
+        }
+        for p in platform_order
+    }
+    total_outbound = sum(s["outbound"] for s in summary.values())
+    total_inbound = sum(s["inbound"] for s in summary.values())
+
+    return ApiResponse(data={
+        "app_id": app_id,
+        "total_interfaces": total_outbound + total_inbound,
+        "total_outbound": total_outbound,
+        "total_inbound": total_inbound,
+        "platforms": platform_order,
+        "summary_by_platform": summary,
+        "outbound_by_platform": outbound,
+        "inbound_by_platform": inbound,
+    })
+
+
 @router.get("/projects")
 async def list_projects(
     q: Optional[str] = None,

@@ -33,3 +33,4 @@ data/local_drawio/*
 !.claude/skills/
 .claude/settings.local.json
 .gstack/
+data/integration_catalog.xlsx
