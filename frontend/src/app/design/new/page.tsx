@@ -1391,9 +1391,25 @@ function TemplateStep({
             ))}
           </div>
           {templates.length === 0 && (
-            <div style={{ color: "var(--text-dim)", fontSize: 12, padding: 12 }}>
-              No standard templates registered. Configure pages in Settings →
-              Architecture Templates, or proceed with blank canvas.
+            <div style={{
+              color: "var(--text-dim)",
+              fontSize: 12,
+              padding: 14,
+              border: "1px dashed var(--border)",
+              borderRadius: "var(--radius-md)",
+            }}>
+              <div style={{ marginBottom: 6 }}>
+                No standard templates registered yet.
+              </div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                Configure template source pages in{" "}
+                <Link href="/settings" style={{ color: "var(--accent)" }}>
+                  Settings → Architecture Templates
+                </Link>
+                . Drawios on those pages (or their sub-pages) will appear here.
+                In the meantime, use <strong>Blank canvas</strong> or switch
+                to <strong>Project Solutions</strong>.
+              </div>
             </div>
           )}
         </>

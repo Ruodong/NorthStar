@@ -73,16 +73,31 @@ class DesignUpdate(BaseModel):
 # ──────────────────────────────────────────────────────────────────
 @router.get("/standard-templates")
 async def list_standard_templates() -> ApiResponse:
-    """Standard templates — the architect-curated library.
+    """Standard templates — only those explicitly registered in Settings.
 
-    Source: drawio attachments whose title contains 'template'/'模板' and
-    that live on pages WITHOUT a project_id (i.e., not a specific review
-    diagram but a reusable template). If ref_architecture_template_source
-    also has pages configured in Settings, attachments on those pages
-    are included too.
+    Returns drawio attachments whose page (or any descendant page) is
+    configured in ref_architecture_template_source. No fallback — if
+    Settings has no pages configured OR the configured pages have no
+    drawio attachments scanned yet, the list is empty.
+
+    An architect registers template source pages via the Settings page
+    (/settings), then a sync picks up drawios there.
     """
     rows = await pg_client.fetch(
         """
+        WITH RECURSIVE descendants AS (
+            -- Seed: pages directly registered in Settings
+            SELECT cp.page_id, cp.title, cp.parent_id, t.layer AS layer
+            FROM northstar.ref_architecture_template_source t
+            JOIN northstar.confluence_page cp
+              ON cp.page_id = t.confluence_page_id
+            WHERE t.confluence_page_id IS NOT NULL
+            UNION ALL
+            -- Recurse into child pages (templates may live on sub-pages)
+            SELECT cp.page_id, cp.title, cp.parent_id, d.layer
+            FROM northstar.confluence_page cp
+            JOIN descendants d ON cp.parent_id = d.page_id
+        )
         SELECT
             a.attachment_id,
             a.title,
@@ -90,29 +105,13 @@ async def list_standard_templates() -> ApiResponse:
             cp.title       AS page_title,
             cp.fiscal_year,
             cp.page_id::text AS page_id,
-            -- Flag attachments whose page is registered as a Standard
-            -- Template source page so we can sort curated ones first.
-            (EXISTS (
-                SELECT 1 FROM northstar.ref_architecture_template_source t
-                WHERE t.confluence_page_id::text = cp.page_id::text
-            )) AS from_settings,
-            -- When flagged, carry the layer label for display
-            (SELECT t.layer FROM northstar.ref_architecture_template_source t
-             WHERE t.confluence_page_id::text = cp.page_id::text LIMIT 1
-            ) AS layer
-        FROM northstar.confluence_attachment a
-        JOIN northstar.confluence_page cp ON cp.page_id = a.page_id
+            d.layer        AS layer
+        FROM descendants d
+        JOIN northstar.confluence_page cp ON cp.page_id = d.page_id
+        JOIN northstar.confluence_attachment a ON a.page_id = cp.page_id
         WHERE a.file_kind IN ('drawio', 'drawio_xml')
-          AND (
-                (a.title ILIKE '%template%' OR a.title ILIKE '%模板%')
-                AND cp.project_id IS NULL
-              )
-          OR EXISTS (
-                SELECT 1 FROM northstar.ref_architecture_template_source t
-                WHERE t.confluence_page_id::text = cp.page_id::text
-          )
-        ORDER BY from_settings DESC, a.title
-        LIMIT 100
+        ORDER BY d.layer, a.title
+        LIMIT 200
         """
     )
     templates = [dict(r) for r in rows]
