@@ -498,6 +498,40 @@ def _my_role(row: dict, app_id: str) -> str:
     return "consumer" if src_is_provider else "provider"
 
 
+def _consumer_aggregation_key(row: dict) -> str:
+    """Stable key for deduplicating the Consumer view.
+
+    A consumer row identifies: "me subscribing to <topic/api/endpoint>
+    on <provider instance> produced by <provider_id>". When the source
+    Excel has multiple rows for the same logical subscription (e.g. two
+    rows with different `interface_description` for the same topic on
+    the same instance from the same provider), the UI should show one
+    entry, not N. This mirrors the provider side's fan-out grouping.
+
+    WSO2 inverts source/target: the "provider" is the backend service
+    targeted, the "consumer" is the caller.
+    """
+    platform = row.get("integration_platform", "")
+    if platform == "WSO2":
+        provider_id = row.get("target_cmdb_id") or ""
+        my_endpoint = row.get("source_endpoint") or ""
+        my_account = row.get("source_account_name") or ""
+    else:
+        provider_id = row.get("source_cmdb_id") or ""
+        my_endpoint = row.get("target_endpoint") or ""
+        my_account = row.get("target_account_name") or ""
+    # Name: same precedence as _interface_label but without the unnamed
+    # fallback (empty string is fine in a key).
+    name = (
+        row.get("api_name")
+        or row.get("topic_name")
+        or row.get("interface_name")
+        or ""
+    )
+    instance = row.get("instance") or ""
+    return f"{platform}|{name}|{instance}|{provider_id}|{my_account}|{my_endpoint}"
+
+
 def _aggregation_key(row: dict) -> str:
     """Stable key for grouping Provider rows into one interface/topic (fan-out).
 
@@ -757,8 +791,17 @@ async def get_application_integrations(
             "interfaces": interfaces,
         }
 
-    # ---- Consumer side: list per-row, grouped only by platform ----
+    # ---- Consumer side: one entry per distinct subscription ----
+    # Groups rows by (platform, name, instance, provider_id, my_account,
+    # my_endpoint) — see _consumer_aggregation_key. Duplicate DB rows
+    # (e.g. same topic+instance from the same provider, differing only in
+    # interface_description) collapse into one entry with source_row_count
+    # reflecting how many underlying rows backed it. Descriptions from
+    # sibling rows are preserved as `descriptions_all` (distinct, non-empty).
     consumer_out: dict[str, dict] = {}
+    # platform -> key -> entry (and the set of descriptions seen so far)
+    consumer_seen: dict[str, dict[str, dict]] = {}
+
     for r in consumer_rows:
         platform = r["integration_platform"]
         # The Provider is the OTHER side
@@ -775,6 +818,28 @@ async def get_application_integrations(
             my_endpoint = r.get("target_endpoint")
             my_account = r.get("target_account_name")
 
+        key = _consumer_aggregation_key(r)
+        platform_seen = consumer_seen.setdefault(platform, {})
+        if key in platform_seen:
+            # Duplicate subscription row — fold its signal into the
+            # representative entry instead of producing a new UI row.
+            existing = platform_seen[key]
+            existing["source_row_count"] += 1
+            new_desc = r.get("interface_description")
+            if new_desc:
+                if new_desc not in existing["descriptions_all"]:
+                    existing["descriptions_all"].append(new_desc)
+                # Prefer the longest description as the primary display.
+                current = existing.get("description") or ""
+                if len(new_desc) > len(current):
+                    existing["description"] = new_desc
+            if r.get("status") and r["status"] not in existing["statuses"]:
+                existing["statuses"].append(r["status"])
+            continue
+
+        descriptions_all: list[str] = []
+        if r.get("interface_description"):
+            descriptions_all.append(r["interface_description"])
         entry = {
             "interface_id": r["interface_id"],
             "label": _interface_label(r),
@@ -792,14 +857,18 @@ async def get_application_integrations(
             "my_endpoint": my_endpoint,
             "business_area": r.get("business_area"),
             "description": r.get("interface_description"),
+            "descriptions_all": descriptions_all,
             "status": r.get("status"),
+            "statuses": [r["status"]] if r.get("status") else [],
             "interface_owner": r.get("interface_owner"),
             "frequency": r.get("frequency"),
             "location": r.get("location"),
             "api_postman_url": r.get("api_postman_url"),
             "data_mapping_file": r.get("data_mapping_file"),
             "base": r.get("base"),
+            "source_row_count": 1,
         }
+        platform_seen[key] = entry
         consumer_out.setdefault(platform, {"total": 0, "rows": []})
         consumer_out[platform]["rows"].append(entry)
 

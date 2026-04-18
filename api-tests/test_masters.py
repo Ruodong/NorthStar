@@ -272,3 +272,41 @@ async def test_get_project_not_found(api):
 async def test_get_employee_not_found(api):
     r = await api.get("/api/masters/employees/ZZZZZZZ_NONEXISTENT")
     assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Integrations — consumer-side dedup
+# ---------------------------------------------------------------------------
+# Regression for /apps/A002856 showing esot.asset-activation 4× instead of 2×.
+# The source Excel had 2 rows per (topic, instance) differing only in the
+# free-text `interface_description` — the endpoint collapses them to one
+# entry per (platform, name, instance, provider_id, my_account, my_endpoint)
+# and reports source_row_count so the data-quality signal isn't lost.
+
+async def test_consumer_dedup_esot_asset_activation(api):
+    """A002856 consumes esot.asset-activation on ikp-us + kkp-us.
+    The DB has 4 raw rows (2 per instance, same topic/provider, differing
+    descriptions); the endpoint must return 2 consumer entries.
+    """
+    r = await api.get("/api/masters/applications/A002856/integrations")
+    assert r.status_code == 200
+    d = r.json()["data"]
+    rows = (
+        d["as_consumer"]["by_platform"]
+        .get("KPaaS", {})
+        .get("rows", [])
+    )
+    esot = [
+        e for e in rows
+        if (e.get("topic_name") or e.get("interface_name")) == "esot.asset-activation"
+    ]
+    instances = sorted({e["instance"] for e in esot})
+    assert instances == ["ikp-us", "kkp-us"], (
+        f"expected one entry per instance, got {len(esot)} entries "
+        f"with instances {instances}"
+    )
+    # Each entry should carry the source_row_count signal (≥1, often 2 here).
+    for e in esot:
+        assert e.get("source_row_count", 0) >= 1
+        # descriptions_all preserves distinct free-text descriptions merged in.
+        assert isinstance(e.get("descriptions_all"), list)
