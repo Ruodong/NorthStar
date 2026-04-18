@@ -3,9 +3,13 @@
 /**
  * Settings — /settings
  *
- * Phase 1: three cards (Business / Application / Technical) for maintaining
- * the Confluence URL of each EA architecture template directory page, plus
- * a grid preview of all drawio diagrams found under each URL's subtree.
+ * Tabbed layout. First tab is Architecture Templates (Phase 1): three
+ * cards (Business / Application / Technical) for maintaining the
+ * Confluence URL of each EA architecture template directory page, plus
+ * a grid preview of drawio diagrams under each URL's subtree.
+ *
+ * Other tabs are placeholders so we can extend settings without
+ * restructuring the page shell each time.
  *
  * See .specify/features/architecture-template-settings/spec.md.
  */
@@ -27,7 +31,79 @@ const LAYER_LABELS: Record<Layer, { code: string; name: string }> = {
 
 const ORDER: Layer[] = ["business", "application", "technical"];
 
+type TabId = "templates" | "general";
+const TABS: { id: TabId; label: string }[] = [
+  { id: "templates", label: "Architecture Templates" },
+  { id: "general",   label: "General" },
+];
+
 export default function SettingsPage() {
+  const [active, setActive] = useState<TabId>("templates");
+
+  return (
+    <div style={{ maxWidth: 1080 }}>
+      <h1 style={{ marginBottom: 16 }}>Settings</h1>
+      <TabBar active={active} onChange={setActive} />
+      <div style={{ marginTop: 24 }}>
+        {active === "templates" && <ArchitectureTemplatesPanel />}
+        {active === "general" && <GeneralPanel />}
+      </div>
+    </div>
+  );
+}
+
+// ── Tab bar ─────────────────────────────────────────────────────
+
+function TabBar({
+  active,
+  onChange,
+}: {
+  active: TabId;
+  onChange: (id: TabId) => void;
+}) {
+  return (
+    <div
+      role="tablist"
+      style={{
+        display: "flex",
+        gap: 0,
+        borderBottom: "1px solid var(--border)",
+      }}
+    >
+      {TABS.map((t) => {
+        const isActive = t.id === active;
+        return (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={isActive}
+            type="button"
+            onClick={() => onChange(t.id)}
+            style={{
+              padding: "10px 18px",
+              background: "transparent",
+              border: "none",
+              borderBottom: `2px solid ${isActive ? "var(--accent)" : "transparent"}`,
+              marginBottom: -1,
+              color: isActive ? "var(--text)" : "var(--text-muted)",
+              fontFamily: "var(--font-display)",
+              fontSize: 13,
+              fontWeight: isActive ? 600 : 500,
+              cursor: "pointer",
+              transition: "color 120ms, border-color 120ms",
+            }}
+          >
+            {t.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Architecture Templates panel ────────────────────────────────
+
+function ArchitectureTemplatesPanel() {
   const [rows, setRows] = useState<ArchitectureTemplateSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -60,12 +136,8 @@ export default function SettingsPage() {
   );
 
   return (
-    <div style={{ maxWidth: 1080 }}>
-      <h1 style={{ marginBottom: 8 }}>Settings</h1>
-      <h2 style={{ fontSize: 15, fontWeight: 500, color: "var(--text-muted)", marginTop: 0, marginBottom: 8 }}>
-        Architecture Templates
-      </h2>
-      <p style={{ color: "var(--text-muted)", fontSize: 13, marginBottom: 28, maxWidth: 720 }}>
+    <div>
+      <p style={{ color: "var(--text-muted)", fontSize: 13, marginTop: 0, marginBottom: 24, maxWidth: 720 }}>
         Configure the Confluence page that holds the EA architecture templates for each layer.
         NorthStar will walk the page subtree, cache any drawio diagrams, and render them below.
       </p>
@@ -84,6 +156,26 @@ export default function SettingsPage() {
           <LayerCard key={row.layer} row={row} onChange={reload} />
         ))}
       </div>
+    </div>
+  );
+}
+
+// ── General panel (placeholder) ─────────────────────────────────
+
+function GeneralPanel() {
+  return (
+    <div
+      style={{
+        background: "var(--bg-elevated)",
+        border: "1px dashed var(--border)",
+        borderRadius: "var(--radius-md)",
+        padding: "48px 24px",
+        color: "var(--text-dim)",
+        fontSize: 13,
+        textAlign: "center",
+      }}
+    >
+      No general settings yet.
     </div>
   );
 }
