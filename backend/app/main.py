@@ -21,7 +21,7 @@ from app.routers import (
     search,
     whats_new,
 )
-from app.services import graph_client, pg_client
+from app.services import neo4j_client, pg_client
 
 # SQL migrations directory — all *.sql files here are executed in alphabetical
 # order on backend startup. Migrations must be idempotent (CREATE TABLE IF NOT
@@ -104,17 +104,17 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # noqa: BLE001
         logger.error("Postgres bootstrap failed: %s", exc)
     try:
-        await graph_client.connect()
-        await graph_client.ensure_schema()
-        logger.info("AGE graph ready; labels + property indexes ensured")
+        await neo4j_client.connect()
+        await neo4j_client.ensure_schema()
+        logger.info("Neo4j ready; schema constraints/indexes ensured")
     except Exception as exc:  # noqa: BLE001
-        logger.error("AGE graph bootstrap failed: %s", exc)
+        logger.error("Neo4j bootstrap failed: %s", exc)
     try:
         _purge_stale_preview_tmp()
     except Exception as exc:  # noqa: BLE001
         logger.error("preview tmp cleanup failed: %s", exc)
     yield
-    await graph_client.close()
+    await neo4j_client.close()
     await pg_client.close()
 
 
@@ -148,7 +148,7 @@ async def root() -> dict:
 @app.get("/health")
 async def health() -> dict:
     try:
-        await graph_client.run_query("RETURN 1 AS ok")
-        return {"status": "ok", "graph": "up"}
+        await neo4j_client.run_query("RETURN 1 AS ok")
+        return {"status": "ok", "neo4j": "up"}
     except Exception as exc:  # noqa: BLE001
-        return {"status": "degraded", "graph": f"down: {exc}"}
+        return {"status": "degraded", "neo4j": f"down: {exc}"}
