@@ -682,6 +682,7 @@ async def get_application_integrations(
     provider_rows: list[dict] = []
     consumer_rows: list[dict] = []
     sunset_count = 0
+    noise_self_loop_count = 0
 
     for r in rows:
         d = dict(r)
@@ -694,6 +695,24 @@ async def get_application_integrations(
             d["target_app_name"] = d["_cmdb_target_name"]
         d.pop("_cmdb_source_name", None)
         d.pop("_cmdb_target_name", None)
+
+        # Noise self-loop filter: rows where the SAME app is listed on both
+        # sides with the SAME account are integration-catalog data noise
+        # (thousands of such rows exist in KPaaS/APIH today). They surface
+        # on BOTH the provider and consumer views of the same app, making
+        # every topic look duplicated. Legitimate "internal" integrations
+        # — an app calling itself through a different account (e.g.
+        # api_lcic_agent → api_lcic_tool on the same APIH app) — are kept.
+        src = d.get("source_cmdb_id")
+        tgt = d.get("target_cmdb_id")
+        s_acct = d.get("source_account_name")
+        t_acct = d.get("target_account_name")
+        if (
+            src and tgt and src == tgt
+            and s_acct and t_acct and s_acct == t_acct
+        ):
+            noise_self_loop_count += 1
+            continue
 
         status = (d.get("status") or "").upper()
         if status == "SUNSET":
@@ -904,6 +923,7 @@ async def get_application_integrations(
         "platforms": all_platforms,
         "sunset_count": sunset_count,
         "include_sunset": include_sunset,
+        "noise_self_loop_count": noise_self_loop_count,
         "as_provider": {
             "total_interfaces": total_provider_interfaces,
             "total_consumers": total_provider_consumers,

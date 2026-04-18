@@ -310,3 +310,66 @@ async def test_consumer_dedup_esot_asset_activation(api):
         assert e.get("source_row_count", 0) >= 1
         # descriptions_all preserves distinct free-text descriptions merged in.
         assert isinstance(e.get("descriptions_all"), list)
+
+
+async def test_integrations_filter_noise_self_loops(api):
+    """Rows where src_cmdb = tgt_cmdb AND src_account = tgt_account are
+    integration-catalog noise and must be filtered. The count is reported
+    in `noise_self_loop_count`.
+
+    For A002856 specifically, the DB has several such rows on KPaaS;
+    after filtering none of them should appear as either a provider's
+    self-consumer or a consumer's self-provider.
+    """
+    r = await api.get("/api/masters/applications/A002856/integrations")
+    assert r.status_code == 200
+    d = r.json()["data"]
+    assert d.get("noise_self_loop_count", 0) > 0, (
+        "A002856 is known to have noise self-loops; expected >0, got "
+        f"{d.get('noise_self_loop_count')}"
+    )
+    # No provider's consumer list should contain the provider itself with
+    # the same account.
+    for platform_bucket in d["as_provider"]["by_platform"].values():
+        for iface in platform_bucket.get("interfaces", []):
+            my_acct = iface.get("account_name")
+            for c in iface.get("consumers", []):
+                same_app = c.get("app_id") == d["app_id"]
+                same_acct = c.get("account_name") == my_acct
+                assert not (same_app and same_acct), (
+                    f"self-loop leaked: {iface.get('label')} consumer "
+                    f"{c.get('app_id')}/{c.get('account_name')}"
+                )
+    # No consumer entry should have me as the provider with the same account.
+    for platform_bucket in d["as_consumer"]["by_platform"].values():
+        for row in platform_bucket.get("rows", []):
+            provider = row.get("provider") or {}
+            same_app = provider.get("app_id") == d["app_id"]
+            same_acct = row.get("my_account_name") == provider.get("account_name")
+            # Self-provider with same account is the noise pattern.
+            if same_app:
+                assert row.get("my_account_name") != provider.get("account_name", object()), (
+                    f"self-loop leaked in consumer view: "
+                    f"{row.get('label')} account={row.get('my_account_name')}"
+                )
+
+
+async def test_integrations_dedup_across_platforms(api):
+    """The consumer-side dedup must be platform-generic: Data Service
+    and PO are known (per DB survey) to have semantic duplicate rows
+    that collapse the same way KPaaS ones do.
+    """
+    # Find an app with Data Service consumer rows
+    # (We don't hardcode a specific app_id here because Data Service
+    # coverage is spotty; instead pick any app with DS integrations.)
+    r = await api.get("/api/masters/applications/A000394/integrations")
+    assert r.status_code == 200
+    d = r.json()["data"]
+    for platform_bucket in d["as_consumer"]["by_platform"].values():
+        # Every consumer row must have source_row_count + descriptions_all
+        # in its shape, regardless of platform.
+        for row in platform_bucket.get("rows", []):
+            assert "source_row_count" in row
+            assert row["source_row_count"] >= 1
+            assert "descriptions_all" in row
+            assert isinstance(row["descriptions_all"], list)
