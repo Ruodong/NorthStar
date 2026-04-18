@@ -15,6 +15,7 @@ from app.routers import (
     aliases,
     analytics,
     business_capabilities,
+    design,
     ea_documents,
     graph,
     ingestion,
@@ -142,6 +143,7 @@ app.include_router(whats_new.router)
 app.include_router(search.router)
 app.include_router(ea_documents.router)
 app.include_router(settings_router.router)
+app.include_router(design.router)
 
 
 @app.get("/")

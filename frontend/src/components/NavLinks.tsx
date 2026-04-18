@@ -11,10 +11,11 @@ const NAV_GROUPS = [
     { href: "/projects", label: "Projects" },
     { href: "/standards", label: "Standards" },
   ],
-  /* Analysis — graph + change tracking */
+  /* Analysis — graph + change tracking + design */
   [
     { href: "/graph", label: "Graph" },
     { href: "/whats-new", label: "What\u2019s New" },
+    { href: "/design", label: "Design" },
   ],
   /* Admin — ingestion + raw data */
   [
