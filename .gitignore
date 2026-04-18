@@ -35,3 +35,5 @@ data/local_drawio/*
 .claude/settings.local.json
 .gstack/
 data/integration_catalog.xlsx
+data/Business Capability Mapping*.xlsx
+data/bcm-export-*.xlsx
