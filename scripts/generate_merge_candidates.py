@@ -30,10 +30,7 @@ sys.path.insert(0, str(_P(__file__).resolve().parent.parent / "backend"))
 
 import psycopg
 from psycopg.rows import dict_row
-
-# Local — same directory as this file
-sys.path.insert(0, str(_P(__file__).resolve().parent))
-from _age_session_adapter import AGEDriver  # noqa: E402
+from neo4j import GraphDatabase
 
 from app.services.name_normalize import normalize_name  # noqa: E402
 
@@ -58,16 +55,19 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--min-candidates", type=int, default=2,
                     help="Minimum candidates per norm_key to propose (default: 2)")
+    ap.add_argument("--neo4j-uri", default=os.environ.get("NEO4J_URI_HOST", "bolt://localhost:7687"))
+    ap.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER", "neo4j"))
+    ap.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASSWORD", "northstar_dev"))
     args = ap.parse_args()
 
-    driver = AGEDriver(pg_dsn())
+    driver = GraphDatabase.driver(args.neo4j_uri, auth=(args.neo4j_user, args.neo4j_password))
     driver.verify_connectivity()
-    logger.info("AGE graph connected (graph=ns_graph)")
+    logger.info("Neo4j connected at %s", args.neo4j_uri)
 
     pg = psycopg.connect(pg_dsn(), row_factory=dict_row)
 
     # -------------------------------------------------------------------------
-    # Fetch non-CMDB apps + their investing projects from the graph
+    # Fetch non-CMDB apps + their investing projects from Neo4j
     # -------------------------------------------------------------------------
     cypher = """
     MATCH (a:Application)

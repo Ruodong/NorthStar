@@ -1,4 +1,4 @@
-"""Ingestion pipeline orchestration: Confluence → parser → evaluator → AGE graph.
+"""Ingestion pipeline orchestration: Confluence → parser → evaluator → Neo4j.
 
 Runs as FastAPI BackgroundTask. Task state stored in-memory (MVP).
 """
@@ -17,7 +17,7 @@ from app.models.schemas import (
     QualityReport,
     QualityFinding,
 )
-from app.services import ai_evaluator, graph_client
+from app.services import ai_evaluator, neo4j_client
 from app.services.confluence import ProjectPage, fetch_projects
 from app.services.drawio_parser import parse_drawio_xml
 
@@ -57,7 +57,7 @@ async def _load_project(project: ProjectPage) -> tuple[int, int, dict]:
     now = datetime.utcnow().isoformat()
 
     # Merge Project node
-    await graph_client.run_write(
+    await neo4j_client.run_write(
         """
         MERGE (p:Project {project_id: $project_id})
         SET p.name = $name,
@@ -87,7 +87,7 @@ async def _load_project(project: ProjectPage) -> tuple[int, int, dict]:
         app_id = app_id_by_cell.get(cell_id)
         if not app_id:
             continue
-        await graph_client.run_write(
+        await neo4j_client.run_write(
             """
             MERGE (a:Application {app_id: $app_id})
             ON CREATE SET a.cmdb_linked = false
@@ -123,7 +123,7 @@ async def _load_project(project: ProjectPage) -> tuple[int, int, dict]:
         tgt_id = app_id_by_cell.get(tgt_cell)
         if not src_id or not tgt_id:
             continue
-        await graph_client.run_write(
+        await neo4j_client.run_write(
             """
             MATCH (a:Application {app_id: $src}), (b:Application {app_id: $tgt})
             MERGE (a)-[r:INTEGRATES_WITH {interaction_type: $itype, business_object: $bobj}]->(b)

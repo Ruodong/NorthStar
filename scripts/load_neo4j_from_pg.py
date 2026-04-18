@@ -1,23 +1,43 @@
 #!/usr/bin/env python3
-"""Load the Apache AGE graph (ns_graph) from NorthStar Postgres master data.
+"""Load Neo4j graph from NorthStar Postgres master data.
 
-Forked from load_neo4j_from_pg.py during the Neo4j -> AGE migration (PR 2).
-The business logic is byte-identical to the Neo4j loader — only the driver
-construction differs: instead of neo4j.GraphDatabase against bolt://, we use
-a psycopg-backed session adapter against the same Postgres that holds the
-source tables. Graph data ends up in the ns_graph AGE graph (same PG
-container, different schema).
+Post-ontology-fix version (2026-04-10). Key differences from the earlier
+script (now replaced):
 
-Both loaders coexist during PR 2; this lets us diff Neo4j vs AGE output on
-the same PG state (see api-tests/test_age_parity.py). PR 3 deletes the Neo4j
-loader and this file becomes the single loader.
+- Application nodes NO LONGER carry source_project_id / source_fiscal_year.
+  Project-to-Application ownership is expressed via (:Project)-[:INVESTS_IN]->
+  (:Application) edges, with fiscal_year and review_status as edge properties.
+  A single App can now have multiple investment edges from different projects
+  in different fiscal years.
+- New :Diagram and :ConfluencePage node types. Provenance (EGM vs Confluence
+  vs both) is tracked via a source_systems array on :Diagram.
+- Tech_Arch diagrams are included (not just App_Arch). Non-drawio tech arch
+  attachments (image/pdf) become :Diagram nodes with has_graph_data=false —
+  no INTEGRATES_WITH edges from them, but :Application still has DESCRIBED_BY
+  links to them.
+- Manual aliases (northstar.manual_app_aliases) are applied in
+  derive_app_id(): after computing the diagram-scoped X-id, we check the
+  alias table and collapse to the canonical id if one exists.
 
-For the full pipeline + invariants, see the original loader's docstring and
-.specify/features/age-migration/spec.md §FR-LDR-1..FR-LDR-4.
+Pipeline:
+    northstar.manual_app_aliases        (alias map, loaded once into memory)
+    northstar.ref_application           (CMDB canonical app master)
+    northstar.ref_diagram               (EGM architecture diagrams + raw XML)
+    northstar.ref_request               (project metadata per review request)
+    northstar.confluence_page           (Confluence page mirror)
+    northstar.confluence_attachment     (Confluence attachment mirror)
+    northstar.ref_deployment_*          (server, container, database, storage)
+    northstar.ref_employee              (owner/team lookup)
+  → Neo4j: :Project :Application :Diagram :ConfluencePage
+           :Server :Container :Database :ObjectStorage :NAS
+           :Team :Person
+           + INVESTS_IN + INTEGRATES_WITH + HAS_DIAGRAM + DESCRIBED_BY
+           + HAS_CONFLUENCE_PAGE + HAS_REVIEW_PAGE
+           + DEPLOYED_ON + OWNED_BY
 
 Usage (from ~/NorthStar on 71):
     set -a && source .env && set +a
-    .venv-ingest/bin/python scripts/load_age_from_pg.py [--wipe]
+    .venv-ingest/bin/python scripts/load_neo4j_from_pg.py [--wipe]
 """
 from __future__ import annotations
 
@@ -39,10 +59,7 @@ sys.path.insert(0, str(_P(__file__).resolve().parent.parent / "backend"))
 
 import psycopg
 from psycopg.rows import dict_row
-
-# Local — same directory as this file
-sys.path.insert(0, str(_P(__file__).resolve().parent))
-from _age_session_adapter import AGEDriver, ensure_schema as age_ensure_schema  # noqa: E402
+from neo4j import GraphDatabase
 
 from app.services.drawio_parser import parse_drawio_xml  # noqa: E402
 
@@ -50,7 +67,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s - %(message)s",
 )
-logger = logging.getLogger("load-age")
+logger = logging.getLogger("load-neo4j")
 
 
 # -----------------------------------------------------------------------------
@@ -104,7 +121,7 @@ def derive_app_id(
     return alias_map.get(x_id, x_id)
 
 
-# Non-CMDB app names that should be excluded from the graph entirely.
+# Non-CMDB app names that should be excluded from Neo4j entirely.
 # These are template placeholders, generic labels, or infrastructure
 # annotations that architects draw on diagrams but are NOT real
 # application entities. Matched case-insensitively against the
@@ -181,7 +198,7 @@ _APP_NAME_BLACKLIST: set[str] = {
 
 
 def _is_blacklisted_app_name(name: str) -> bool:
-    """Return True if this app name should be excluded from the graph."""
+    """Return True if this app name should be excluded from Neo4j."""
     norm = name.strip().lower()
     if not norm:
         return True
@@ -261,16 +278,18 @@ def load_alias_map(pg: psycopg.Connection) -> dict[str, str]:
 # -----------------------------------------------------------------------------
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--wipe", action="store_true", help="Delete all graph nodes before loading")
+    ap.add_argument("--wipe", action="store_true", help="Delete all Neo4j nodes before loading")
+    ap.add_argument(
+        "--neo4j-uri",
+        default=os.environ.get("NEO4J_URI_HOST", "bolt://localhost:7687"),
+    )
+    ap.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER", "neo4j"))
+    ap.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASSWORD", "northstar_dev"))
     args = ap.parse_args()
 
-    # AGE lives in the same PG we're reading from — single DSN.
-    driver = AGEDriver(pg_dsn())
+    driver = GraphDatabase.driver(args.neo4j_uri, auth=(args.neo4j_user, args.neo4j_password))
     driver.verify_connectivity()
-    logger.info("AGE graph connected via %s (graph=ns_graph)", pg_dsn().split()[0])
-
-    # Ensure label tables + property indexes exist (idempotent).
-    age_ensure_schema(driver)
+    logger.info("Neo4j connected at %s", args.neo4j_uri)
 
     src = psycopg.connect(pg_dsn(), row_factory=dict_row)
 
@@ -473,12 +492,12 @@ def main() -> int:
     logger.info("unified diagram count: %d", len(unified))
 
     # -------------------------------------------------------------------------
-    # Write to AGE graph
+    # Write to Neo4j
     # -------------------------------------------------------------------------
     try:
         with driver.session() as ns:
             if args.wipe:
-                logger.info("wiping AGE graph (ns_graph)...")
+                logger.info("wiping Neo4j...")
                 ns.run("MATCH (n) DETACH DELETE n")
 
             # ========== Project + Diagram + Application + integrations ==========
@@ -629,17 +648,20 @@ def main() -> int:
                     )
                     description = a.get("functions") or ""
 
-                    # MERGE Application (NO source_project_id / source_fiscal_year).
-                    # AGE doesn't support MERGE ... ON CREATE SET / ON MATCH SET,
-                    # so we collapse both branches into one SET with CASE. The
-                    # "newly created" branch is detected via `a.name IS NULL`.
+                    # MERGE Application (NO source_project_id / source_fiscal_year)
                     ns.run(
                         """
                         MERGE (a:Application {app_id: $app_id})
-                        SET a.name = CASE WHEN a.name IS NULL THEN $name WHEN $cmdb_hit THEN $name ELSE a.name END,
-                            a.status = CASE WHEN a.status IS NULL THEN $status WHEN $cmdb_hit THEN $status ELSE a.status END,
-                            a.description = coalesce(a.description, $description),
-                            a.cmdb_linked = CASE WHEN $cmdb_hit THEN true ELSE coalesce(a.cmdb_linked, false) END,
+                        ON CREATE SET
+                            a.name = $name,
+                            a.status = $status,
+                            a.description = $description,
+                            a.cmdb_linked = $cmdb_hit,
+                            a.last_updated = $now
+                        ON MATCH SET
+                            a.name = CASE WHEN $cmdb_hit THEN $name ELSE coalesce(a.name, $name) END,
+                            a.status = CASE WHEN $cmdb_hit THEN $status ELSE coalesce(a.status, $status) END,
+                            a.cmdb_linked = a.cmdb_linked OR $cmdb_hit,
                             a.last_updated = $now
                         """,
                         app_id=app_id,
@@ -816,14 +838,19 @@ def main() -> int:
                 )
                 description = r["functions"] or ""
 
-                # AGE-compatible MERGE pattern — see comment above at the EGM branch.
                 ns.run(
                     """
                     MERGE (a:Application {app_id: $app_id})
-                    SET a.name = CASE WHEN a.name IS NULL THEN $name WHEN $cmdb_hit THEN $name ELSE a.name END,
-                        a.status = CASE WHEN a.status IS NULL THEN $status WHEN $cmdb_hit THEN $status ELSE a.status END,
-                        a.description = coalesce(a.description, $description),
-                        a.cmdb_linked = CASE WHEN $cmdb_hit THEN true ELSE coalesce(a.cmdb_linked, false) END,
+                    ON CREATE SET
+                        a.name = $name,
+                        a.status = $status,
+                        a.description = $description,
+                        a.cmdb_linked = $cmdb_hit,
+                        a.last_updated = $now
+                    ON MATCH SET
+                        a.name = CASE WHEN $cmdb_hit THEN $name ELSE coalesce(a.name, $name) END,
+                        a.status = CASE WHEN $cmdb_hit THEN $status ELSE coalesce(a.status, $status) END,
+                        a.cmdb_linked = a.cmdb_linked OR $cmdb_hit,
                         a.last_updated = $now
                     """,
                     app_id=app_id,
@@ -1200,11 +1227,11 @@ def main() -> int:
             # ================================================================
             # Post-load: applications_history snapshots + ingestion_diffs
             # ================================================================
-            # Read every current Application node out of the graph, compute a
+            # Read every current Application node out of Neo4j, compute a
             # content_hash, and compare to the latest row in applications_history
             # for that app_id. Emit diffs + insert snapshots into Postgres.
             #
-            # This runs once per loader invocation, AFTER all graph writes, so
+            # This runs once per loader invocation, AFTER all Neo4j writes, so
             # we're observing the steady-state graph (not partial).
             logger.info("computing applications_history + diffs...")
             write_history_and_diffs(ns, src, loader_run_id, stats)
@@ -1230,14 +1257,14 @@ def _app_content_hash(name: str, status: str, description: str, cmdb_linked: boo
 
 
 def write_history_and_diffs(
-    graph_session: Any,
+    neo4j_session: Any,
     pg: psycopg.Connection,
     loader_run_id: str,
     stats: dict[str, int],
 ) -> None:
     """Write applications_history snapshots and emit ingestion_diffs events.
 
-    Idempotent per run: we compare the current graph state to the latest row
+    Idempotent per run: we compare the current Neo4j state to the latest row
     in applications_history. Only inserts a history row when content_hash
     changes. Emits diff events for new apps and changed fields.
 
@@ -1264,8 +1291,8 @@ def write_history_and_diffs(
         pg.rollback()
         return
 
-    # Fetch current state from the graph
-    current: list[dict[str, Any]] = list(graph_session.run(
+    # Fetch current state from Neo4j
+    current: list[dict[str, Any]] = list(neo4j_session.run(
         """
         MATCH (a:Application)
         RETURN a.app_id AS app_id,
@@ -1275,7 +1302,7 @@ def write_history_and_diffs(
                coalesce(a.cmdb_linked, false) AS cmdb_linked
         """
     ))
-    logger.info("history stage: %d applications in graph", len(current))
+    logger.info("history stage: %d applications in Neo4j", len(current))
 
     try:
         with pg.cursor() as cur:

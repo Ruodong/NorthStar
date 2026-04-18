@@ -6,8 +6,8 @@ km.xpaas.lenovo.com because the corporate Confluence sits behind a Cisco
 AnyConnect tunnel (cscotun0) with a uid-1000 policy route. Backend
 containers run as a different uid and time out. This script runs on the
 HOST under the user's account, so it inherits the VPN route and can
-reach Confluence directly. It writes to the AGE graph inside the shared
-Postgres container (port 5434).
+reach Confluence directly. It still writes to the same Neo4j instance
+that the backend container shares (bolt://localhost:7687).
 
 Usage (from ~/NorthStar on 71):
     python3 -m venv .venv-ingest
@@ -33,9 +33,7 @@ from app.services.confluence import ConfluenceClient  # noqa: E402
 from app.services.drawio_parser import parse_drawio_xml  # noqa: E402
 from app.services.ai_evaluator import evaluate as ai_evaluate  # noqa: E402
 
-# Local — same directory as this file
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _age_session_adapter import AGEDriver  # noqa: E402
+from neo4j import GraphDatabase  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -160,22 +158,22 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--fy", action="append", required=True, help="Fiscal year, e.g. FY2526 (repeatable)")
     ap.add_argument("--limit", type=int, default=None, help="Limit projects per fiscal year")
+    ap.add_argument(
+        "--neo4j-uri",
+        default=os.environ.get("NEO4J_URI_HOST", "bolt://localhost:7687"),
+        help="Neo4j bolt URI (default: bolt://localhost:7687)",
+    )
+    ap.add_argument("--neo4j-user", default=os.environ.get("NEO4J_USER", "neo4j"))
+    ap.add_argument("--neo4j-password", default=os.environ.get("NEO4J_PASSWORD", "northstar_dev"))
     args = ap.parse_args()
 
     if not os.environ.get("CONFLUENCE_TOKEN"):
         logger.error("CONFLUENCE_TOKEN not set in env. Run: set -a && source .env && set +a")
         return 2
 
-    pg_dsn = (
-        f"host={os.environ.get('NORTHSTAR_PG_HOST', 'localhost')} "
-        f"port={os.environ.get('NORTHSTAR_PG_PORT', '5434')} "
-        f"dbname={os.environ.get('NORTHSTAR_PG_DB', 'northstar')} "
-        f"user={os.environ.get('NORTHSTAR_PG_USER', 'northstar')} "
-        f"password={os.environ.get('POSTGRES_PASSWORD', 'northstar_dev')}"
-    )
-    driver = AGEDriver(pg_dsn)
+    driver = GraphDatabase.driver(args.neo4j_uri, auth=(args.neo4j_user, args.neo4j_password))
     driver.verify_connectivity()
-    logger.info("AGE graph connected (graph=ns_graph)")
+    logger.info("Neo4j connected at %s", args.neo4j_uri)
 
     client = ConfluenceClient()
     if not client.configured:
