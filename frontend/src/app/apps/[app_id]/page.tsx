@@ -1704,7 +1704,7 @@ function IntegrationLandscape({
 
   // SVG layout constants
   const COL_PAD = 16;
-  const APP_BOX_W = 150;
+  const APP_BOX_W = 210;          // wider to fit more of the interface name
   const APP_BASE_H = 38;          // collapsed height
   const APP_IFACE_ROW_H = 13;     // each interface name row when expanded
   const APP_EXPAND_PAD = 6;       // padding above/below the interface list
@@ -1712,10 +1712,14 @@ function IntegrationLandscape({
   const PLATFORM_BOX_W = 80;
   const PLATFORM_BOX_H = 46;
   const PLATFORM_GAP = 12;
-  // ME composite: CONSUME port + center + PROVIDE port
-  const ME_PORT_W = 40;
-  const ME_CENTER_W = 170;
-  const ME_BOX_W = ME_PORT_W * 2 + ME_CENTER_W;
+  // ME composite: center rectangle + two ports that OVERLAY the ME's left/right
+  // edges (each port is centered on the edge, half inside / half outside ME).
+  // Total horizontal span = ME_CENTER_W + ME_PORT_W (one port-width spread
+  // across both edges combined).
+  const ME_CENTER_W = 210;
+  const ME_PORT_W = 32;
+  const ME_PORT_H = 76;           // shorter than ME for visual contrast
+  const ME_BOX_W = ME_CENTER_W + ME_PORT_W;  // total composite incl. overlaps
   const ME_BOX_H = 120;
 
   const cols = {
@@ -1950,13 +1954,13 @@ function IntegrationLandscape({
         </span>
       </div>
 
-      {/* SVG */}
-      <div style={{ overflowX: "auto" }}>
+      {/* SVG — centered horizontally when it fits; scrolls when it doesn't */}
+      <div style={{ overflowX: "auto", textAlign: "center" }}>
         <svg
           width={svgWidth}
           height={svgHeight}
           viewBox={`0 0 ${svgWidth} ${svgHeight}`}
-          style={{ display: "block" }}
+          style={{ display: "inline-block", margin: "0 auto" }}
         >
           {/* Column labels */}
           <g fontFamily="var(--font-mono)" fontSize="9" fill="var(--text-dim)" style={{ letterSpacing: 0.6 }}>
@@ -2025,6 +2029,8 @@ function IntegrationLandscape({
             w={ME_BOX_W}
             h={ME_BOX_H}
             portW={ME_PORT_W}
+            portH={ME_PORT_H}
+            centerW={ME_CENTER_W}
             appId={appId}
             appName={data.app_name || ""}
             provCount={totalDownstream}
@@ -2228,7 +2234,7 @@ function LandscapeAppBox({
         style={{ fontWeight: 500, ...pointerStyle, userSelect: "none" }}
         onClick={isUnlinked ? undefined : scrollClick}
       >
-        {node.app_name.length > 20 ? node.app_name.slice(0, 18) + "…" : node.app_name}
+        {node.app_name.length > 28 ? node.app_name.slice(0, 26) + "…" : node.app_name}
       </text>
       {/* Interface count — click TOGGLES expansion (shows interface names) */}
       {canExpand ? (
@@ -2317,7 +2323,7 @@ function LandscapeAppBox({
           {sortedIfaces.map((iface, i) => {
             const color = PLATFORM_COLORS[iface.platform] || "#5f6a80";
             const isSunset = (iface.status || "").toUpperCase() === "SUNSET";
-            const labelMax = 22;
+            const labelMax = 34;
             const shown =
               iface.label.length > labelMax
                 ? iface.label.slice(0, labelMax - 1) + "…"
@@ -2439,79 +2445,93 @@ function wrapAppName(name: string, maxCharsPerLine: number, maxLines: number): s
 }
 
 function LandscapeMeBox({
-  x, y, w, h, appId, appName, provCount, consCount, portW,
+  x, y, w, h, appId, appName, provCount, consCount, portW, portH, centerW,
 }: {
   x: number; y: number; w: number; h: number;
   appId: string;
   appName?: string;
   provCount: number;
   consCount: number;
-  portW: number;     // width of each side port (CONSUME / PROVIDE)
+  portW: number;     // small port width (overlays ME edge)
+  portH: number;     // port height (shorter than ME)
+  centerW: number;   // ME center rectangle width; total w = centerW + portW
 }) {
-  const centerW = w - portW * 2;
-  const centerX = portW;
-
   const AMBER = "#f6a623";
   const BLUE = "#6ba6e8";
 
-  // App name wrapped into 2-3 lines at ~18 chars per line
-  const nameLines = wrapAppName(appName || "", 18, 3);
+  // ME center is positioned at x = portW/2 so each port straddles ME's edge
+  // (half inside, half outside). Port height is smaller than ME so the ports
+  // appear as badges clipped onto the ME edges.
+  const meX = portW / 2;
+  const leftPortX = 0;                        // composite origin (left port's left edge)
+  const rightPortX = centerW;                 // right port straddles right edge of ME
+  const portY = (h - portH) / 2;
 
-  // Vertical center Y for the main text block
-  const idY = 32;
-  const nameStartY = 56;
+  // App name wrapped; wider ME center now accommodates ~22 chars per line
+  const nameLines = wrapAppName(appName || "", 22, 3);
+
+  const idY = 36;
+  const nameStartY = 60;
   const nameLineH = 14;
+
+  // Small helper for port inner text (label rotated -90°, count + arrow stacked)
+  const renderPort = (
+    xOff: number,
+    color: string,
+    label: string,
+    count: number,
+    arrow: string,
+  ) => (
+    <g transform={`translate(${xOff}, ${portY})`}>
+      <rect
+        width={portW}
+        height={portH}
+        rx={5}
+        fill="var(--bg-elevated)"      // opaque fill so it masks the ME edge
+        stroke={color}
+        strokeWidth={1.5}
+      />
+      {/* Rotated port label — smaller port fits 6-7 chars vertically */}
+      <text
+        transform={`rotate(-90, ${portW / 2}, ${portH / 2 - 10})`}
+        x={portW / 2}
+        y={portH / 2 - 10}
+        textAnchor="middle"
+        fontFamily="var(--font-mono)"
+        fontSize="9"
+        fill={color}
+        style={{ letterSpacing: "2px", fontWeight: 600 }}
+      >
+        {label}
+      </text>
+      {/* Count near the bottom of the port */}
+      <text
+        x={portW / 2}
+        y={portH - 18}
+        textAnchor="middle"
+        fontFamily="var(--font-mono)"
+        fontSize="11"
+        fill={color}
+        style={{ fontWeight: 700 }}
+      >
+        {count}
+      </text>
+      <text
+        x={portW / 2}
+        y={portH - 5}
+        textAnchor="middle"
+        fontSize="10"
+        fill={color}
+      >
+        {arrow}
+      </text>
+    </g>
+  );
 
   return (
     <g transform={`translate(${x}, ${y})`}>
-      {/* ── CONSUME port (left) ── */}
-      <g>
-        <rect
-          width={portW}
-          height={h}
-          rx={6}
-          fill={`${BLUE}14`}
-          stroke={BLUE}
-          strokeWidth={1.5}
-        />
-        {/* Rotated "CONSUME" label — centered, reads bottom-to-top */}
-        <text
-          transform={`rotate(-90, ${portW / 2}, ${h / 2 - 10})`}
-          x={portW / 2}
-          y={h / 2 - 10}
-          textAnchor="middle"
-          fontFamily="var(--font-mono)"
-          fontSize="10"
-          fill={BLUE}
-          style={{ letterSpacing: "2.5px", fontWeight: 600 }}
-        >
-          CONSUME
-        </text>
-        {/* Count + arrow at the bottom (horizontal) */}
-        <text
-          x={portW / 2}
-          y={h - 22}
-          textAnchor="middle"
-          fontFamily="var(--font-mono)"
-          fontSize="13"
-          fill={BLUE}
-          style={{ fontWeight: 600 }}
-        >
-          {consCount}
-        </text>
-        <text
-          x={portW / 2}
-          y={h - 8}
-          textAnchor="middle"
-          fontSize="11"
-          fill={BLUE}
-        >
-          ◀
-        </text>
-      </g>
-
-      {/* ── ME center ── */}
-      <g transform={`translate(${centerX}, 0)`}>
+      {/* ── ME center — drawn first so ports render on top of the edges ── */}
+      <g transform={`translate(${meX}, 0)`}>
         <rect
           width={centerW}
           height={h}
@@ -2526,13 +2546,13 @@ function LandscapeMeBox({
           y={idY}
           textAnchor="middle"
           fontFamily="var(--font-display)"
-          fontSize="16"
+          fontSize="17"
           fill={AMBER}
           style={{ fontWeight: 600, letterSpacing: 0.3 }}
         >
           {appId}
         </text>
-        {/* app_name — multiline */}
+        {/* app_name — multiline, centered */}
         {nameLines.map((line, i) => (
           <text
             key={i}
@@ -2549,49 +2569,11 @@ function LandscapeMeBox({
         ))}
       </g>
 
-      {/* ── PROVIDE port (right) ── */}
-      <g transform={`translate(${portW + centerW}, 0)`}>
-        <rect
-          width={portW}
-          height={h}
-          rx={6}
-          fill={`${AMBER}14`}
-          stroke={AMBER}
-          strokeWidth={1.5}
-        />
-        <text
-          transform={`rotate(-90, ${portW / 2}, ${h / 2 - 10})`}
-          x={portW / 2}
-          y={h / 2 - 10}
-          textAnchor="middle"
-          fontFamily="var(--font-mono)"
-          fontSize="10"
-          fill={AMBER}
-          style={{ letterSpacing: "2.5px", fontWeight: 600 }}
-        >
-          PROVIDE
-        </text>
-        <text
-          x={portW / 2}
-          y={h - 22}
-          textAnchor="middle"
-          fontFamily="var(--font-mono)"
-          fontSize="13"
-          fill={AMBER}
-          style={{ fontWeight: 600 }}
-        >
-          {provCount}
-        </text>
-        <text
-          x={portW / 2}
-          y={h - 8}
-          textAnchor="middle"
-          fontSize="11"
-          fill={AMBER}
-        >
-          ▶
-        </text>
-      </g>
+      {/* ── CONSUME port (overlaid on ME's LEFT edge) ── */}
+      {renderPort(leftPortX, BLUE, "CONSUME", consCount, "◀")}
+
+      {/* ── PROVIDE port (overlaid on ME's RIGHT edge) ── */}
+      {renderPort(rightPortX, AMBER, "PROVIDE", provCount, "▶")}
     </g>
   );
 }

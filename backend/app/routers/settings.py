@@ -33,13 +33,16 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 VALID_LAYERS = {"business", "application", "technical"}
 
-# Script lives at repo root under scripts/; the backend runs inside the
-# container where the repo is bind-mounted at /app (backend) and scripts
-# are at /workspace/scripts via compose. We resolve by walking up from
-# this file to reach the repo root, then appending scripts/.
+# Script lives under scripts/. Inside the backend container the scripts
+# dir is bind-mounted at /app/scripts (NORTHSTAR_SCRIPT_ROOT env var).
+# Host-side (pytest / local) we walk up from this file to find the repo
+# root and use ./scripts.
 _BACKEND_DIR = Path(__file__).resolve().parents[2]   # backend/
 _REPO_ROOT = _BACKEND_DIR.parent                      # repo root
-_SYNC_SCRIPT = _REPO_ROOT / "scripts" / "sync_architecture_templates.py"
+_SCRIPT_ROOT = Path(
+    os.environ.get("NORTHSTAR_SCRIPT_ROOT") or (_REPO_ROOT / "scripts")
+)
+_SYNC_SCRIPT = _SCRIPT_ROOT / "sync_architecture_templates.py"
 
 
 # ── Helpers ──────────────────────────────────────────────────────

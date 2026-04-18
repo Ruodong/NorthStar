@@ -440,7 +440,14 @@ def main() -> int:
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parent.parent
-    attach_root = repo_root / "data" / "attachments"
+    # Inside the backend container the repo layout isn't reachable — the
+    # script is bind-mounted at /app/scripts and attachments at /app_data.
+    # Respect NORTHSTAR_ATTACH_ROOT (set by docker-compose) when present so
+    # the same script runs correctly from both .venv-ingest (host) and
+    # in-process via BackgroundTask (container).
+    attach_root = Path(
+        os.environ.get("NORTHSTAR_ATTACH_ROOT") or (repo_root / "data" / "attachments")
+    )
     if not args.dry_run:
         attach_root.mkdir(parents=True, exist_ok=True)
     logger.info("attachments dir: %s", attach_root)

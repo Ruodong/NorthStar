@@ -88,6 +88,9 @@ services:
       - NEO4J_USER=neo4j
       - NEO4J_PASSWORD=${NEO4J_PASSWORD}
       - POSTGRES_DSN=postgresql://northstar:${POSTGRES_PASSWORD:-northstar_dev}@localhost:5434/northstar
+      # POSTGRES_PASSWORD is consumed by scripts/sync_architecture_templates.py
+      # when invoked as a BackgroundTask from the Settings router.
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-northstar_dev}
       - CONFLUENCE_BASE_URL=${CONFLUENCE_BASE_URL:-}
       - CONFLUENCE_SEARCH_BASE_URL=${CONFLUENCE_SEARCH_BASE_URL:-}
       - CONFLUENCE_TOKEN=${CONFLUENCE_TOKEN:-}
@@ -110,12 +113,22 @@ services:
       - PREVIEW_CACHE_ROOT=/app_cache/preview
       - CONVERTER_URL=http://localhost:8090
       - CORS_ORIGINS=*
+      # Host-side sync scripts are mounted at /app/scripts (ro). Settings
+      # POST /sync resolves NORTHSTAR_SCRIPT_ROOT/<name>.py.
+      - NORTHSTAR_SCRIPT_ROOT=/app/scripts
+      - NORTHSTAR_ATTACH_ROOT=/app_data
     volumes:
       - ./data/local_drawio:/data/local_drawio:ro
-      - ./data/attachments:/app_data:ro
+      # Attachments are writable so architecture-template sync (triggered
+      # from the Settings UI) can cache drawio + paired PNG bytes alongside
+      # whatever scan_confluence.py wrote from the host. Read paths in
+      # admin.py treat the mount as read-only by convention.
+      - ./data/attachments:/app_data
       # Preview cache is backend-writable (separate from read-only raw
       # attachments) so converted PDFs persist across container rebuilds.
       - ./data/preview_cache:/app_cache/preview
+      # Scripts needed by in-process background tasks (sync_architecture_templates.py).
+      - ./scripts:/app/scripts:ro
 
   frontend:
     build:

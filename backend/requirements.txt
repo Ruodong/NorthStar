@@ -17,3 +17,6 @@ boto3>=1.36.0
 alembic>=1.13.0
 sqlalchemy>=2.0
 psycopg2-binary>=2.9
+# psycopg v3 (sync + async) — required by scripts/sync_architecture_templates.py
+# when triggered as a FastAPI BackgroundTask from the Settings router.
+psycopg[binary]>=3.2
