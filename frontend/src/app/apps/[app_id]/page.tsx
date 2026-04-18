@@ -1875,6 +1875,8 @@ function ProviderHotspots({
   data: IntegrationPayload;
   visiblePlatforms: string[];
 }) {
+  const HOTSPOT_COLLAPSED_N = 10;
+  const [expanded, setExpanded] = useState(false);
   const visSet = new Set(visiblePlatforms);
 
   // Flatten all interfaces across visible platforms
@@ -1894,10 +1896,12 @@ function ProviderHotspots({
     if (d !== 0) return d;
     return a.iface.label.localeCompare(b.iface.label);
   });
-  // Only show interfaces with 2+ consumers as hotspots
-  const hot = all.filter((x) => x.iface.consumers.length >= 2).slice(0, 10);
+  // All interfaces with 2+ consumers
+  const allHot = all.filter((x) => x.iface.consumers.length >= 2);
+  const shown = expanded ? allHot : allHot.slice(0, HOTSPOT_COLLAPSED_N);
+  const hiddenCount = allHot.length - shown.length;
 
-  if (hot.length === 0) return null;
+  if (allHot.length === 0) return null;
 
   const scrollToIface = (key: string) => {
     const el = document.getElementById(`iface-${encodeURIComponent(key)}`);
@@ -1939,8 +1943,28 @@ function ProviderHotspots({
           🔥 INTERFACE HOTSPOTS
         </span>
         <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
-          top {hot.length} with 2+ consumers
+          {expanded
+            ? `all ${allHot.length} interfaces with 2+ consumers`
+            : `top ${shown.length} of ${allHot.length} with 2+ consumers`}
         </span>
+        {allHot.length > HOTSPOT_COLLAPSED_N && (
+          <button
+            onClick={() => setExpanded((e) => !e)}
+            style={{
+              marginLeft: "auto",
+              border: "1px solid var(--border)",
+              background: "transparent",
+              color: "var(--accent)",
+              fontSize: 11,
+              fontFamily: "var(--font-mono)",
+              padding: "2px 10px",
+              borderRadius: 3,
+              cursor: "pointer",
+            }}
+          >
+            {expanded ? "show less" : `show all (${allHot.length})`}
+          </button>
+        )}
       </div>
       <table
         style={{
@@ -1950,7 +1974,7 @@ function ProviderHotspots({
         }}
       >
         <tbody>
-          {hot.map(({ iface, platform }) => {
+          {shown.map(({ iface, platform }) => {
             const color = PLATFORM_COLORS[platform] || "#5f6a80";
             const topConsumers = iface.consumers
               .filter((c) => c.app_id && c.app_id !== "__UNLINKED__")
@@ -2038,6 +2062,31 @@ function ProviderHotspots({
               </tr>
             );
           })}
+          {!expanded && hiddenCount > 0 && (
+            <tr
+              onClick={() => setExpanded(true)}
+              style={{ cursor: "pointer" }}
+              onMouseOver={(e) => {
+                (e.currentTarget as HTMLElement).style.background =
+                  "var(--surface-hover)";
+              }}
+              onMouseOut={(e) => {
+                (e.currentTarget as HTMLElement).style.background =
+                  "transparent";
+              }}
+            >
+              <td colSpan={4} style={{
+                padding: "8px 8px",
+                textAlign: "center",
+                color: "var(--accent)",
+                fontSize: 11,
+                fontFamily: "var(--font-mono)",
+                borderTop: "1px dashed var(--border)",
+              }}>
+                +{hiddenCount} more hotspots — click to show all
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>
