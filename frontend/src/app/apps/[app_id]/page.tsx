@@ -1426,6 +1426,11 @@ interface ConsumerEntry {
   endpoint?: string | null;
   status?: string | null;
   interface_id: number;
+  // Caller's specific route name for this row — differs from the provider
+  // card's aggregation label (which for WSO2 is the shared target_endpoint).
+  // For WSO2, each caller registers their own interface_name ("route") that
+  // maps to the same backend endpoint.
+  route_name?: string | null;
 }
 
 interface ProviderInterface {
@@ -3344,6 +3349,20 @@ function ProviderInterfaceCard({
                   }}
                 >
                   ({c.account_name})
+                </span>
+              )}
+              {/* Caller route name — shown when it differs from the card's
+                  aggregation label (primarily WSO2, where each caller has
+                  its own interface_name routing to the same target_endpoint). */}
+              {c.route_name && c.route_name !== iface.label && (
+                <span
+                  style={{
+                    color: "var(--text-muted)",
+                    fontSize: 11,
+                    fontFamily: "var(--font-mono)",
+                  }}
+                >
+                  route: {c.route_name}
                 </span>
               )}
               <div style={{ flex: 1 }} />

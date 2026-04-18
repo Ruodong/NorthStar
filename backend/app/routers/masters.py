@@ -472,7 +472,21 @@ def _my_role(row: dict, app_id: str) -> str:
 
 
 def _aggregation_key(row: dict) -> str:
-    """Stable key for grouping Provider rows into one interface/topic (fan-out)."""
+    """Stable key for grouping Provider rows into one interface/topic (fan-out).
+
+    The grouping semantics differ per platform because each platform's data
+    model records reuse differently:
+
+      - APIH / KPaaS: `(api/topic name, instance)` — the pub side already
+        registers one logical asset that multiple subs share.
+      - WSO2: `target_endpoint` — each CALLER registers its own unique
+        `interface_name` (the route they named), so grouping by name gives
+        fan-out=1 always. Grouping by the backend service URL
+        (`target_endpoint`) reveals real reuse: one backend API routed by
+        many callers.
+      - Talend / PO / Data Service / Axway / Goanywhere: `interface_name` —
+        one-to-one semantics match naming.
+    """
     platform = row.get("integration_platform", "")
     if platform == "APIH":
         return "|".join([
@@ -486,7 +500,10 @@ def _aggregation_key(row: dict) -> str:
             row.get("topic_name") or row.get("interface_name") or "",
             row.get("instance") or "",
         ])
-    # All other platforms group by interface_name
+    if platform == "WSO2":
+        # Group by the backend endpoint URL so callers sharing the same
+        # target_endpoint roll up into one provided service.
+        return f"WSO2|{row.get('target_endpoint') or row.get('interface_name') or ''}"
     return f"{platform}|{row.get('interface_name') or ''}"
 
 
@@ -497,6 +514,10 @@ def _interface_label(row: dict) -> str:
         return row.get("api_name") or row.get("interface_name") or "(unnamed)"
     if platform == "KPaaS":
         return row.get("topic_name") or row.get("interface_name") or "(unnamed)"
+    if platform == "WSO2":
+        # For WSO2 the backend endpoint is the canonical label; fall back to
+        # the interface_name of this specific row if endpoint is missing.
+        return row.get("target_endpoint") or row.get("interface_name") or "(unnamed)"
     return row.get("interface_name") or "(unnamed)"
 
 
@@ -683,6 +704,10 @@ async def get_application_integrations(
                 "endpoint": consumer_endpoint,
                 "status": r.get("status"),
                 "interface_id": r["interface_id"],
+                # The interface_name is per-row; for WSO2 this is the specific
+                # route name this caller registered (different from the
+                # aggregation label which is the shared target_endpoint).
+                "route_name": r.get("interface_name"),
             })
         if r.get("status"):
             info["statuses"].add(r["status"])
