@@ -1559,6 +1559,14 @@ interface LandscapeAppNode {
   app_name: string;
   total_interfaces: number;
   by_platform: Record<string, number>;  // platform → interface count
+  // Full list of interfaces for this peer, used when the user expands the
+  // node (+/- toggle) to see the specific interface names.
+  interfaces: Array<{
+    platform: string;
+    label: string;         // interface_name / api_name / topic_name
+    status?: string | null;
+    interface_id?: number; // for scrolling to the exact card
+  }>;
 }
 
 function buildLandscapeData(
@@ -1585,10 +1593,19 @@ function buildLandscapeData(
       const pid = row.provider.app_id || "__UNLINKED__";
       const pname = row.provider.app_name || "(unlinked)";
       if (!upstreamMap[pid]) {
-        upstreamMap[pid] = { app_id: pid, app_name: pname, total_interfaces: 0, by_platform: {} };
+        upstreamMap[pid] = {
+          app_id: pid, app_name: pname, total_interfaces: 0,
+          by_platform: {}, interfaces: [],
+        };
       }
       upstreamMap[pid].total_interfaces++;
       upstreamMap[pid].by_platform[platform] = (upstreamMap[pid].by_platform[platform] || 0) + 1;
+      upstreamMap[pid].interfaces.push({
+        platform,
+        label: row.label,
+        status: row.status,
+        interface_id: row.interface_id,
+      });
       upstreamPlatformTotals[platform] = (upstreamPlatformTotals[platform] || 0) + 1;
       upstreamPlatforms.add(platform);
     }
@@ -1606,10 +1623,19 @@ function buildLandscapeData(
         const cid = c.app_id || "__UNLINKED__";
         const cname = c.app_name || "(unlinked)";
         if (!downstreamMap[cid]) {
-          downstreamMap[cid] = { app_id: cid, app_name: cname, total_interfaces: 0, by_platform: {} };
+          downstreamMap[cid] = {
+            app_id: cid, app_name: cname, total_interfaces: 0,
+            by_platform: {}, interfaces: [],
+          };
         }
         downstreamMap[cid].total_interfaces++;
         downstreamMap[cid].by_platform[platform] = (downstreamMap[cid].by_platform[platform] || 0) + 1;
+        downstreamMap[cid].interfaces.push({
+          platform,
+          label: iface.label,
+          status: c.status ?? undefined,
+          interface_id: c.interface_id,
+        });
         downstreamPlatformTotals[platform] = (downstreamPlatformTotals[platform] || 0) + 1;
         downstreamPlatforms.add(platform);
       }
@@ -1644,6 +1670,21 @@ function IntegrationLandscape({
 }) {
   const landscape = buildLandscapeData(data, visiblePlatforms);
 
+  // Expansion state: per-app (+/- toggle) + "show all" for each side
+  const [expandedApps, setExpandedApps] = useState<Set<string>>(new Set());
+  const [showAllUpstream, setShowAllUpstream] = useState(false);
+  const [showAllDownstream, setShowAllDownstream] = useState(false);
+
+  const toggleAppExpand = (side: "up" | "down", appId: string) => {
+    setExpandedApps((prev) => {
+      const key = `${side}:${appId}`;
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
   if (
     landscape.upstream_apps.length === 0 &&
     landscape.downstream_apps.length === 0
@@ -1651,26 +1692,30 @@ function IntegrationLandscape({
     return null;
   }
 
-  // Clamp app lists to top N
-  const upstreamShown = landscape.upstream_apps.slice(0, MAX_APPS_PER_SIDE);
-  const upstreamExtra = landscape.upstream_apps.length - upstreamShown.length;
-  const downstreamShown = landscape.downstream_apps.slice(0, MAX_APPS_PER_SIDE);
-  const downstreamExtra = landscape.downstream_apps.length - downstreamShown.length;
+  // Slice to visible apps (show all or top N)
+  const upstreamVisible = showAllUpstream
+    ? landscape.upstream_apps
+    : landscape.upstream_apps.slice(0, MAX_APPS_PER_SIDE);
+  const upstreamHiddenCount = landscape.upstream_apps.length - upstreamVisible.length;
+  const downstreamVisible = showAllDownstream
+    ? landscape.downstream_apps
+    : landscape.downstream_apps.slice(0, MAX_APPS_PER_SIDE);
+  const downstreamHiddenCount = landscape.downstream_apps.length - downstreamVisible.length;
 
   // SVG layout constants
-  const COL_W = 160;             // column widths
-  const COL_PAD = 16;            // gap between columns
-  const APP_BOX_W = 140;
-  const APP_BOX_H = 38;
+  const COL_PAD = 16;
+  const APP_BOX_W = 150;
+  const APP_BASE_H = 38;          // collapsed height
+  const APP_IFACE_ROW_H = 13;     // each interface name row when expanded
+  const APP_EXPAND_PAD = 6;       // padding above/below the interface list
   const APP_GAP = 6;
   const PLATFORM_BOX_W = 80;
   const PLATFORM_BOX_H = 46;
   const PLATFORM_GAP = 12;
-  // ME composite: CONSUME port (narrow) + center (wide) + PROVIDE port (narrow)
-  // Curves terminate/originate at the outer edges of the ports, not the center box.
+  // ME composite: CONSUME port + center + PROVIDE port
   const ME_PORT_W = 40;
   const ME_CENTER_W = 170;
-  const ME_BOX_W = ME_PORT_W * 2 + ME_CENTER_W;  // total composite width
+  const ME_BOX_W = ME_PORT_W * 2 + ME_CENTER_W;
   const ME_BOX_H = 120;
 
   const cols = {
@@ -1690,38 +1735,56 @@ function IntegrationLandscape({
   };
   const svgWidth = cols.downstream_apps.x + APP_BOX_W + 10;
 
-  // Vertical positioning
-  const appsColHeight =
-    Math.max(upstreamShown.length, downstreamShown.length, 1) * (APP_BOX_H + APP_GAP) +
-    (upstreamExtra > 0 || downstreamExtra > 0 ? APP_BOX_H + APP_GAP : 0);
-  const upstreamPlatformsColHeight =
+  // Compute per-app rendered height given expansion state
+  const appHeight = (node: LandscapeAppNode, expanded: boolean) =>
+    expanded
+      ? APP_BASE_H + node.interfaces.length * APP_IFACE_ROW_H + APP_EXPAND_PAD * 2
+      : APP_BASE_H;
+
+  // Heights for each row in the upstream/downstream app columns (including +N more placeholder)
+  const upstreamHeights = upstreamVisible.map((app) =>
+    appHeight(app, expandedApps.has(`up:${app.app_id}`)),
+  );
+  if (upstreamHiddenCount > 0) upstreamHeights.push(APP_BASE_H);
+
+  const downstreamHeights = downstreamVisible.map((app) =>
+    appHeight(app, expandedApps.has(`down:${app.app_id}`)),
+  );
+  if (downstreamHiddenCount > 0) downstreamHeights.push(APP_BASE_H);
+
+  const sumH = (heights: number[]) =>
+    heights.reduce((s, h) => s + h, 0) + Math.max(0, heights.length - 1) * APP_GAP;
+
+  const upstreamColH = sumH(upstreamHeights);
+  const downstreamColH = sumH(downstreamHeights);
+  const upstreamPlatformsColH =
     landscape.upstream_platforms.length * (PLATFORM_BOX_H + PLATFORM_GAP);
-  const downstreamPlatformsColHeight =
+  const downstreamPlatformsColH =
     landscape.downstream_platforms.length * (PLATFORM_BOX_H + PLATFORM_GAP);
   const contentHeight = Math.max(
-    appsColHeight,
-    upstreamPlatformsColHeight,
-    downstreamPlatformsColHeight,
+    upstreamColH,
+    downstreamColH,
+    upstreamPlatformsColH,
+    downstreamPlatformsColH,
     ME_BOX_H + 40,
     200,
   );
   const svgHeight = contentHeight + 40;
-
   const centerY = svgHeight / 2;
 
-  // Position helpers
-  const posUpstreamApp = (idx: number) => {
-    const total = upstreamShown.length + (upstreamExtra > 0 ? 1 : 0);
-    const groupH = total * (APP_BOX_H + APP_GAP) - APP_GAP;
-    const startY = centerY - groupH / 2;
-    return { x: cols.upstream_apps.x, y: startY + idx * (APP_BOX_H + APP_GAP) };
+  // Position helpers that use cumulative heights
+  const cumulativeYs = (heights: number[], totalH: number) => {
+    const ys: number[] = [];
+    let y = centerY - totalH / 2;
+    for (const h of heights) {
+      ys.push(y);
+      y += h + APP_GAP;
+    }
+    return ys;
   };
-  const posDownstreamApp = (idx: number) => {
-    const total = downstreamShown.length + (downstreamExtra > 0 ? 1 : 0);
-    const groupH = total * (APP_BOX_H + APP_GAP) - APP_GAP;
-    const startY = centerY - groupH / 2;
-    return { x: cols.downstream_apps.x, y: startY + idx * (APP_BOX_H + APP_GAP) };
-  };
+  const upstreamYs = cumulativeYs(upstreamHeights, upstreamColH);
+  const downstreamYs = cumulativeYs(downstreamHeights, downstreamColH);
+
   const posUpstreamPlatform = (idx: number) => {
     const total = landscape.upstream_platforms.length;
     const groupH = total * (PLATFORM_BOX_H + PLATFORM_GAP) - PLATFORM_GAP;
@@ -1734,15 +1797,11 @@ function IntegrationLandscape({
     const startY = centerY - groupH / 2;
     return { x: cols.downstream_platforms.x, y: startY + idx * (PLATFORM_BOX_H + PLATFORM_GAP) };
   };
-  const posMe = () => ({
-    x: cols.me.x,
-    y: centerY - ME_BOX_H / 2,
-  });
+  const mePos = { x: cols.me.x, y: centerY - ME_BOX_H / 2 };
 
   // Curve stroke width from count
   const strokeWidth = (count: number) => {
-    const w = Math.max(MIN_STROKE_WIDTH, Math.min(MAX_STROKE_WIDTH, count));
-    return w;
+    return Math.max(MIN_STROKE_WIDTH, Math.min(MAX_STROKE_WIDTH, count));
   };
 
   // Index for quick lookup
@@ -1751,17 +1810,19 @@ function IntegrationLandscape({
   const downstreamPlatformIdx: Record<string, number> = {};
   landscape.downstream_platforms.forEach((p, i) => { downstreamPlatformIdx[p] = i; });
 
-  // Generate curves: app → platform (consumer side) and platform → app (provider side)
-  // Also: platform → me (both sides)
+  // Curves anchor to the header band of each app box (near the top, not the
+  // middle) so expanding a box doesn't pull the curves downward.
+  const appAnchorY = (boxY: number) => boxY + 20;
+
   const upstreamCurves: React.ReactElement[] = [];
-  upstreamShown.forEach((app, i) => {
-    const appPos = posUpstreamApp(i);
+  upstreamVisible.forEach((app, i) => {
+    const boxY = upstreamYs[i];
     for (const [platform, count] of Object.entries(app.by_platform)) {
       const pIdx = upstreamPlatformIdx[platform];
       if (pIdx === undefined) continue;
       const pPos = posUpstreamPlatform(pIdx);
-      const x1 = appPos.x + APP_BOX_W;
-      const y1 = appPos.y + APP_BOX_H / 2;
+      const x1 = cols.upstream_apps.x + APP_BOX_W;
+      const y1 = appAnchorY(boxY);
       const x2 = pPos.x;
       const y2 = pPos.y + PLATFORM_BOX_H / 2;
       const midX = (x1 + x2) / 2;
@@ -1777,9 +1838,6 @@ function IntegrationLandscape({
       );
     }
   });
-
-  // upstream platform → me
-  const mePos = posMe();
   const meLeftY = mePos.y + ME_BOX_H / 2;
   landscape.upstream_platforms.forEach((platform, i) => {
     const pPos = posUpstreamPlatform(i);
@@ -1801,7 +1859,6 @@ function IntegrationLandscape({
   });
 
   const downstreamCurves: React.ReactElement[] = [];
-  // me → downstream platform
   const meRightY = mePos.y + ME_BOX_H / 2;
   landscape.downstream_platforms.forEach((platform, i) => {
     const pPos = posDownstreamPlatform(i);
@@ -1821,17 +1878,16 @@ function IntegrationLandscape({
       />,
     );
   });
-  // downstream platform → app
-  downstreamShown.forEach((app, i) => {
-    const appPos = posDownstreamApp(i);
+  downstreamVisible.forEach((app, i) => {
+    const boxY = downstreamYs[i];
     for (const [platform, count] of Object.entries(app.by_platform)) {
       const pIdx = downstreamPlatformIdx[platform];
       if (pIdx === undefined) continue;
       const pPos = posDownstreamPlatform(pIdx);
       const x1 = pPos.x + PLATFORM_BOX_W;
       const y1 = pPos.y + PLATFORM_BOX_H / 2;
-      const x2 = appPos.x;
-      const y2 = appPos.y + APP_BOX_H / 2;
+      const x2 = cols.downstream_apps.x;
+      const y2 = appAnchorY(boxY);
       const midX = (x1 + x2) / 2;
       downstreamCurves.push(
         <path
@@ -1907,21 +1963,44 @@ function IntegrationLandscape({
           {downstreamCurves}
 
           {/* Upstream apps */}
-          {upstreamShown.map((app, i) => {
-            const p = posUpstreamApp(i);
-            return <LandscapeAppBox key={`ua-${app.app_id}`} x={p.x} y={p.y} w={APP_BOX_W} h={APP_BOX_H} node={app} side="upstream" />;
-          })}
-          {upstreamExtra > 0 && (() => {
-            const p = posUpstreamApp(upstreamShown.length);
-            return (
-              <g transform={`translate(${p.x}, ${p.y})`}>
-                <rect width={APP_BOX_W} height={APP_BOX_H} rx={4} fill="var(--bg-elevated)" stroke="var(--border)" strokeDasharray="3,3" />
-                <text x={APP_BOX_W / 2} y={APP_BOX_H / 2 + 4} textAnchor="middle" fill="var(--text-dim)" fontSize="11" fontFamily="var(--font-body)">
-                  +{upstreamExtra} more
-                </text>
-              </g>
-            );
-          })()}
+          {upstreamVisible.map((app, i) => (
+            <LandscapeAppBox
+              key={`ua-${app.app_id}`}
+              x={cols.upstream_apps.x}
+              y={upstreamYs[i]}
+              w={APP_BOX_W}
+              h={upstreamHeights[i]}
+              baseH={APP_BASE_H}
+              ifaceRowH={APP_IFACE_ROW_H}
+              expandPad={APP_EXPAND_PAD}
+              node={app}
+              side="upstream"
+              expanded={expandedApps.has(`up:${app.app_id}`)}
+              onToggleExpand={() => toggleAppExpand("up", app.app_id)}
+            />
+          ))}
+          {upstreamHiddenCount > 0 && (
+            <MorePlaceholderBox
+              x={cols.upstream_apps.x}
+              y={upstreamYs[upstreamVisible.length]}
+              w={APP_BOX_W}
+              h={APP_BASE_H}
+              count={upstreamHiddenCount}
+              onClick={() => setShowAllUpstream(true)}
+            />
+          )}
+          {showAllUpstream && landscape.upstream_apps.length > MAX_APPS_PER_SIDE && (
+            <g
+              transform={`translate(${cols.upstream_apps.x + APP_BOX_W - 56}, ${upstreamYs[0] - 18})`}
+              style={{ cursor: "pointer" }}
+              onClick={() => setShowAllUpstream(false)}
+            >
+              <rect width={52} height={14} rx={3} fill="var(--bg-elevated)" stroke="var(--border)" />
+              <text x={26} y={10} textAnchor="middle" fontSize="9" fontFamily="var(--font-mono)" fill="var(--text-muted)">
+                show less
+              </text>
+            </g>
+          )}
 
           {/* Upstream platforms */}
           {landscape.upstream_platforms.map((platform, i) => {
@@ -1951,37 +2030,152 @@ function IntegrationLandscape({
           })}
 
           {/* Downstream apps */}
-          {downstreamShown.map((app, i) => {
-            const p = posDownstreamApp(i);
-            return <LandscapeAppBox key={`da-${app.app_id}`} x={p.x} y={p.y} w={APP_BOX_W} h={APP_BOX_H} node={app} side="downstream" />;
-          })}
-          {downstreamExtra > 0 && (() => {
-            const p = posDownstreamApp(downstreamShown.length);
-            return (
-              <g transform={`translate(${p.x}, ${p.y})`}>
-                <rect width={APP_BOX_W} height={APP_BOX_H} rx={4} fill="var(--bg-elevated)" stroke="var(--border)" strokeDasharray="3,3" />
-                <text x={APP_BOX_W / 2} y={APP_BOX_H / 2 + 4} textAnchor="middle" fill="var(--text-dim)" fontSize="11" fontFamily="var(--font-body)">
-                  +{downstreamExtra} more
-                </text>
-              </g>
-            );
-          })()}
+          {downstreamVisible.map((app, i) => (
+            <LandscapeAppBox
+              key={`da-${app.app_id}`}
+              x={cols.downstream_apps.x}
+              y={downstreamYs[i]}
+              w={APP_BOX_W}
+              h={downstreamHeights[i]}
+              baseH={APP_BASE_H}
+              ifaceRowH={APP_IFACE_ROW_H}
+              expandPad={APP_EXPAND_PAD}
+              node={app}
+              side="downstream"
+              expanded={expandedApps.has(`down:${app.app_id}`)}
+              onToggleExpand={() => toggleAppExpand("down", app.app_id)}
+            />
+          ))}
+          {downstreamHiddenCount > 0 && (
+            <MorePlaceholderBox
+              x={cols.downstream_apps.x}
+              y={downstreamYs[downstreamVisible.length]}
+              w={APP_BOX_W}
+              h={APP_BASE_H}
+              count={downstreamHiddenCount}
+              onClick={() => setShowAllDownstream(true)}
+            />
+          )}
+          {showAllDownstream && landscape.downstream_apps.length > MAX_APPS_PER_SIDE && (
+            <g
+              transform={`translate(${cols.downstream_apps.x + APP_BOX_W - 56}, ${downstreamYs[0] - 18})`}
+              style={{ cursor: "pointer" }}
+              onClick={() => setShowAllDownstream(false)}
+            >
+              <rect width={52} height={14} rx={3} fill="var(--bg-elevated)" stroke="var(--border)" />
+              <text x={26} y={10} textAnchor="middle" fontSize="9" fontFamily="var(--font-mono)" fill="var(--text-muted)">
+                show less
+              </text>
+            </g>
+          )}
         </svg>
       </div>
     </div>
   );
 }
 
-function LandscapeAppBox({
-  x, y, w, h, node, side,
+function MorePlaceholderBox({
+  x, y, w, h, count, onClick,
 }: {
   x: number; y: number; w: number; h: number;
+  count: number;
+  onClick: () => void;
+}) {
+  return (
+    <g
+      transform={`translate(${x}, ${y})`}
+      style={{ cursor: "pointer" }}
+      onClick={onClick}
+    >
+      <rect
+        width={w}
+        height={h}
+        rx={4}
+        fill="var(--bg-elevated)"
+        stroke="var(--accent)"
+        strokeOpacity={0.5}
+        strokeDasharray="3,3"
+      />
+      <text
+        x={w / 2}
+        y={h / 2 + 4}
+        textAnchor="middle"
+        fill="var(--accent)"
+        fontSize="11"
+        fontFamily="var(--font-body)"
+        style={{ fontWeight: 500 }}
+      >
+        +{count} more — click to show
+      </text>
+      <title>Click to show all {count} additional apps</title>
+    </g>
+  );
+}
+
+// Scroll to the first interface card that references a given peer app_id.
+// Upstream app (I consume from it) → first ConsumerRowCard with
+//    data-peer="{app_id}" (provider.app_id)
+// Downstream app (consumer of mine) → first ProviderInterfaceCard with
+//    data-peers ~= "{app_id}" (consumer appears in its list)
+function scrollToPeerInterface(appId: string, side: "upstream" | "downstream") {
+  if (!appId || appId === "__UNLINKED__") return;
+  const selector =
+    side === "upstream"
+      ? `[data-peer="${CSS.escape(appId)}"]`
+      : `[data-peers~="${CSS.escape(appId)}"]`;
+  const el = document.querySelector(selector) as HTMLElement | null;
+  if (!el) return;
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  // Brief visual flash for the landing card
+  const prev = el.style.boxShadow;
+  el.style.transition = "box-shadow 240ms ease";
+  el.style.boxShadow = "0 0 0 2px var(--accent)";
+  setTimeout(() => { el.style.boxShadow = prev; }, 900);
+}
+
+function LandscapeAppBox({
+  x, y, w, h, baseH, ifaceRowH, expandPad, node, side, expanded, onToggleExpand,
+}: {
+  x: number; y: number; w: number; h: number;
+  baseH: number;
+  ifaceRowH: number;
+  expandPad: number;
   node: LandscapeAppNode;
   side: "upstream" | "downstream";
+  expanded: boolean;
+  onToggleExpand: () => void;
 }) {
   const isUnlinked = node.app_id === "__UNLINKED__";
-  const box = (
+  const canExpand = !isUnlinked && node.interfaces.length > 0;
+
+  const scrollClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    scrollToPeerInterface(node.app_id, side);
+  };
+  const toggleClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onToggleExpand();
+  };
+  const pointerStyle = { cursor: isUnlinked ? "default" : "pointer" };
+
+  // Sort interfaces by platform, then label, when showing the expanded list
+  const sortedIfaces = expanded
+    ? [...node.interfaces].sort((a, b) => {
+        if (a.platform !== b.platform) return a.platform.localeCompare(b.platform);
+        return a.label.localeCompare(b.label);
+      })
+    : [];
+
+  return (
     <g transform={`translate(${x}, ${y})`}>
+      <title>
+        {isUnlinked
+          ? node.app_name
+          : `${node.app_id} ${node.app_name} — click ID to open detail; click count to ${expanded ? "collapse" : "show"} interfaces; click elsewhere to jump to the interface list below`}
+      </title>
+      {/* Background rect — click scrolls to interface list */}
       <rect
         width={w}
         height={h}
@@ -1989,47 +2183,154 @@ function LandscapeAppBox({
         fill="var(--bg-elevated)"
         stroke={isUnlinked ? "var(--border)" : "var(--border-strong)"}
         strokeDasharray={isUnlinked ? "3,3" : undefined}
+        onClick={isUnlinked ? undefined : scrollClick}
+        style={pointerStyle}
       />
-      {!isUnlinked && (
-        <text
-          x={8}
-          y={15}
-          fontFamily="var(--font-mono)"
-          fontSize="10"
-          fill="var(--accent)"
-        >
-          {node.app_id}
-        </text>
-      )}
+      {/* Name — click scrolls */}
       <text
         x={8}
         y={isUnlinked ? h / 2 - 4 : 28}
         fontFamily="var(--font-body)"
         fontSize="11"
         fill="var(--text)"
-        style={{ fontWeight: 500 }}
+        style={{ fontWeight: 500, ...pointerStyle, userSelect: "none" }}
+        onClick={isUnlinked ? undefined : scrollClick}
       >
-        {node.app_name.length > 22 ? node.app_name.slice(0, 20) + "…" : node.app_name}
+        {node.app_name.length > 20 ? node.app_name.slice(0, 18) + "…" : node.app_name}
       </text>
-      <text
-        x={w - 8}
-        y={isUnlinked ? h / 2 + 12 : 28}
-        textAnchor="end"
-        fontFamily="var(--font-mono)"
-        fontSize="10"
-        fill="var(--text-dim)"
-      >
-        {node.total_interfaces}
-      </text>
+      {/* Interface count — click TOGGLES expansion (shows interface names) */}
+      {canExpand ? (
+        <g
+          style={{ cursor: "pointer" }}
+          onClick={toggleClick}
+        >
+          {/* tiny clickable badge behind the count + [+/-] */}
+          <rect
+            x={w - 46}
+            y={14}
+            width={38}
+            height={16}
+            rx={3}
+            fill={expanded ? "var(--accent)" : "transparent"}
+            fillOpacity={expanded ? 0.15 : 0}
+            stroke={expanded ? "var(--accent)" : "var(--border-strong)"}
+            strokeWidth={1}
+          />
+          <text
+            x={w - 30}
+            y={26}
+            textAnchor="middle"
+            fontFamily="var(--font-mono)"
+            fontSize="11"
+            fill={expanded ? "var(--accent)" : "var(--text)"}
+            style={{ fontWeight: 600, userSelect: "none" }}
+          >
+            {node.total_interfaces}
+          </text>
+          <text
+            x={w - 14}
+            y={26}
+            textAnchor="middle"
+            fontFamily="var(--font-mono)"
+            fontSize="12"
+            fill={expanded ? "var(--accent)" : "var(--text-dim)"}
+            style={{ fontWeight: 600, userSelect: "none" }}
+          >
+            {expanded ? "−" : "+"}
+          </text>
+        </g>
+      ) : (
+        <text
+          x={w - 8}
+          y={isUnlinked ? h / 2 + 12 : 28}
+          textAnchor="end"
+          fontFamily="var(--font-mono)"
+          fontSize="10"
+          fill="var(--text-dim)"
+          style={{ userSelect: "none" }}
+        >
+          {node.total_interfaces}
+        </text>
+      )}
+      {/* app_id — wrapped in <a> so it navigates. Only the ID is a link. */}
+      {!isUnlinked && (
+        <a
+          href={`/apps/${encodeURIComponent(node.app_id)}`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <text
+            x={8}
+            y={15}
+            fontFamily="var(--font-mono)"
+            fontSize="10"
+            fill="var(--accent)"
+            style={{ cursor: "pointer", textDecoration: "underline", userSelect: "none" }}
+          >
+            {node.app_id}
+          </text>
+        </a>
+      )}
+
+      {/* Expanded interface list */}
+      {expanded && sortedIfaces.length > 0 && (
+        <g transform={`translate(0, ${baseH + expandPad})`}>
+          <line
+            x1={6}
+            x2={w - 6}
+            y1={-expandPad / 2 - 1}
+            y2={-expandPad / 2 - 1}
+            stroke="var(--border)"
+            strokeDasharray="2,3"
+          />
+          {sortedIfaces.map((iface, i) => {
+            const color = PLATFORM_COLORS[iface.platform] || "#5f6a80";
+            const isSunset = (iface.status || "").toUpperCase() === "SUNSET";
+            const labelMax = 22;
+            const shown =
+              iface.label.length > labelMax
+                ? iface.label.slice(0, labelMax - 1) + "…"
+                : iface.label;
+            const rowY = i * ifaceRowH + 10;
+            return (
+              <g key={i}>
+                {/* platform tag */}
+                <rect
+                  x={6}
+                  y={rowY - 8}
+                  width={26}
+                  height={10}
+                  rx={2}
+                  fill={`${color}20`}
+                  stroke="none"
+                />
+                <text
+                  x={19}
+                  y={rowY}
+                  textAnchor="middle"
+                  fontFamily="var(--font-mono)"
+                  fontSize="7"
+                  fill={color}
+                  style={{ fontWeight: 600, letterSpacing: 0.3 }}
+                >
+                  {iface.platform.slice(0, 5).toUpperCase()}
+                </text>
+                {/* interface label */}
+                <text
+                  x={36}
+                  y={rowY}
+                  fontFamily="var(--font-mono)"
+                  fontSize="9"
+                  fill={isSunset ? "var(--text-dim)" : "var(--text-muted)"}
+                  style={{ textDecoration: isSunset ? "line-through" : undefined }}
+                >
+                  {shown}
+                </text>
+              </g>
+            );
+          })}
+        </g>
+      )}
     </g>
-  );
-  if (isUnlinked) return box;
-  // Wrap with Link to /apps/[id]
-  return (
-    <a href={`/apps/${encodeURIComponent(node.app_id)}`} style={{ cursor: "pointer" }}>
-      {box}
-      <title>{`${node.app_id} ${node.app_name} — ${node.total_interfaces} interfaces on this ${side === "upstream" ? "provider" : "consumer"} side`}</title>
-    </a>
   );
 }
 
@@ -2315,14 +2616,24 @@ function ProviderInterfaceCard({
   if (iface.base) details.push(["Base path", iface.base]);
   if (iface.interface_description) details.push(["Description", iface.interface_description]);
 
+  // data-peers: space-separated list of consumer app IDs, used by Landscape
+  // "click on downstream app box" → scrollIntoView on the first card that lists
+  // that consumer. Empty string if all consumers are unlinked.
+  const peerIds = iface.consumers
+    .map((c) => c.app_id)
+    .filter((id): id is string => !!id && id !== "__UNLINKED__")
+    .join(" ");
+
   return (
     <div
+      data-peers={peerIds}
       style={{
         border: "1px solid var(--border)",
         borderRadius: "var(--radius-md)",
         padding: "12px 14px",
         background: hasSunset ? "var(--bg-elevated)" : "var(--surface)",
         opacity: hasSunset ? 0.7 : 1,
+        scrollMarginTop: 80,
       }}
     >
       {/* Header — interface name + status */}
@@ -2502,9 +2813,16 @@ function ConsumerRowCard({ row }: { row: ConsumerRow }) {
   if (row.base) details.push(["Base path", row.base]);
   if (row.description) details.push(["Description", row.description]);
 
+  // data-peer: provider's app_id; used by Landscape "click on upstream app box"
+  // → scrollIntoView on the first consumer card where this app is the provider
+  const peerId = row.provider.app_id && row.provider.app_id !== "__UNLINKED__"
+    ? row.provider.app_id : "";
+
   return (
     <div
+      data-peer={peerId}
       style={{
+        scrollMarginTop: 80,
         border: "1px solid var(--border)",
         borderRadius: "var(--radius-md)",
         padding: "10px 14px",
