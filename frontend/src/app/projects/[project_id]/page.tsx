@@ -126,13 +126,8 @@ export default function ProjectDetailPage() {
         <SummaryCard label="Documents" value={pages.length} />
       </div>
 
-      {/* ── Applications table (primary content) ── */}
-      <div className="panel" style={{ padding: 0, overflow: "hidden", marginBottom: 24 }}>
-        <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <h3 style={{ margin: 0, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.6, color: "var(--text-muted)" }}>
-            Applications ({applications.length})
-          </h3>
-        </div>
+      {/* ── Applications table ── */}
+      <CollapsibleSection title="Applications" count={applications.length} defaultOpen>
         {applications.length === 0 ? (
           <div style={{ padding: 40, textAlign: "center", color: "var(--text-dim)", fontSize: 13 }}>
             No CMDB-linked applications found in this project's diagrams.
@@ -185,14 +180,11 @@ export default function ProjectDetailPage() {
             </tbody>
           </table>
         )}
-      </div>
+      </CollapsibleSection>
 
-      {/* ── Documents (secondary) ── */}
+      {/* ── Documents ── */}
       {pages.length > 0 && (
-        <div className="panel" style={{ marginBottom: 24 }}>
-          <h3 style={{ margin: "0 0 12px", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.6, color: "var(--text-muted)" }}>
-            Documents ({pages.length})
-          </h3>
+        <CollapsibleSection title="Documents" count={pages.length} defaultOpen>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {pages.map((p) => (
               <div key={p.page_id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
@@ -215,15 +207,12 @@ export default function ProjectDetailPage() {
               </div>
             ))}
           </div>
-        </div>
+        </CollapsibleSection>
       )}
 
-      {/* ── Diagrams (secondary) ── */}
+      {/* ── Diagrams ── */}
       {diagrams.length > 0 && (
-        <div className="panel">
-          <h3 style={{ margin: "0 0 12px", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.6, color: "var(--text-muted)" }}>
-            Diagrams ({diagrams.length})
-          </h3>
+        <CollapsibleSection title="Diagrams" count={diagrams.length}>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {diagrams.map((d) => (
               <div key={d.attachment_id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
@@ -240,8 +229,44 @@ export default function ProjectDetailPage() {
               </div>
             ))}
           </div>
-        </div>
+        </CollapsibleSection>
       )}
+    </div>
+  );
+}
+
+function CollapsibleSection({
+  title,
+  count,
+  defaultOpen = false,
+  children,
+}: {
+  title: string;
+  count: number;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="panel" style={{ padding: 0, overflow: "hidden", marginBottom: 24 }}>
+      <div
+        onClick={() => setOpen(!open)}
+        style={{
+          padding: "12px 20px",
+          borderBottom: open ? "1px solid var(--border)" : "none",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          cursor: "pointer",
+          userSelect: "none",
+        }}
+      >
+        <h3 style={{ margin: 0, fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.6, color: "var(--text-muted)", display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ fontSize: 10, color: "var(--text-dim)", width: 12 }}>{open ? "\u25be" : "\u25b8"}</span>
+          {title} ({count})
+        </h3>
+      </div>
+      {open && children}
     </div>
   );
 }
