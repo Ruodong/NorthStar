@@ -1224,6 +1224,7 @@ interface ConsumerRow {
 
 interface IntegrationPayload {
   app_id: string;
+  app_name?: string;
   platforms: string[];
   sunset_count: number;
   include_sunset: boolean;
@@ -1665,8 +1666,12 @@ function IntegrationLandscape({
   const PLATFORM_BOX_W = 80;
   const PLATFORM_BOX_H = 46;
   const PLATFORM_GAP = 12;
-  const ME_BOX_W = 150;
-  const ME_BOX_H = 70;
+  // ME composite: CONSUME port (narrow) + center (wide) + PROVIDE port (narrow)
+  // Curves terminate/originate at the outer edges of the ports, not the center box.
+  const ME_PORT_W = 40;
+  const ME_CENTER_W = 170;
+  const ME_BOX_W = ME_PORT_W * 2 + ME_CENTER_W;  // total composite width
+  const ME_BOX_H = 120;
 
   const cols = {
     upstream_apps: { x: 0, w: APP_BOX_W },
@@ -1926,7 +1931,17 @@ function IntegrationLandscape({
           })}
 
           {/* ME */}
-          <LandscapeMeBox x={mePos.x} y={mePos.y} w={ME_BOX_W} h={ME_BOX_H} appId={appId} appName={data.app_id === appId ? "" : ""} provCount={totalDownstream} consCount={totalUpstream} />
+          <LandscapeMeBox
+            x={mePos.x}
+            y={mePos.y}
+            w={ME_BOX_W}
+            h={ME_BOX_H}
+            portW={ME_PORT_W}
+            appId={appId}
+            appName={data.app_name || ""}
+            provCount={totalDownstream}
+            consCount={totalUpstream}
+          />
 
           {/* Downstream platforms */}
           {landscape.downstream_platforms.map((platform, i) => {
@@ -2062,56 +2077,188 @@ function LandscapePlatformBox({
   );
 }
 
+// Simple word-boundary splitter for center-panel app name.
+// SVG has no native wrap; we emit multiple <tspan>s split at word breaks.
+function wrapAppName(name: string, maxCharsPerLine: number, maxLines: number): string[] {
+  if (!name) return [];
+  const words = name.split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let cur = "";
+  for (const w of words) {
+    const tryLine = cur ? `${cur} ${w}` : w;
+    if (tryLine.length <= maxCharsPerLine) {
+      cur = tryLine;
+    } else {
+      if (cur) lines.push(cur);
+      cur = w;
+    }
+    if (lines.length >= maxLines) break;
+  }
+  if (cur && lines.length < maxLines) lines.push(cur);
+  // If the last line is too long, truncate with ellipsis
+  if (lines.length > 0) {
+    const last = lines[lines.length - 1];
+    if (last.length > maxCharsPerLine) {
+      lines[lines.length - 1] = last.slice(0, maxCharsPerLine - 1) + "…";
+    }
+  }
+  return lines;
+}
+
 function LandscapeMeBox({
-  x, y, w, h, appId, provCount, consCount,
+  x, y, w, h, appId, appName, provCount, consCount, portW,
 }: {
   x: number; y: number; w: number; h: number;
   appId: string;
   appName?: string;
   provCount: number;
   consCount: number;
+  portW: number;     // width of each side port (CONSUME / PROVIDE)
 }) {
+  const centerW = w - portW * 2;
+  const centerX = portW;
+
+  const AMBER = "#f6a623";
+  const BLUE = "#6ba6e8";
+
+  // App name wrapped into 2-3 lines at ~18 chars per line
+  const nameLines = wrapAppName(appName || "", 18, 3);
+
+  // Vertical center Y for the main text block
+  const idY = 32;
+  const nameStartY = 56;
+  const nameLineH = 14;
+
   return (
     <g transform={`translate(${x}, ${y})`}>
-      <rect
-        width={w}
-        height={h}
-        rx={6}
-        fill="var(--bg-elevated)"
-        stroke="var(--accent)"
-        strokeWidth={2}
-      />
-      <text
-        x={w / 2}
-        y={20}
-        textAnchor="middle"
-        fontFamily="var(--font-display)"
-        fontSize="13"
-        fill="var(--accent)"
-        style={{ fontWeight: 600 }}
-      >
-        {appId}
-      </text>
-      <text
-        x={w / 2}
-        y={40}
-        textAnchor="middle"
-        fontFamily="var(--font-mono)"
-        fontSize="10"
-        fill="var(--text-dim)"
-      >
-        {consCount} ◀ me ▶ {provCount}
-      </text>
-      <text
-        x={w / 2}
-        y={58}
-        textAnchor="middle"
-        fontFamily="var(--font-body)"
-        fontSize="9"
-        fill="var(--text-muted)"
-      >
-        consume · provide
-      </text>
+      {/* ── CONSUME port (left) ── */}
+      <g>
+        <rect
+          width={portW}
+          height={h}
+          rx={6}
+          fill={`${BLUE}14`}
+          stroke={BLUE}
+          strokeWidth={1.5}
+        />
+        {/* Rotated "CONSUME" label — centered, reads bottom-to-top */}
+        <text
+          transform={`rotate(-90, ${portW / 2}, ${h / 2 - 10})`}
+          x={portW / 2}
+          y={h / 2 - 10}
+          textAnchor="middle"
+          fontFamily="var(--font-mono)"
+          fontSize="10"
+          fill={BLUE}
+          style={{ letterSpacing: "2.5px", fontWeight: 600 }}
+        >
+          CONSUME
+        </text>
+        {/* Count + arrow at the bottom (horizontal) */}
+        <text
+          x={portW / 2}
+          y={h - 22}
+          textAnchor="middle"
+          fontFamily="var(--font-mono)"
+          fontSize="13"
+          fill={BLUE}
+          style={{ fontWeight: 600 }}
+        >
+          {consCount}
+        </text>
+        <text
+          x={portW / 2}
+          y={h - 8}
+          textAnchor="middle"
+          fontSize="11"
+          fill={BLUE}
+        >
+          ◀
+        </text>
+      </g>
+
+      {/* ── ME center ── */}
+      <g transform={`translate(${centerX}, 0)`}>
+        <rect
+          width={centerW}
+          height={h}
+          rx={6}
+          fill="var(--bg-elevated)"
+          stroke={AMBER}
+          strokeWidth={2.5}
+        />
+        {/* app_id */}
+        <text
+          x={centerW / 2}
+          y={idY}
+          textAnchor="middle"
+          fontFamily="var(--font-display)"
+          fontSize="16"
+          fill={AMBER}
+          style={{ fontWeight: 600, letterSpacing: 0.3 }}
+        >
+          {appId}
+        </text>
+        {/* app_name — multiline */}
+        {nameLines.map((line, i) => (
+          <text
+            key={i}
+            x={centerW / 2}
+            y={nameStartY + i * nameLineH}
+            textAnchor="middle"
+            fontFamily="var(--font-body)"
+            fontSize="11"
+            fill="var(--text)"
+            style={{ fontWeight: 500 }}
+          >
+            {line}
+          </text>
+        ))}
+      </g>
+
+      {/* ── PROVIDE port (right) ── */}
+      <g transform={`translate(${portW + centerW}, 0)`}>
+        <rect
+          width={portW}
+          height={h}
+          rx={6}
+          fill={`${AMBER}14`}
+          stroke={AMBER}
+          strokeWidth={1.5}
+        />
+        <text
+          transform={`rotate(-90, ${portW / 2}, ${h / 2 - 10})`}
+          x={portW / 2}
+          y={h / 2 - 10}
+          textAnchor="middle"
+          fontFamily="var(--font-mono)"
+          fontSize="10"
+          fill={AMBER}
+          style={{ letterSpacing: "2.5px", fontWeight: 600 }}
+        >
+          PROVIDE
+        </text>
+        <text
+          x={portW / 2}
+          y={h - 22}
+          textAnchor="middle"
+          fontFamily="var(--font-mono)"
+          fontSize="13"
+          fill={AMBER}
+          style={{ fontWeight: 600 }}
+        >
+          {provCount}
+        </text>
+        <text
+          x={portW / 2}
+          y={h - 8}
+          textAnchor="middle"
+          fontSize="11"
+          fill={AMBER}
+        >
+          ▶
+        </text>
+      </g>
     </g>
   );
 }

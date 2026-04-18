@@ -719,8 +719,15 @@ async def get_application_integrations(
     )
     total_consumer = sum(v["total"] for v in consumer_out.values())
 
+    # Fetch current app's CMDB canonical name for Landscape display
+    app_name = await pg_client.fetchval(
+        "SELECT name FROM northstar.ref_application WHERE app_id = $1",
+        app_id,
+    )
+
     return ApiResponse(data={
         "app_id": app_id,
+        "app_name": app_name or "",
         "platforms": all_platforms,
         "sunset_count": sunset_count,
         "include_sunset": include_sunset,

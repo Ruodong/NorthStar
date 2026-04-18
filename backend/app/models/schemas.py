@@ -195,3 +195,52 @@ class ManualAppAlias(BaseModel):
     decided_at: Optional[datetime] = None
     decided_by: Optional[str] = None
     note: Optional[str] = None
+
+
+# ── Architecture Template Settings (Phase 1) ───────────────────────
+# See .specify/features/architecture-template-settings/spec.md.
+
+class ArchitectureTemplateSource(BaseModel):
+    """One row of northstar.ref_architecture_template_source.
+
+    The table holds exactly three rows, keyed by `layer` ∈ {business,
+    application, technical}. Each row points at a Confluence page whose
+    subtree contains the EA-authored template diagrams for that layer.
+    """
+    layer: str
+    title: str = ""
+    confluence_url: str = ""
+    confluence_page_id: Optional[str] = None
+    last_synced_at: Optional[datetime] = None
+    last_sync_status: Optional[str] = None  # None|'syncing'|'ok'|'error'
+    last_sync_error: Optional[str] = None
+    notes: Optional[str] = None
+    updated_at: Optional[datetime] = None
+    diagram_count: int = 0
+
+
+class ArchitectureTemplateSourceUpdate(BaseModel):
+    """PUT body — only supplied fields update."""
+    title: Optional[str] = None
+    confluence_url: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ArchitectureTemplateDiagram(BaseModel):
+    """A drawio attachment found under an architecture template subtree."""
+    attachment_id: str
+    file_name: str
+    media_type: str = ""
+    file_size: Optional[int] = None
+    page_id: str
+    page_title: str = ""
+    page_url: str = ""
+    synced_at: Optional[datetime] = None
+    thumbnail_url: str
+    raw_url: str
+    preview_url: str
+
+
+class ArchitectureTemplateDiagramList(BaseModel):
+    total: int
+    items: list[ArchitectureTemplateDiagram] = Field(default_factory=list)

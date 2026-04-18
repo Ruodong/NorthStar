@@ -19,6 +19,7 @@ const NAV_GROUPS = [
   /* Admin — ingestion + raw data */
   [
     { href: "/admin", label: "Admin" },
+    { href: "/settings", label: "Settings" },
   ],
 ];
 

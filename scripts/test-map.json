@@ -35,6 +35,9 @@
     "backend/app/routers/aliases.py": {
       "api": ["api-tests/test_aliases.py"]
     },
+    "backend/app/routers/settings.py": {
+      "api": ["api-tests/test_settings_architecture_templates.py"]
+    },
     "backend/app/services/graph_query.py": {
       "api": ["api-tests/test_ontology.py", "api-tests/test_graph.py"]
     },
@@ -105,6 +108,9 @@
     },
     "scripts/sync_ea_documents.py": {
       "api": ["api-tests/test_ea_documents.py"]
+    },
+    "scripts/sync_architecture_templates.py": {
+      "api": ["api-tests/test_settings_architecture_templates.py"]
     }
   },
   "wildcards": {

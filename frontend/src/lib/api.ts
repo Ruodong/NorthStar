@@ -26,6 +26,18 @@ async function post<T>(path: string, payload: unknown): Promise<T> {
   return body.data as T;
 }
 
+async function put<T>(path: string, payload: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`PUT ${path} -> ${res.status}`);
+  const body = (await res.json()) as ApiResponse<T>;
+  if (!body.success) throw new Error(body.error || "API error");
+  return body.data as T;
+}
+
 export interface KpiSummary {
   total_apps: number;
   total_integrations: number;
@@ -109,6 +121,45 @@ export interface IngestionTask {
   }>;
 }
 
+// ── Architecture Template Settings ───────────────────────────────
+export interface ArchitectureTemplateSource {
+  layer: "business" | "application" | "technical";
+  title: string;
+  confluence_url: string;
+  confluence_page_id: string | null;
+  last_synced_at: string | null;
+  last_sync_status: "syncing" | "ok" | "error" | null;
+  last_sync_error: string | null;
+  notes: string | null;
+  updated_at: string | null;
+  diagram_count: number;
+}
+
+export interface ArchitectureTemplateDiagram {
+  attachment_id: string;
+  file_name: string;
+  media_type: string;
+  file_size: number | null;
+  page_id: string;
+  page_title: string;
+  page_url: string;
+  synced_at: string | null;
+  thumbnail_url: string;
+  raw_url: string;
+  preview_url: string;
+}
+
+export interface ArchitectureTemplateDiagramList {
+  total: number;
+  items: ArchitectureTemplateDiagram[];
+}
+
+export interface ArchitectureTemplateSourceUpdate {
+  title?: string;
+  confluence_url?: string;
+  notes?: string;
+}
+
 export const api = {
   summary: () => get<KpiSummary>("/api/analytics/summary"),
   statusDistribution: () => get<StatusBucket[]>("/api/analytics/status-distribution"),
@@ -129,4 +180,33 @@ export const api = {
   runIngestion: (fiscal_years: string[]) =>
     post<IngestionTask>("/api/ingestion/run", { fiscal_years }),
   getTask: (taskId: string) => get<IngestionTask>(`/api/ingestion/tasks/${taskId}`),
+
+  // Architecture Template Settings (Phase 1)
+  listArchitectureTemplates: () =>
+    get<ArchitectureTemplateSource[]>("/api/settings/architecture-templates"),
+  updateArchitectureTemplate: (
+    layer: "business" | "application" | "technical",
+    update: ArchitectureTemplateSourceUpdate,
+  ) =>
+    put<ArchitectureTemplateSource>(
+      `/api/settings/architecture-templates/${layer}`,
+      update,
+    ),
+  syncArchitectureTemplate: (layer: "business" | "application" | "technical") =>
+    post<{ layer: string; status: string }>(
+      `/api/settings/architecture-templates/${layer}/sync`,
+      {},
+    ),
+  listArchitectureTemplateDiagrams: (
+    layer: "business" | "application" | "technical",
+    params: { limit?: number; offset?: number } = {},
+  ) => {
+    const q = new URLSearchParams();
+    if (params.limit != null) q.set("limit", String(params.limit));
+    if (params.offset != null) q.set("offset", String(params.offset));
+    const qs = q.toString();
+    return get<ArchitectureTemplateDiagramList>(
+      `/api/settings/architecture-templates/${layer}/diagrams${qs ? "?" + qs : ""}`,
+    );
+  },
 };

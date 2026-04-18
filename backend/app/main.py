@@ -19,6 +19,7 @@ from app.routers import (
     ingestion,
     masters,
     search,
+    settings as settings_router,
     whats_new,
 )
 from app.services import neo4j_client, pg_client
@@ -138,6 +139,7 @@ app.include_router(aliases.router)
 app.include_router(whats_new.router)
 app.include_router(search.router)
 app.include_router(ea_documents.router)
+app.include_router(settings_router.router)
 
 
 @app.get("/")

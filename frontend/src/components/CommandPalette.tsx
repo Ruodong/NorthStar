@@ -64,6 +64,23 @@ interface RecentItem {
   ts: number;
 }
 
+// Static quick-jump destinations. Matched by substring against the query
+// terms listed in `keywords`. kind="page" → router.push to the `href`.
+interface StaticPage {
+  href: string;
+  label: string;
+  sub: string;
+  keywords: string[];
+}
+const STATIC_PAGES: StaticPage[] = [
+  {
+    href: "/settings",
+    label: "Settings — Architecture Templates",
+    sub: "Configure Confluence URLs for BA / AA / TA",
+    keywords: ["settings", "setting", "template", "templates", "confluence", "architecture", "ba", "aa", "ta"],
+  },
+];
+
 const RECENT_KEY = "northstar.recentSearches";
 const MAX_RECENT = 8;
 const DEBOUNCE_MS = 150;
@@ -182,10 +199,30 @@ export function CommandPalette() {
     };
   }, [qDebounced, open]);
 
+  // --- Static pages matched by query substring (shown first) ---
+  const matchedPages = useMemo(() => {
+    const query = qDebounced.trim().toLowerCase();
+    if (query.length < 2) return [];
+    return STATIC_PAGES.filter((p) =>
+      p.keywords.some((k) => k.includes(query) || query.includes(k)) ||
+      p.label.toLowerCase().includes(query),
+    );
+  }, [qDebounced]);
+
   // --- Flat list of selectable items (for keyboard nav) ---
   const items = useMemo(() => {
-    const out: Array<{ kind: "app" | "project" | "ea_doc"; id: string; label: string; sub: string; url?: string }> =
-      [];
+    const out: Array<{
+      kind: "app" | "project" | "ea_doc" | "page";
+      id: string;
+      label: string;
+      sub: string;
+      url?: string;
+      href?: string;
+    }> = [];
+    // Pages first — they're quick-jumps.
+    for (const p of matchedPages) {
+      out.push({ kind: "page", id: p.href, label: p.label, sub: p.sub, href: p.href });
+    }
     if (data) {
       for (const a of data.applications) {
         out.push({
@@ -214,11 +251,23 @@ export function CommandPalette() {
       }
     }
     return out;
-  }, [data]);
+  }, [data, matchedPages]);
 
   // --- Navigate on select ---
   const onSelect = useCallback(
-    (item: { kind: "app" | "project" | "ea_doc"; id: string; label: string; url?: string }) => {
+    (item: {
+      kind: "app" | "project" | "ea_doc" | "page";
+      id: string;
+      label: string;
+      url?: string;
+      href?: string;
+    }) => {
+      // Quick-jump pages — internal navigation, no recent persistence
+      if (item.kind === "page" && item.href) {
+        setOpen(false);
+        router.push(item.href);
+        return;
+      }
       // EA docs open Confluence in a new tab — don't persist as recent
       if (item.kind === "ea_doc" && item.url) {
         window.open(item.url, "_blank", "noopener");
@@ -392,10 +441,31 @@ export function CommandPalette() {
             </div>
           )}
 
+          {matchedPages.length > 0 && (
+            <ResultGroup label="Pages">
+              {matchedPages.map((p, i) => {
+                const idxFlat = i;
+                return (
+                  <ResultRow
+                    key={`page-${p.href}`}
+                    selected={selectedIdx === idxFlat}
+                    onClick={() =>
+                      onSelect({ kind: "page", id: p.href, label: p.label, href: p.href })
+                    }
+                    badge="NAV"
+                    label={p.label}
+                    sub={p.sub}
+                    mono={false}
+                  />
+                );
+              })}
+            </ResultGroup>
+          )}
+
           {data && data.applications.length > 0 && (
             <ResultGroup label={`Applications (${data.applications.length})`}>
               {data.applications.map((a, i) => {
-                const idxFlat = i;
+                const idxFlat = matchedPages.length + i;
                 return (
                   <ResultRow
                     key={`app-${a.app_id}`}
@@ -417,7 +487,7 @@ export function CommandPalette() {
           {data && data.projects.length > 0 && (
             <ResultGroup label={`Projects (${data.projects.length})`}>
               {data.projects.map((p, i) => {
-                const idxFlat = (data?.applications.length || 0) + i;
+                const idxFlat = matchedPages.length + (data?.applications.length || 0) + i;
                 return (
                   <ResultRow
                     key={`proj-${p.project_id}`}
@@ -443,7 +513,7 @@ export function CommandPalette() {
           {data && (data.ea_documents || []).length > 0 && (
             <ResultGroup label={`EA Standards & Guidelines (${data.ea_documents.length})`}>
               {data.ea_documents.map((d, i) => {
-                const idxFlat = (data?.applications.length || 0) + (data?.projects.length || 0) + i;
+                const idxFlat = matchedPages.length + (data?.applications.length || 0) + (data?.projects.length || 0) + i;
                 return (
                   <ResultRow
                     key={`ea-${d.page_id}`}
