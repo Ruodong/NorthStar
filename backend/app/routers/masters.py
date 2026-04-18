@@ -922,13 +922,18 @@ async def get_project(project_id: str) -> ApiResponse:
         project_id,
     )
 
-    # Drawio attachments
+    # Drawio attachments + paired PNG thumbnail
     diagrams = await pg_client.fetch(
         """
         SELECT ca.attachment_id, ca.title AS file_name, ca.file_kind,
-               cp.page_id::text, cp.title AS page_title, cp.fiscal_year
+               cp.page_id::text, cp.title AS page_title, cp.fiscal_year,
+               png.attachment_id AS thumbnail_id
         FROM northstar.confluence_attachment ca
         JOIN northstar.confluence_page cp ON cp.page_id = ca.page_id
+        LEFT JOIN northstar.confluence_attachment png
+            ON png.page_id = ca.page_id
+            AND png.file_kind = 'image'
+            AND replace(png.title, '.png', '') = replace(ca.title, '.drawio', '')
         WHERE (cp.project_id = $1 OR cp.root_project_id = $1)
           AND ca.file_kind IN ('drawio', 'drawio_xml')
         ORDER BY cp.fiscal_year DESC, ca.title

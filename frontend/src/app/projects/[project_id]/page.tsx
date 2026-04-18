@@ -30,6 +30,7 @@ interface DiagramRef {
   page_id: string;
   page_title: string;
   fiscal_year: string | null;
+  thumbnail_id: number | null;
 }
 
 interface ProjectDetail {
@@ -213,20 +214,65 @@ export default function ProjectDetailPage() {
       {/* ── Diagrams ── */}
       {diagrams.length > 0 && (
         <CollapsibleSection title="Diagrams" count={diagrams.length}>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 12, padding: 16 }}>
             {diagrams.map((d) => (
-              <div key={d.attachment_id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
-                {d.fiscal_year && (
-                  <span style={{ fontSize: 10, fontFamily: "var(--font-mono)", color: "var(--text-dim)", minWidth: 50 }}>
-                    {d.fiscal_year}
-                  </span>
-                )}
-                <span style={{ fontSize: 9, padding: "2px 6px", background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", fontFamily: "var(--font-mono)", color: "var(--accent)", textTransform: "uppercase" }}>
-                  {d.file_kind}
-                </span>
-                <span style={{ fontSize: 13, color: "var(--text)", flex: 1 }}>{d.file_name}</span>
-                <span style={{ fontSize: 11, color: "var(--text-dim)" }}>{d.page_title}</span>
-              </div>
+              <Link
+                key={d.attachment_id}
+                href={`/admin/confluence/${d.page_id}?tab=extracted`}
+                style={{ textDecoration: "none", color: "inherit" }}
+              >
+                <div style={{
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius-sm)",
+                  overflow: "hidden",
+                  transition: "border-color 0.15s",
+                  cursor: "pointer",
+                }}
+                  onMouseOver={(e) => { e.currentTarget.style.borderColor = "var(--accent)"; }}
+                  onMouseOut={(e) => { e.currentTarget.style.borderColor = "var(--border)"; }}
+                >
+                  {/* Thumbnail */}
+                  <div style={{
+                    height: 160,
+                    background: "var(--bg-elevated)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    overflow: "hidden",
+                  }}>
+                    {d.thumbnail_id ? (
+                      <img
+                        src={`/api/admin/confluence/attachments/${d.thumbnail_id}/raw`}
+                        alt={d.file_name}
+                        style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
+                        loading="lazy"
+                      />
+                    ) : (
+                      <span style={{ fontSize: 32, color: "var(--text-dim)", opacity: 0.3 }}>
+                        .drawio
+                      </span>
+                    )}
+                  </div>
+                  {/* Caption */}
+                  <div style={{ padding: "8px 10px", borderTop: "1px solid var(--border)" }}>
+                    <div style={{
+                      fontSize: 11,
+                      color: "var(--text)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                      title={d.file_name}
+                    >
+                      {d.file_name.replace(/\.drawio(\.xml)?$/, "")}
+                    </div>
+                    <div style={{ fontSize: 10, color: "var(--text-dim)", marginTop: 2 }}>
+                      {d.page_title}
+                      {d.fiscal_year && <span style={{ marginLeft: 8, fontFamily: "var(--font-mono)" }}>{d.fiscal_year}</span>}
+                    </div>
+                  </div>
+                </div>
+              </Link>
             ))}
           </div>
         </CollapsibleSection>
