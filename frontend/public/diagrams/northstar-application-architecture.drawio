@@ -1,137 +1,137 @@
-<mxfile host="northstar.lenovo" modified="2026-04-17T23:30:00.000Z" agent="NorthStar/1.0" version="24.6.4" type="device">
+<mxfile host="northstar.lenovo" modified="2026-04-17T23:50:00.000Z" agent="NorthStar/1.0" version="24.6.4" type="device">
   <diagram id="NS-arch-001" name="NorthStar Application Architecture">
-    <mxGraphModel dx="1654" dy="1169" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
+    <mxGraphModel dx="1800" dy="1300" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1300" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
 
         <!-- ===== Title ===== -->
-        <mxCell id="title" value="Title：NorthStar Application Architecture Diagram" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=18;fontStyle=1;" vertex="1" parent="1">
-          <mxGeometry x="400" y="20" width="800" height="40" as="geometry" />
+        <mxCell id="title" value="Title：NorthStar Application Architecture Diagram" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=20;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="500" y="20" width="800" height="40" as="geometry" />
         </mxCell>
 
-        <!-- ===== Legend ===== -->
-        <mxCell id="legendBox" value="Legend" style="rounded=0;whiteSpace=wrap;html=1;fillColor=none;strokeColor=#000000;verticalAlign=top;fontStyle=1;" vertex="1" parent="1">
-          <mxGeometry x="60" y="70" width="980" height="120" as="geometry" />
-        </mxCell>
-        <mxCell id="legExist" value="ID: A000001&lt;br&gt;&lt;b&gt;Exist System (No Change)&lt;/b&gt;&lt;br&gt;&lt;br&gt;Yellow = already deployed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=center;" vertex="1" parent="1">
-          <mxGeometry x="80" y="100" width="180" height="80" as="geometry" />
-        </mxCell>
-        <mxCell id="legNew" value="ID: A000001&lt;br&gt;&lt;b&gt;New Application&lt;/b&gt;&lt;br&gt;&lt;br&gt;Red = NorthStar core" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=center;" vertex="1" parent="1">
-          <mxGeometry x="280" y="100" width="180" height="80" as="geometry" />
-        </mxCell>
-        <mxCell id="leg3rd" value="ID: A000001&lt;br&gt;&lt;b&gt;3rd-party / Shared Infra&lt;/b&gt;&lt;br&gt;&lt;br&gt;Blue = external" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=center;" vertex="1" parent="1">
-          <mxGeometry x="480" y="100" width="180" height="80" as="geometry" />
-        </mxCell>
-        <mxCell id="legRole" value="&lt;b&gt;Role / User Group&lt;/b&gt;&lt;br&gt;&lt;br&gt;Green = human user" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#008a00;strokeColor=#005700;fontColor=#ffffff;align=center;" vertex="1" parent="1">
-          <mxGeometry x="680" y="100" width="160" height="80" as="geometry" />
-        </mxCell>
-        <mxCell id="legEdges" value="Edge labels: [Event] [Query] [Embed] [Sync]" style="text;html=1;align=center;verticalAlign=middle;fontSize=11;" vertex="1" parent="1">
-          <mxGeometry x="860" y="125" width="180" height="30" as="geometry" />
+        <!-- ===== Top row: Coding Machine | IT Architects | GitLab ===== -->
+        <mxCell id="codingMachine" value="&lt;b&gt;Coding Machine&lt;/b&gt;&lt;br&gt;&lt;br&gt;Home = Mac Mini (192.168.68.59)&lt;br&gt;Office = MacBook Air&lt;br&gt;git + ssh + Lenovo VPN" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#008a00;strokeColor=#005700;fontColor=#ffffff;align=center;" vertex="1" parent="1">
+          <mxGeometry x="120" y="90" width="260" height="120" as="geometry" />
         </mxCell>
 
-        <!-- ===== Roles row (top of architecture) ===== -->
-        <mxCell id="roleArchitect" value="&lt;b&gt;IT Architects&lt;/b&gt;&lt;br&gt;&lt;br&gt;&lt;div&gt;Primary user: search, browse application catalog, understand impact&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#008a00;strokeColor=#005700;fontColor=#ffffff;align=center;" vertex="1" parent="1">
-          <mxGeometry x="700" y="240" width="220" height="100" as="geometry" />
+        <mxCell id="roleArchitect" value="&lt;b&gt;IT Architects&lt;/b&gt;&lt;br&gt;&lt;br&gt;Primary user&lt;br&gt;search · browse · understand impact" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#008a00;strokeColor=#005700;fontColor=#ffffff;align=center;" vertex="1" parent="1">
+          <mxGeometry x="780" y="90" width="260" height="120" as="geometry" />
         </mxCell>
 
-        <!-- ===== NorthStar core container (red, new) ===== -->
-        <mxCell id="nsCore" value="ID: NS-001&lt;br&gt;&lt;b&gt;NorthStar&lt;/b&gt;&lt;br&gt;&lt;br&gt;IT Architecture Reference Tool&lt;br&gt;(Server 71 Docker / Office MacBook Docker)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=center;verticalAlign=top;fontStyle=1;dashed=0;" vertex="1" parent="1">
-          <mxGeometry x="510" y="400" width="600" height="320" as="geometry" />
+        <mxCell id="gitlab" value="&lt;b&gt;GitLab xpaas&lt;/b&gt;&lt;br&gt;&lt;br&gt;Code repo (branch: dev)&lt;br&gt;gitlab.xpaas.lenovo.com" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=center;" vertex="1" parent="1">
+          <mxGeometry x="1430" y="90" width="260" height="120" as="geometry" />
         </mxCell>
-        <!-- inner sub-components -->
+
+        <!-- ===== NorthStar core container (red, center) ===== -->
+        <mxCell id="nsCore" value="ID: NS-001&lt;br&gt;&lt;b&gt;NorthStar&lt;/b&gt;&lt;br&gt;&lt;br&gt;IT Architecture Reference Tool&lt;br&gt;(Server 71 Docker · or local Office Docker)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=center;verticalAlign=top;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="500" y="430" width="800" height="440" as="geometry" />
+        </mxCell>
         <mxCell id="nsFE" value="&lt;b&gt;Frontend&lt;/b&gt;&lt;br&gt;Next.js 15&lt;br&gt;:3003" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=center;" vertex="1" parent="1">
-          <mxGeometry x="540" y="490" width="160" height="80" as="geometry" />
+          <mxGeometry x="540" y="540" width="200" height="90" as="geometry" />
         </mxCell>
         <mxCell id="nsBE" value="&lt;b&gt;Backend&lt;/b&gt;&lt;br&gt;FastAPI&lt;br&gt;:8001 (host net)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=center;" vertex="1" parent="1">
-          <mxGeometry x="730" y="490" width="160" height="80" as="geometry" />
+          <mxGeometry x="800" y="540" width="200" height="90" as="geometry" />
         </mxCell>
         <mxCell id="nsCV" value="&lt;b&gt;Converter&lt;/b&gt;&lt;br&gt;Office→PDF&lt;br&gt;127.0.0.1:8090" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=center;" vertex="1" parent="1">
-          <mxGeometry x="920" y="490" width="160" height="80" as="geometry" />
+          <mxGeometry x="1060" y="540" width="200" height="90" as="geometry" />
         </mxCell>
-        <mxCell id="nsPG" value="&lt;b&gt;Postgres + Apache AGE&lt;/b&gt;&lt;br&gt;Relational schema: northstar&lt;br&gt;Graph: ns_graph (AGE) — :5434" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=center;" vertex="1" parent="1">
-          <mxGeometry x="640" y="600" width="340" height="80" as="geometry" />
+        <mxCell id="nsPG" value="&lt;b&gt;Postgres + Apache AGE&lt;/b&gt;&lt;br&gt;Relational schema: northstar&lt;br&gt;Graph: ns_graph (AGE)&lt;br&gt;:5434" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;align=center;" vertex="1" parent="1">
+          <mxGeometry x="650" y="700" width="500" height="120" as="geometry" />
         </mxCell>
 
-        <!-- ===== Master data sources (yellow exist, left) ===== -->
-        <mxCell id="egm" value="ID: A000-EGM&lt;br&gt;&lt;b&gt;EGM&lt;/b&gt;&lt;br&gt;&lt;br&gt;Lenovo Enterprise Governance Management&lt;br&gt;(CMDB master)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=center;" vertex="1" parent="1">
-          <mxGeometry x="100" y="380" width="200" height="100" as="geometry" />
+        <!-- ===== Master data sources (yellow exist, left column) ===== -->
+        <mxCell id="egm" value="ID: A000-EGM&lt;br&gt;&lt;b&gt;EGM&lt;/b&gt;&lt;br&gt;&lt;br&gt;Lenovo Enterprise Governance Mgmt&lt;br&gt;(CMDB master)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=center;" vertex="1" parent="1">
+          <mxGeometry x="100" y="430" width="240" height="110" as="geometry" />
         </mxCell>
         <mxCell id="eam" value="ID: A000-EAM&lt;br&gt;&lt;b&gt;EAM&lt;/b&gt;&lt;br&gt;&lt;br&gt;Enterprise App Management&lt;br&gt;(MSPO / project master)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=center;" vertex="1" parent="1">
-          <mxGeometry x="100" y="510" width="200" height="100" as="geometry" />
+          <mxGeometry x="100" y="570" width="240" height="110" as="geometry" />
         </mxCell>
         <mxCell id="infraops" value="ID: A000-IOPS&lt;br&gt;&lt;b&gt;infraops_dev&lt;/b&gt;&lt;br&gt;&lt;br&gt;Deployment master&lt;br&gt;10.196.155.195" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=center;" vertex="1" parent="1">
-          <mxGeometry x="100" y="640" width="200" height="100" as="geometry" />
+          <mxGeometry x="100" y="710" width="240" height="110" as="geometry" />
         </mxCell>
 
-        <!-- ===== Confluence (yellow exist, top right) ===== -->
+        <!-- ===== Right column: Confluence (yellow), then OSS2 + PG195 (blue) ===== -->
         <mxCell id="confluence" value="ID: A000-CONF&lt;br&gt;&lt;b&gt;Confluence (km.xpaas)&lt;/b&gt;&lt;br&gt;&lt;br&gt;Page + drawio attachment source&lt;br&gt;km.xpaas.lenovo.com" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=center;" vertex="1" parent="1">
-          <mxGeometry x="1310" y="380" width="220" height="100" as="geometry" />
-        </mxCell>
-
-        <!-- ===== Shared infra / 3rd-party (blue) ===== -->
-        <mxCell id="gitlab" value="&lt;b&gt;GitLab xpaas&lt;/b&gt;&lt;br&gt;&lt;br&gt;Code repo (branch: dev)&lt;br&gt;gitlab.xpaas.lenovo.com" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=center;" vertex="1" parent="1">
-          <mxGeometry x="700" y="60" width="220" height="80" as="geometry" />
+          <mxGeometry x="1460" y="430" width="240" height="110" as="geometry" />
         </mxCell>
         <mxCell id="oss2" value="&lt;b&gt;Lenovo OSS2 (S3)&lt;/b&gt;&lt;br&gt;&lt;br&gt;Attachment object store&lt;br&gt;bucket: lenovo-it&lt;br&gt;prefix: pm/northstar/attachments" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=center;" vertex="1" parent="1">
-          <mxGeometry x="1310" y="510" width="220" height="120" as="geometry" />
+          <mxGeometry x="1460" y="570" width="240" height="120" as="geometry" />
         </mxCell>
         <mxCell id="pg195" value="&lt;b&gt;Lenovo PG 195&lt;/b&gt;&lt;br&gt;&lt;br&gt;Shared dev DB&lt;br&gt;dxp_config_nacos&lt;br&gt;schema: northstar" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=center;" vertex="1" parent="1">
-          <mxGeometry x="1310" y="660" width="220" height="120" as="geometry" />
-        </mxCell>
-
-        <!-- ===== Coding Machine (role-like, but a host) ===== -->
-        <mxCell id="codingMachine" value="&lt;b&gt;Coding Machine&lt;/b&gt;&lt;br&gt;Home = Mac Mini (192.168.68.59)&lt;br&gt;Office = MacBook Air&lt;br&gt;&lt;br&gt;git + ssh + Lenovo VPN" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#008a00;strokeColor=#005700;fontColor=#ffffff;align=center;" vertex="1" parent="1">
-          <mxGeometry x="380" y="60" width="220" height="100" as="geometry" />
+          <mxGeometry x="1460" y="720" width="240" height="120" as="geometry" />
         </mxCell>
 
         <!-- ===== Edges ===== -->
-        <!-- Architect → Frontend [Query] -->
-        <mxCell id="e1" value="Query (search/browse)" style="endArrow=classic;html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=10;" edge="1" parent="1" source="roleArchitect" target="nsFE">
+
+        <!-- Coding Machine ↔ GitLab (top row, horizontal sync) -->
+        <mxCell id="e_cm_gl" value="Sync (git push/pull)" style="endArrow=classic;startArrow=classic;html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=11;dashed=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="codingMachine" target="gitlab">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <!-- EGM → Backend [Event] -->
-        <mxCell id="e2" value="Event&#10;(master data sync)" style="endArrow=classic;html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;dashed=0;fontSize=10;" edge="1" parent="1" source="egm" target="nsBE">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <!-- EAM → Backend [Event] -->
-        <mxCell id="e3" value="Event&#10;(project master)" style="endArrow=classic;html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=10;" edge="1" parent="1" source="eam" target="nsBE">
-          <mxGeometry relative="1" as="geometry" />
-        </mxCell>
-        <!-- infraops_dev → Backend [Event] -->
-        <mxCell id="e4" value="Event&#10;(deployment master)" style="endArrow=classic;html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=10;" edge="1" parent="1" source="infraops" target="nsPG">
+        <!-- Coding Machine → NorthStar (ssh/rsync, down-right) -->
+        <mxCell id="e_cm_ns" value="Sync (ssh / rsync)" style="endArrow=classic;html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=11;dashed=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.25;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="codingMachine" target="nsCore">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <!-- Confluence → Backend [Query] -->
-        <mxCell id="e5" value="Query&#10;(page + drawio fetch)" style="endArrow=classic;html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=10;" edge="1" parent="1" source="confluence" target="nsBE">
+        <!-- GitLab → NorthStar (deploy via git pull, down-left) -->
+        <mxCell id="e_gl_ns" value="Sync (git pull + rebuild)" style="endArrow=classic;html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=11;dashed=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.75;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="gitlab" target="nsCore">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <!-- Backend ↔ OSS2 [Embed] -->
-        <mxCell id="e6" value="Embed&#10;(attachment store)" style="endArrow=classic;startArrow=classic;html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=10;" edge="1" parent="1" source="nsBE" target="oss2">
+        <!-- IT Architects → Frontend (Query) -->
+        <mxCell id="e_arch_fe" value="Query (search / browse)" style="endArrow=classic;html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=11;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="roleArchitect" target="nsFE">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <!-- Postgres ↔ 195 [Event sync] -->
-        <mxCell id="e7" value="Event&#10;(env-sync DB)" style="endArrow=classic;startArrow=classic;html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=10;" edge="1" parent="1" source="nsPG" target="pg195">
+        <!-- EGM → Backend (Event, horizontal right) -->
+        <mxCell id="e_egm_be" value="Event (master data sync)" style="endArrow=classic;html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=11;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="egm" target="nsBE">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <!-- Coding machine ↔ GitLab [Sync code] -->
-        <mxCell id="e8" value="Sync (git push/pull)" style="endArrow=classic;startArrow=classic;html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=10;" edge="1" parent="1" source="codingMachine" target="gitlab">
+        <!-- EAM → Backend (Event) -->
+        <mxCell id="e_eam_be" value="Event (project master)" style="endArrow=classic;html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=11;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="eam" target="nsBE">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <!-- Coding machine → NorthStar (ssh / rsync) -->
-        <mxCell id="e9" value="Sync&#10;(ssh / rsync)" style="endArrow=classic;html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;dashed=1;fontSize=10;" edge="1" parent="1" source="codingMachine" target="nsCore">
+        <!-- infraops_dev → Postgres (Event, deployment master) -->
+        <mxCell id="e_iops_pg" value="Event (deployment master)" style="endArrow=classic;html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=11;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="infraops" target="nsPG">
           <mxGeometry relative="1" as="geometry" />
         </mxCell>
 
-        <!-- GitLab → NorthStar (deploy on 71 via git pull) -->
-        <mxCell id="e10" value="Sync&#10;(git pull + rebuild)" style="endArrow=classic;html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;dashed=1;fontSize=10;" edge="1" parent="1" source="gitlab" target="nsCore">
+        <!-- Confluence → Backend (Query) -->
+        <mxCell id="e_conf_be" value="Query (page + drawio fetch)" style="endArrow=classic;html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=11;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="confluence" target="nsBE">
           <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Backend ↔ OSS2 (Embed, attachment store) -->
+        <mxCell id="e_be_oss" value="Embed (attachment store)" style="endArrow=classic;startArrow=classic;html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=11;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="nsBE" target="oss2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Postgres ↔ 195 (Event, env-sync DB) -->
+        <mxCell id="e_pg_195" value="Event (env-sync DB)" style="endArrow=classic;startArrow=classic;html=1;edgeStyle=orthogonalEdgeStyle;rounded=0;fontSize=11;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="nsPG" target="pg195">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ===== Legend (bottom strip) ===== -->
+        <mxCell id="legendTitle" value="Legend" style="text;html=1;align=left;verticalAlign=middle;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="100" y="930" width="80" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="legExist" value="Yellow = Exist System (no change)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;align=center;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="100" y="955" width="240" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="legNew" value="Red = New Application (NorthStar core)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;align=center;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="360" y="955" width="240" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="leg3rd" value="Blue = 3rd-party / Shared infra" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;align=center;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="620" y="955" width="240" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="legRole" value="Green = Role / Host" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#008a00;strokeColor=#005700;fontColor=#ffffff;align=center;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="880" y="955" width="240" height="36" as="geometry" />
+        </mxCell>
+        <mxCell id="legEdge" value="Edge labels: [Event] [Query] [Embed] [Sync]   ·   Dashed = code/sync flow   ·   Bidirectional ↔ where applicable" style="text;html=1;align=left;verticalAlign=middle;fontSize=10;fontStyle=2;" vertex="1" parent="1">
+          <mxGeometry x="1140" y="955" width="560" height="36" as="geometry" />
         </mxCell>
 
       </root>
