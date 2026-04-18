@@ -16,12 +16,10 @@ from app.services import pg_client
 
 MAIN_QUERY = """
 SELECT
-    m.id                                AS mapping_id,
     m.app_id,
     m.data_version                      AS mapping_data_version,
     m.source_updated_at,
     m.synced_at,
-    bc.id                               AS bcpf_master_id,
     bc.bc_id,
     bc.bc_name,
     NULLIF(bc.bc_name_cn, '')           AS bc_name_cn,
