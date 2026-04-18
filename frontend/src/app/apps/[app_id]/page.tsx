@@ -1542,6 +1542,10 @@ function IntegrationsTab({ appId }: { appId: string }) {
   const [err, setErr] = useState<string | null>(null);
   const [includeSunset, setIncludeSunset] = useState(false);
   const [selectedPlatforms, setSelectedPlatforms] = useState<Set<string>>(new Set());
+  // View mode for AS PROVIDER section — group by platform (default) or
+  // flatten across platforms and sort by consumer count (interface-centric).
+  const [providerView, setProviderView] =
+    useState<"by_platform" | "by_interface">("by_platform");
 
   useEffect(() => {
     (async () => {
@@ -1726,14 +1730,32 @@ function IntegrationsTab({ appId }: { appId: string }) {
           title="AS PROVIDER"
           subtitle={`${totalProv} interfaces · ${totalProvConsumers} consumers`}
           color="#f6a623"
+          right={
+            <ViewModeToggle
+              value={providerView}
+              onChange={setProviderView}
+            />
+          }
         />
       )}
-      {totalProv > 0 &&
+      {totalProv > 0 && (
+        <ProviderHotspots
+          data={data}
+          visiblePlatforms={visiblePlatforms}
+        />
+      )}
+      {totalProv > 0 && providerView === "by_platform" &&
         visiblePlatforms.map((p) => {
           const bucket = data.as_provider.by_platform[p];
           if (!bucket || bucket.interfaces.length === 0) return null;
           return <ProviderPlatformBlock key={p} platform={p} bucket={bucket} />;
         })}
+      {totalProv > 0 && providerView === "by_interface" && (
+        <ProviderFlatList
+          data={data}
+          visiblePlatforms={visiblePlatforms}
+        />
+      )}
 
       {/* ── AS CONSUMER section ── */}
       {totalCons > 0 && (
@@ -1759,11 +1781,13 @@ function SectionHeader({
   title,
   subtitle,
   color,
+  right,
 }: {
   icon: string;
   title: string;
   subtitle: string;
   color: string;
+  right?: React.ReactNode;
 }) {
   return (
     <div
@@ -1791,6 +1815,268 @@ function SectionHeader({
         {title}
       </span>
       <span style={{ color: "var(--text-dim)", fontSize: 11 }}>{subtitle}</span>
+      {right && <div style={{ marginLeft: "auto" }}>{right}</div>}
+    </div>
+  );
+}
+
+/* ── View mode toggle: By Platform | By Interface ── */
+function ViewModeToggle({
+  value,
+  onChange,
+}: {
+  value: "by_platform" | "by_interface";
+  onChange: (v: "by_platform" | "by_interface") => void;
+}) {
+  const opts: { key: "by_platform" | "by_interface"; label: string }[] = [
+    { key: "by_platform", label: "By Platform" },
+    { key: "by_interface", label: "By Interface" },
+  ];
+  return (
+    <div
+      style={{
+        display: "inline-flex",
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-sm)",
+        overflow: "hidden",
+      }}
+    >
+      {opts.map((o) => {
+        const active = value === o.key;
+        return (
+          <button
+            key={o.key}
+            onClick={() => onChange(o.key)}
+            style={{
+              padding: "3px 10px",
+              fontSize: 11,
+              fontFamily: "var(--font-mono)",
+              background: active ? "var(--accent-dim)" : "transparent",
+              color: active ? "var(--accent)" : "var(--text-dim)",
+              border: "none",
+              cursor: "pointer",
+              borderRight:
+                o.key === "by_platform" ? "1px solid var(--border)" : "none",
+            }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ── Provider Hotspots: top interfaces by fan-out (≥2 consumers) ── */
+function ProviderHotspots({
+  data,
+  visiblePlatforms,
+}: {
+  data: IntegrationPayload;
+  visiblePlatforms: string[];
+}) {
+  const visSet = new Set(visiblePlatforms);
+
+  // Flatten all interfaces across visible platforms
+  const all: Array<{
+    iface: ProviderInterface;
+    platform: string;
+  }> = [];
+  for (const platform of Object.keys(data.as_provider.by_platform)) {
+    if (!visSet.has(platform)) continue;
+    for (const iface of data.as_provider.by_platform[platform].interfaces) {
+      all.push({ iface, platform });
+    }
+  }
+  // Sort by consumer count DESC, then by label
+  all.sort((a, b) => {
+    const d = b.iface.consumers.length - a.iface.consumers.length;
+    if (d !== 0) return d;
+    return a.iface.label.localeCompare(b.iface.label);
+  });
+  // Only show interfaces with 2+ consumers as hotspots
+  const hot = all.filter((x) => x.iface.consumers.length >= 2).slice(0, 10);
+
+  if (hot.length === 0) return null;
+
+  const scrollToIface = (key: string) => {
+    const el = document.getElementById(`iface-${encodeURIComponent(key)}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const prev = el.style.boxShadow;
+    el.style.transition = "box-shadow 240ms ease";
+    el.style.boxShadow = "0 0 0 2px var(--accent)";
+    setTimeout(() => { el.style.boxShadow = prev; }, 900);
+  };
+
+  return (
+    <div
+      style={{
+        border: "1px solid var(--border)",
+        borderRadius: "var(--radius-md)",
+        background: "var(--surface)",
+        padding: "12px 14px",
+        marginBottom: 8,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 8,
+          marginBottom: 10,
+        }}
+      >
+        <span
+          style={{
+            fontSize: 11,
+            fontFamily: "var(--font-mono)",
+            color: "var(--accent)",
+            fontWeight: 600,
+            letterSpacing: 0.6,
+          }}
+        >
+          🔥 INTERFACE HOTSPOTS
+        </span>
+        <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+          top {hot.length} with 2+ consumers
+        </span>
+      </div>
+      <table
+        style={{
+          width: "100%",
+          borderCollapse: "collapse",
+          fontSize: 12,
+        }}
+      >
+        <tbody>
+          {hot.map(({ iface, platform }) => {
+            const color = PLATFORM_COLORS[platform] || "#5f6a80";
+            const topConsumers = iface.consumers
+              .filter((c) => c.app_id && c.app_id !== "__UNLINKED__")
+              .slice(0, 4);
+            const moreCount = iface.consumers.length - topConsumers.length;
+            return (
+              <tr
+                key={iface.key}
+                onClick={() => scrollToIface(iface.key)}
+                style={{ cursor: "pointer" }}
+                onMouseOver={(e) => {
+                  (e.currentTarget as HTMLElement).style.background =
+                    "var(--surface-hover)";
+                }}
+                onMouseOut={(e) => {
+                  (e.currentTarget as HTMLElement).style.background =
+                    "transparent";
+                }}
+              >
+                {/* Fan-out count badge */}
+                <td style={{ padding: "6px 8px", width: 48, textAlign: "center" }}>
+                  <span
+                    style={{
+                      display: "inline-block",
+                      minWidth: 28,
+                      padding: "2px 8px",
+                      background: "var(--accent-dim)",
+                      color: "var(--accent)",
+                      border: "1px solid var(--accent)",
+                      borderRadius: 3,
+                      fontFamily: "var(--font-mono)",
+                      fontWeight: 700,
+                      fontSize: 12,
+                    }}
+                  >
+                    {iface.consumers.length}
+                  </span>
+                </td>
+                {/* Interface name */}
+                <td
+                  style={{
+                    padding: "6px 8px",
+                    fontFamily: "var(--font-mono)",
+                    color: "var(--text)",
+                    fontWeight: 500,
+                  }}
+                >
+                  {iface.label}
+                </td>
+                {/* Platform pill */}
+                <td style={{ padding: "6px 8px", width: 80 }}>
+                  <span
+                    className="status-pill"
+                    style={{
+                      fontSize: 10,
+                      color,
+                      background: `${color}26`,
+                      padding: "2px 8px",
+                    }}
+                  >
+                    {platform}
+                  </span>
+                </td>
+                {/* Top consumers preview */}
+                <td
+                  style={{
+                    padding: "6px 8px",
+                    color: "var(--text-muted)",
+                    fontSize: 11,
+                  }}
+                >
+                  {topConsumers.map((c, i) => (
+                    <span key={c.app_id}>
+                      {i > 0 && ", "}
+                      <code style={{ fontFamily: "var(--font-mono)", color: "var(--accent)" }}>
+                        {c.app_id}
+                      </code>
+                      {c.app_name && <span style={{ color: "var(--text-muted)" }}> {c.app_name}</span>}
+                    </span>
+                  ))}
+                  {moreCount > 0 && (
+                    <span style={{ color: "var(--text-dim)" }}> +{moreCount} more</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ── Provider flat list: all interfaces sorted by fan-out, no platform groups ── */
+function ProviderFlatList({
+  data,
+  visiblePlatforms,
+}: {
+  data: IntegrationPayload;
+  visiblePlatforms: string[];
+}) {
+  const visSet = new Set(visiblePlatforms);
+  const all: Array<{ iface: ProviderInterface; platform: string }> = [];
+  for (const platform of Object.keys(data.as_provider.by_platform)) {
+    if (!visSet.has(platform)) continue;
+    for (const iface of data.as_provider.by_platform[platform].interfaces) {
+      all.push({ iface, platform });
+    }
+  }
+  all.sort((a, b) => {
+    const d = b.iface.consumers.length - a.iface.consumers.length;
+    if (d !== 0) return d;
+    return a.iface.label.localeCompare(b.iface.label);
+  });
+
+  if (all.length === 0) return null;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {all.map(({ iface, platform }) => (
+        <ProviderInterfaceCard
+          key={iface.key}
+          iface={iface}
+          platform={platform}
+        />
+      ))}
     </div>
   );
 }
@@ -2873,6 +3159,8 @@ function ProviderInterfaceCard({
   return (
     <div
       data-peers={peerIds}
+      data-iface-key={iface.key}
+      id={`iface-${encodeURIComponent(iface.key)}`}
       style={{
         border: "1px solid var(--border)",
         borderRadius: "var(--radius-md)",
