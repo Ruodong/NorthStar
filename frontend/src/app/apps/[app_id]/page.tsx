@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { DeploymentMap } from "@/components/DeploymentMap";
+import { CapabilitiesTab } from "./CapabilitiesTab";
 
 // -----------------------------------------------------------------------------
 // Types — match backend/app/services/graph_query.py::get_application
@@ -162,7 +163,7 @@ interface ImpactResponse {
   fan_out_cap: number;
 }
 
-type Tab = "overview" | "integrations" | "investments" | "diagrams" | "impact" | "confluence" | "knowledge" | "deployment";
+type Tab = "overview" | "capabilities" | "integrations" | "investments" | "diagrams" | "impact" | "confluence" | "knowledge" | "deployment";
 
 const STATUS_COLORS: Record<string, string> = {
   Keep: "var(--status-keep)",
@@ -181,6 +182,7 @@ export default function AppDetailPage() {
   const [err, setErr] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
   const [deployCount, setDeployCount] = useState<number | undefined>(undefined);
+  const [capCount, setCapCount] = useState<number | undefined>(undefined);
 
   // Fetch deployment count for tab badge (non-blocking)
   useEffect(() => {
@@ -194,6 +196,28 @@ export default function AppDetailPage() {
         }
       } catch { /* non-blocking */ }
     })();
+  }, [appId]);
+
+  useEffect(() => {
+    if (!appId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(
+          `/api/apps/${encodeURIComponent(appId)}/business-capabilities`,
+          { cache: "no-store" },
+        );
+        if (!r.ok) return;
+        const j = await r.json();
+        if (cancelled) return;
+        if (j.success) setCapCount(j.data.total_count);
+      } catch {
+        // silently ignore; badge just stays hidden
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [appId]);
 
   useEffect(() => {
@@ -364,6 +388,14 @@ export default function AppDetailPage() {
         <TabButton current={tab} value="overview" onClick={setTab}>
           Overview
         </TabButton>
+        <TabButton
+          current={tab}
+          value="capabilities"
+          onClick={setTab}
+          count={capCount}
+        >
+          Capabilities
+        </TabButton>
         <TabButton current={tab} value="integrations" onClick={setTab}>
           Integrations
         </TabButton>
@@ -397,6 +429,7 @@ export default function AppDetailPage() {
           tco={tco}
         />
       )}
+      {tab === "capabilities" && <CapabilitiesTab appId={app.app_id} />}
       {tab === "integrations" && <IntegrationsTab appId={app.app_id} />}
       {tab === "impact" && <ImpactTab appId={app.app_id} />}
       {tab === "investments" && <InvestmentsTab investments={investments} />}
@@ -760,7 +793,7 @@ function TabButton({
       }}
     >
       {children}
-      {count != null && (
+      {count != null && count > 0 && (
         <span
           style={{
             marginLeft: 6,
