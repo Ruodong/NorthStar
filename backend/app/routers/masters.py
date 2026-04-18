@@ -889,7 +889,15 @@ async def get_project(project_id: str) -> ApiResponse:
             ra.status            AS cmdb_status,
             ra.app_ownership,
             ra.portfolio_mgt,
-            ra.u_service_area
+            ra.u_service_area,
+            CASE cda.application_status
+                WHEN 'New'       THEN 1
+                WHEN 'Change'    THEN 2
+                WHEN 'Sunset'    THEN 3
+                WHEN '3rd Party' THEN 4
+                WHEN 'Keep'      THEN 5
+                ELSE 6
+            END AS role_order
         FROM northstar.confluence_diagram_app cda
         JOIN northstar.confluence_attachment ca ON ca.attachment_id = cda.attachment_id
         JOIN northstar.confluence_page cp ON cp.page_id = ca.page_id
@@ -897,15 +905,7 @@ async def get_project(project_id: str) -> ApiResponse:
             ON ra.app_id = COALESCE(cda.resolved_app_id, cda.standard_id)
         WHERE COALESCE(cp.root_project_id, cp.project_id) = $1
           AND COALESCE(cda.resolved_app_id, cda.standard_id) ~ '^A\\d'
-        ORDER BY CASE cda.application_status
-                     WHEN 'New'       THEN 1
-                     WHEN 'Change'    THEN 2
-                     WHEN 'Sunset'    THEN 3
-                     WHEN '3rd Party' THEN 4
-                     WHEN 'Keep'      THEN 5
-                     ELSE 6
-                 END,
-                 cda.app_name
+        ORDER BY role_order, cda.app_name
         """,
         project_id,
     )
