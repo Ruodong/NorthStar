@@ -11,7 +11,7 @@
  *   5. Generate — submit, redirect to /design/[id]
  */
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 // ── Types ────────────────────────────────────────────────────────
@@ -211,13 +211,39 @@ export default function DesignNewPage() {
   // architect check a row to include that interface AND auto-add the
   // counterparty app to scope.
   const [coverage, setCoverage] = useState<Record<string, { total_catalog: number }>>({});
+  // Track which app_ids we've fetched so incremental adds don't refetch
+  // everything (which would cause a full-page flicker).
+  const fetchedAppIdsRef = useRef<Set<string>>(new Set());
+
   useEffect(() => {
-    if (step !== 3 || scopeApps.length === 0) return;
-    setCatalogLoading(true);
+    if (step !== 3) return;
+    const currentIds = new Set(scopeApps.map(a => a.app_id));
+    const toAdd = scopeApps.filter(a => !fetchedAppIdsRef.current.has(a.app_id));
+    const toRemove = [...fetchedAppIdsRef.current].filter(id => !currentIds.has(id));
+
+    // 1. Remove rows + coverage for apps that left scope
+    if (toRemove.length > 0) {
+      const removedSet = new Set(toRemove);
+      setScopedRows(prev => prev.filter(r => !removedSet.has(r.scope_app_id)));
+      setCoverage(prev => {
+        const next = { ...prev };
+        for (const id of toRemove) delete next[id];
+        return next;
+      });
+      for (const id of toRemove) fetchedAppIdsRef.current.delete(id);
+    }
+
+    // 2. Fetch only newly-added apps (incremental — no flicker)
+    if (toAdd.length === 0) return;
+    // Only show loading state for initial fetch (no rows yet); for
+    // incremental adds keep the existing list visible.
+    const isInitial = fetchedAppIdsRef.current.size === 0;
+    if (isInitial) setCatalogLoading(true);
+
     (async () => {
       try {
         const results = await Promise.all(
-          scopeApps.map(a =>
+          toAdd.map(a =>
             fetch(
               `/api/masters/applications/${encodeURIComponent(a.app_id)}/integrations?include_sunset=false`,
               { cache: "no-store" }
@@ -225,20 +251,17 @@ export default function DesignNewPage() {
           )
         );
 
-        const rows: ScopedIfaceRow[] = [];
-        const cov: Record<string, { total_catalog: number }> = {};
+        const newRows: ScopedIfaceRow[] = [];
+        const newCov: Record<string, { total_catalog: number }> = {};
         for (const { scope, data } of results) {
           if (!data) continue;
-
-          // Count total catalog entries touching this scope app (provider + consumer sides)
           let total = 0;
-          // AS PROVIDER side
           for (const platform of Object.keys(data.as_provider?.by_platform || {})) {
             const bucket = data.as_provider.by_platform[platform];
             for (const iface of (bucket.interfaces || [])) {
               for (const c of (iface.consumers || [])) {
                 total++;
-                rows.push({
+                newRows.push({
                   interface_id: c.interface_id,
                   platform,
                   interface_name: iface.interface_name || iface.label || null,
@@ -253,12 +276,11 @@ export default function DesignNewPage() {
               }
             }
           }
-          // AS CONSUMER side
           for (const platform of Object.keys(data.as_consumer?.by_platform || {})) {
             const bucket = data.as_consumer.by_platform[platform];
             for (const row of (bucket.rows || [])) {
               total++;
-              rows.push({
+              newRows.push({
                 interface_id: row.interface_id,
                 platform,
                 interface_name: row.interface_name || row.label || null,
@@ -272,18 +294,18 @@ export default function DesignNewPage() {
               });
             }
           }
-          cov[scope.app_id] = { total_catalog: total };
+          newCov[scope.app_id] = { total_catalog: total };
+          fetchedAppIdsRef.current.add(scope.app_id);
         }
 
-        setScopedRows(rows);
-        setCoverage(cov);
-        // Keep existing checked ids that are still valid; drop stale ones
-        const validIds = new Set(rows.map(r => r.interface_id));
-        setKeepIfaceIds(prev => new Set([...prev].filter(id => validIds.has(id))));
+        // Append (don't replace) so existing checked rows + scroll position
+        // stay put when a new app is added through the Interfaces tab.
+        setScopedRows(prev => [...prev, ...newRows]);
+        setCoverage(prev => ({ ...prev, ...newCov }));
       } catch (e) {
         setErr(String(e));
       }
-      setCatalogLoading(false);
+      if (isInitial) setCatalogLoading(false);
     })();
   }, [step, scopeApps]);
 
