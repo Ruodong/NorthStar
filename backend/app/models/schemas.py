@@ -244,3 +244,42 @@ class ArchitectureTemplateDiagram(BaseModel):
 class ArchitectureTemplateDiagramList(BaseModel):
     total: int
     items: list[ArchitectureTemplateDiagram] = Field(default_factory=list)
+
+
+# ── Business Capabilities (App Detail → Capabilities tab) ──────────
+# See .specify/features/business-capabilities/spec.md + api.md.
+
+class BusinessCapabilityLeaf(BaseModel):
+    """One L3 Business Capability mapped to the application."""
+    bc_id: str
+    bc_name: str
+    bc_name_cn: Optional[str] = None
+    bc_description: Optional[str] = None
+    level: int = 3
+    lv3_capability_group: str = ""
+    biz_owner: Optional[str] = None
+    biz_team: Optional[str] = None
+    dt_owner: Optional[str] = None
+    dt_team: Optional[str] = None
+    data_version: Optional[str] = None
+    source_updated_at: Optional[datetime] = None
+
+
+class CapabilityL2Group(BaseModel):
+    l2_subdomain: str
+    leaves: list[BusinessCapabilityLeaf] = Field(default_factory=list)
+
+
+class CapabilityL1Group(BaseModel):
+    l1_domain: str
+    count: int
+    l2_groups: list[CapabilityL2Group] = Field(default_factory=list)
+
+
+class AppBusinessCapabilitiesResponse(BaseModel):
+    app_id: str
+    total_count: int = 0
+    l1_groups: list[CapabilityL1Group] = Field(default_factory=list)
+    taxonomy_versions: list[str] = Field(default_factory=list)
+    last_synced_at: Optional[datetime] = None
+    orphan_mappings: int = 0
