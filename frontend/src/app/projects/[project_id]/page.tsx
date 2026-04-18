@@ -13,7 +13,6 @@ interface ProjectApp {
   app_ownership: string | null;
   portfolio_mgt: string | null;
   u_service_area: string | null;
-  budget_k: number | null;
 }
 
 interface ConfPage {
@@ -55,13 +54,6 @@ const STATUS_COLORS: Record<string, string> = {
   Decommissioned: "#6b7488",
   Retain: "#e8b458",
 };
-
-function formatMoney(k: number | null): string {
-  if (k == null) return "\u2014";
-  if (Math.abs(k) < 0.01) return "$0";
-  if (Math.abs(k) < 1000) return `$${k.toFixed(2)}k`;
-  return `$${(k / 1000).toFixed(2)}M`;
-}
 
 export default function ProjectDetailPage() {
   const params = useParams();
@@ -155,7 +147,6 @@ export default function ProjectDetailPage() {
                 <th style={{ width: 100 }}>CMDB Status</th>
                 <th style={{ width: 100 }}>Ownership</th>
                 <th style={{ width: 120 }}>Service Area</th>
-                <th style={{ width: 90, textAlign: "right" }}>Budget</th>
               </tr>
             </thead>
             <tbody>
@@ -189,9 +180,6 @@ export default function ProjectDetailPage() {
                   </td>
                   <td style={{ color: "var(--text-muted)", fontSize: 12 }}>{a.app_ownership || "\u2014"}</td>
                   <td style={{ color: "var(--text-muted)", fontSize: 12 }}>{a.u_service_area || "\u2014"}</td>
-                  <td style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>
-                    {formatMoney(a.budget_k)}
-                  </td>
                 </tr>
               ))}
             </tbody>

@@ -889,15 +889,12 @@ async def get_project(project_id: str) -> ApiResponse:
             ra.status            AS cmdb_status,
             ra.app_ownership,
             ra.portfolio_mgt,
-            ra.u_service_area,
-            t.budget_k
+            ra.u_service_area
         FROM northstar.confluence_diagram_app cda
         JOIN northstar.confluence_attachment ca ON ca.attachment_id = cda.attachment_id
         JOIN northstar.confluence_page cp ON cp.page_id = ca.page_id
         LEFT JOIN northstar.ref_application ra
             ON ra.app_id = COALESCE(cda.resolved_app_id, cda.standard_id)
-        LEFT JOIN northstar.ref_application_tco t
-            ON t.app_id = ra.app_id
         WHERE COALESCE(cp.root_project_id, cp.project_id) = $1
           AND COALESCE(cda.resolved_app_id, cda.standard_id) ~ '^A\\d'
         ORDER BY cda.application_status, cda.app_name
