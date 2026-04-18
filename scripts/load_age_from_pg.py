@@ -629,20 +629,17 @@ def main() -> int:
                     )
                     description = a.get("functions") or ""
 
-                    # MERGE Application (NO source_project_id / source_fiscal_year)
+                    # MERGE Application (NO source_project_id / source_fiscal_year).
+                    # AGE doesn't support MERGE ... ON CREATE SET / ON MATCH SET,
+                    # so we collapse both branches into one SET with CASE. The
+                    # "newly created" branch is detected via `a.name IS NULL`.
                     ns.run(
                         """
                         MERGE (a:Application {app_id: $app_id})
-                        ON CREATE SET
-                            a.name = $name,
-                            a.status = $status,
-                            a.description = $description,
-                            a.cmdb_linked = $cmdb_hit,
-                            a.last_updated = $now
-                        ON MATCH SET
-                            a.name = CASE WHEN $cmdb_hit THEN $name ELSE coalesce(a.name, $name) END,
-                            a.status = CASE WHEN $cmdb_hit THEN $status ELSE coalesce(a.status, $status) END,
-                            a.cmdb_linked = a.cmdb_linked OR $cmdb_hit,
+                        SET a.name = CASE WHEN a.name IS NULL THEN $name WHEN $cmdb_hit THEN $name ELSE a.name END,
+                            a.status = CASE WHEN a.status IS NULL THEN $status WHEN $cmdb_hit THEN $status ELSE a.status END,
+                            a.description = coalesce(a.description, $description),
+                            a.cmdb_linked = CASE WHEN $cmdb_hit THEN true ELSE coalesce(a.cmdb_linked, false) END,
                             a.last_updated = $now
                         """,
                         app_id=app_id,
@@ -819,19 +816,14 @@ def main() -> int:
                 )
                 description = r["functions"] or ""
 
+                # AGE-compatible MERGE pattern — see comment above at the EGM branch.
                 ns.run(
                     """
                     MERGE (a:Application {app_id: $app_id})
-                    ON CREATE SET
-                        a.name = $name,
-                        a.status = $status,
-                        a.description = $description,
-                        a.cmdb_linked = $cmdb_hit,
-                        a.last_updated = $now
-                    ON MATCH SET
-                        a.name = CASE WHEN $cmdb_hit THEN $name ELSE coalesce(a.name, $name) END,
-                        a.status = CASE WHEN $cmdb_hit THEN $status ELSE coalesce(a.status, $status) END,
-                        a.cmdb_linked = a.cmdb_linked OR $cmdb_hit,
+                    SET a.name = CASE WHEN a.name IS NULL THEN $name WHEN $cmdb_hit THEN $name ELSE a.name END,
+                        a.status = CASE WHEN a.status IS NULL THEN $status WHEN $cmdb_hit THEN $status ELSE a.status END,
+                        a.description = coalesce(a.description, $description),
+                        a.cmdb_linked = CASE WHEN $cmdb_hit THEN true ELSE coalesce(a.cmdb_linked, false) END,
                         a.last_updated = $now
                     """,
                     app_id=app_id,

@@ -382,35 +382,44 @@ def ensure_schema(driver: AGEDriver) -> None:
         ("invests_in_fy_idx", "INVESTS_IN", "fiscal_year"),
     )
 
+    # Use autocommit so one failed create_vlabel (already exists) doesn't
+    # poison subsequent DDL in the same transaction. Each label's creation
+    # is independent and idempotent via our duplicate-catch.
+    # psycopg refuses to flip autocommit mid-transaction, so commit any
+    # pending implicit transaction (e.g. from verify_connectivity's SELECT 1)
+    # before switching.
+    driver._conn.commit()
+    driver._conn.autocommit = True
     with driver._conn.cursor() as cur:
         cur.execute("LOAD 'age'")
+        # ag_catalog must be in search_path for the agtype `->` operator
+        # used in the expression indexes below.
         cur.execute('SET search_path = ag_catalog, "$user", public')
         for label in node_labels:
             try:
-                cur.execute(f"SELECT create_vlabel('{GRAPH_NAME}', '{label}')")
+                # Schema-qualify — search_path manipulation is fragile
+                # across psycopg transaction boundaries.
+                cur.execute(f"SELECT ag_catalog.create_vlabel('{GRAPH_NAME}', '{label}')")
             except psycopg.errors.DuplicateTable:
-                driver._conn.rollback()
+                pass
             except Exception as exc:
-                driver._conn.rollback()
                 if "already exists" not in str(exc).lower():
                     raise
         for etype in edge_types:
             try:
-                cur.execute(f"SELECT create_elabel('{GRAPH_NAME}', '{etype}')")
+                cur.execute(f"SELECT ag_catalog.create_elabel('{GRAPH_NAME}', '{etype}')")
             except psycopg.errors.DuplicateTable:
-                driver._conn.rollback()
+                pass
             except Exception as exc:
-                driver._conn.rollback()
                 if "already exists" not in str(exc).lower():
                     raise
         for idx_name, label, prop in unique_idx:
             cur.execute(
                 f'CREATE UNIQUE INDEX IF NOT EXISTS {idx_name} '
-                f'ON {GRAPH_NAME}."{label}" ((properties->>\'{prop}\'))'
+                f'ON {GRAPH_NAME}."{label}" (((properties -> \'"{prop}"\'::ag_catalog.agtype)::text))'
             )
         for idx_name, label, prop in filter_idx:
             cur.execute(
                 f'CREATE INDEX IF NOT EXISTS {idx_name} '
-                f'ON {GRAPH_NAME}."{label}" ((properties->>\'{prop}\'))'
+                f'ON {GRAPH_NAME}."{label}" (((properties -> \'"{prop}"\'::ag_catalog.agtype)::text))'
             )
-    driver._conn.commit()

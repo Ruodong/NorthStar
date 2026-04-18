@@ -78,7 +78,8 @@ def test_trivial_cypher_roundtrips(pg):
         row = cur.fetchone()
     assert row is not None, "cypher() returned no rows for count()"
     # agtype comes back as text like "0" — parseable as int directly for scalars.
+    # conftest's pg fixture uses dict_row, so access by column name (not index).
     # Graph may or may not have nodes by the time this test runs (depends on
     # whether the loader has run yet); we only assert the call didn't crash.
-    n_text = str(row[0])
+    n_text = str(row["n"])
     assert n_text.isdigit(), f"expected a numeric count in agtype, got {n_text!r}"

@@ -51,14 +51,17 @@ _pool: Optional[asyncpg.Pool] = None
 # ---------------------------------------------------------------------------
 
 async def _init_age_connection(conn: asyncpg.Connection) -> None:
-    """Run once per pool connection — loads AGE's shared library for the session.
+    """Run once per pool connection — prepare the session for AGE Cypher calls.
 
-    `LOAD 'age'` is idempotent. apache/age images typically set
-    `shared_preload_libraries = 'age'` which makes this redundant, but we
-    issue it anyway so the client works against any PG with the extension
-    installed, regardless of postgresql.conf.
+    - `LOAD 'age'` loads the extension's shared library into this session
+      (idempotent, fast no-op if already loaded).
+    - `SET search_path` puts `ag_catalog` ahead of user/public so the AGE
+      operators (`->`, `->>`, `#>`, etc. on agtype) resolve without schema
+      qualification. Function calls we still schema-qualify explicitly
+      (`ag_catalog.cypher`, `ag_catalog.agtype`) for clarity.
     """
     await conn.execute("LOAD 'age'")
+    await conn.execute('SET search_path = ag_catalog, "$user", public')
 
 
 async def connect() -> asyncpg.Pool:
@@ -157,13 +160,13 @@ async def ensure_schema() -> None:
             await conn.execute(
                 f'CREATE UNIQUE INDEX IF NOT EXISTS {idx_name} '
                 f'ON {GRAPH_NAME}."{label}" '
-                f"((properties->>'{prop}'))"
+                f'(((properties -> \'"{prop}"\'::ag_catalog.agtype)::text))'
             )
         for idx_name, label, prop in _FILTER_INDEXES:
             await conn.execute(
                 f'CREATE INDEX IF NOT EXISTS {idx_name} '
                 f'ON {GRAPH_NAME}."{label}" '
-                f"((properties->>'{prop}'))"
+                f'(((properties -> \'"{prop}"\'::ag_catalog.agtype)::text))'
             )
 
 
