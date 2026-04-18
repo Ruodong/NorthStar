@@ -71,17 +71,150 @@ class DesignUpdate(BaseModel):
 # ──────────────────────────────────────────────────────────────────
 # Templates (drawio files in confluence_attachment that look like templates)
 # ──────────────────────────────────────────────────────────────────
+@router.get("/standard-templates")
+async def list_standard_templates() -> ApiResponse:
+    """Standard templates — the architect-curated library.
+
+    Source: drawio attachments whose title contains 'template'/'模板' and
+    that live on pages WITHOUT a project_id (i.e., not a specific review
+    diagram but a reusable template). If ref_architecture_template_source
+    also has pages configured in Settings, attachments on those pages
+    are included too.
+    """
+    rows = await pg_client.fetch(
+        """
+        SELECT
+            a.attachment_id,
+            a.title,
+            a.file_kind,
+            cp.title       AS page_title,
+            cp.fiscal_year,
+            cp.page_id::text AS page_id,
+            -- Flag attachments whose page is registered as a Standard
+            -- Template source page so we can sort curated ones first.
+            (EXISTS (
+                SELECT 1 FROM northstar.ref_architecture_template_source t
+                WHERE t.confluence_page_id::text = cp.page_id::text
+            )) AS from_settings,
+            -- When flagged, carry the layer label for display
+            (SELECT t.layer FROM northstar.ref_architecture_template_source t
+             WHERE t.confluence_page_id::text = cp.page_id::text LIMIT 1
+            ) AS layer
+        FROM northstar.confluence_attachment a
+        JOIN northstar.confluence_page cp ON cp.page_id = a.page_id
+        WHERE a.file_kind IN ('drawio', 'drawio_xml')
+          AND (
+                (a.title ILIKE '%template%' OR a.title ILIKE '%模板%')
+                AND cp.project_id IS NULL
+              )
+          OR EXISTS (
+                SELECT 1 FROM northstar.ref_architecture_template_source t
+                WHERE t.confluence_page_id::text = cp.page_id::text
+          )
+        ORDER BY from_settings DESC, a.title
+        LIMIT 100
+        """
+    )
+    templates = [dict(r) for r in rows]
+    for t in templates:
+        t["display_name"] = t["title"]
+    return ApiResponse(data={"total": len(templates), "templates": templates})
+
+
+@router.get("/project-solutions")
+async def list_project_solutions(
+    app_ids: str = Query("", description="Comma-separated app IDs to filter by"),
+) -> ApiResponse:
+    """Project solutions — real architecture diagrams from project ARD pages
+    where at least one of the scope app_ids is referenced.
+
+    Groups results by project + fiscal_year. Each group lists the drawio
+    attachments available as potential starting points, plus which of the
+    scope apps appear in those diagrams.
+    """
+    ids = [i.strip() for i in app_ids.split(",") if i.strip()]
+    if not ids:
+        return ApiResponse(data={"total_projects": 0, "projects": []})
+
+    rows = await pg_client.fetch(
+        """
+        SELECT DISTINCT
+            COALESCE(cp.root_project_id, cp.project_id) AS project_id,
+            rp.project_name,
+            cp.fiscal_year,
+            cp.page_id::text   AS page_id,
+            cp.title           AS page_title,
+            a.attachment_id,
+            a.title            AS attachment_title,
+            a.file_kind,
+            (SELECT array_agg(DISTINCT COALESCE(cda.resolved_app_id, cda.standard_id))
+             FROM northstar.confluence_diagram_app cda
+             WHERE cda.attachment_id = a.attachment_id
+               AND COALESCE(cda.resolved_app_id, cda.standard_id) = ANY($1::text[])
+            ) AS referenced_scope_apps
+        FROM northstar.confluence_diagram_app cda
+        JOIN northstar.confluence_attachment a ON a.attachment_id = cda.attachment_id
+        JOIN northstar.confluence_page cp ON cp.page_id = a.page_id
+        LEFT JOIN northstar.ref_project rp
+            ON rp.project_id = COALESCE(cp.root_project_id, cp.project_id)
+        WHERE COALESCE(cda.resolved_app_id, cda.standard_id) = ANY($1::text[])
+          AND a.file_kind IN ('drawio', 'drawio_xml')
+          AND COALESCE(cp.root_project_id, cp.project_id) IS NOT NULL
+        ORDER BY cp.fiscal_year DESC NULLS LAST, project_id
+        LIMIT 200
+        """,
+        ids,
+    )
+
+    # Group by (project_id, fiscal_year)
+    from collections import defaultdict
+    groups: dict[tuple, dict] = {}
+    for r in rows:
+        key = (r["project_id"], r["fiscal_year"])
+        g = groups.setdefault(key, {
+            "project_id": r["project_id"],
+            "project_name": r["project_name"],
+            "fiscal_year": r["fiscal_year"],
+            "referenced_scope_apps": set(),
+            "diagrams": [],
+        })
+        if r.get("referenced_scope_apps"):
+            g["referenced_scope_apps"].update(r["referenced_scope_apps"])
+        g["diagrams"].append({
+            "attachment_id": r["attachment_id"],
+            "title": r["attachment_title"],
+            "file_kind": r["file_kind"],
+            "page_id": r["page_id"],
+            "page_title": r["page_title"],
+        })
+
+    projects = []
+    for g in groups.values():
+        g["referenced_scope_apps"] = sorted(g["referenced_scope_apps"])
+        projects.append(g)
+    # Sort by number of scope apps referenced DESC (most relevant first),
+    # then by fiscal_year DESC
+    projects.sort(key=lambda p: (
+        -len(p["referenced_scope_apps"]),
+        p.get("fiscal_year") or "",
+    ), reverse=False)
+    # (actually we want the above line to sort with fy descending, so flip)
+    projects.sort(key=lambda p: (
+        -len(p["referenced_scope_apps"]),
+        -(int(p["fiscal_year"][2:6]) if p.get("fiscal_year") and p["fiscal_year"].startswith("FY") else 0),
+    ))
+
+    return ApiResponse(data={
+        "total_projects": len(projects),
+        "projects": projects,
+    })
+
+
 @router.get("/templates")
-async def list_templates() -> ApiResponse:
-    """List available drawio templates.
+async def list_templates_legacy() -> ApiResponse:
+    """Legacy endpoint — now returns the same as /standard-templates.
 
-    Sources:
-      1. ref_architecture_template_source if present (architect-curated)
-      2. Otherwise: confluence_attachment where file_kind='drawio' and
-         (title ILIKE '%template%' OR title ILIKE '%模板%')
-
-    Each row is enriched with page context so architects can tell similar
-    "Application Architecture Template" entries apart by their source page.
+    Kept for backward compatibility with early builds of the wizard.
     """
     templates: list[dict] = []
 

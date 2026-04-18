@@ -97,6 +97,7 @@ export default function DesignListPage() {
                 <th style={{ width: 70, textAlign: "right" }}>Apps</th>
                 <th style={{ width: 80, textAlign: "right" }}>Ifaces</th>
                 <th style={{ width: 140 }}>Updated</th>
+                <th style={{ width: 110 }}></th>
               </tr>
             </thead>
             <tbody>
@@ -141,6 +142,69 @@ export default function DesignListPage() {
                   <td style={{ textAlign: "right", fontFamily: "var(--font-mono)" }}>{r.iface_count}</td>
                   <td style={{ fontSize: 11, color: "var(--text-dim)" }}>
                     {r.updated_at ? new Date(r.updated_at).toISOString().slice(0, 16).replace("T", " ") : "—"}
+                  </td>
+                  <td style={{ textAlign: "right" }}>
+                    <button
+                      title="Download as .drawio"
+                      onClick={async (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        try {
+                          const res = await fetch(`/api/design/${r.design_id}/drawio`, { cache: "no-store" });
+                          const xml = await res.text();
+                          const blob = new Blob([xml], { type: "application/xml" });
+                          const url = URL.createObjectURL(blob);
+                          const a = document.createElement("a");
+                          a.href = url;
+                          a.download = `design-${r.design_id}-${(r.name || "untitled").replace(/[^\w]+/g, "_")}.drawio`;
+                          a.click();
+                          URL.revokeObjectURL(url);
+                        } catch (e) {
+                          alert("Download failed: " + e);
+                        }
+                      }}
+                      style={{
+                        background: "transparent",
+                        border: "1px solid var(--border)",
+                        color: "var(--accent)",
+                        padding: "3px 8px",
+                        fontSize: 10,
+                        fontFamily: "var(--font-mono)",
+                        cursor: "pointer",
+                        borderRadius: 3,
+                        marginRight: 4,
+                      }}
+                    >
+                      ↓ .drawio
+                    </button>
+                    <button
+                      title="Delete design"
+                      onClick={async (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (!confirm(`Delete design "${r.name}"? This can't be undone.`)) return;
+                        try {
+                          const res = await fetch(`/api/design/${r.design_id}`, { method: "DELETE" });
+                          const j = await res.json();
+                          if (!j.success) throw new Error(j.error);
+                          setRows(prev => prev.filter(x => x.design_id !== r.design_id));
+                        } catch (e) {
+                          alert("Delete failed: " + e);
+                        }
+                      }}
+                      style={{
+                        background: "transparent",
+                        border: "1px solid var(--border)",
+                        color: "#e8716b",
+                        padding: "3px 8px",
+                        fontSize: 10,
+                        fontFamily: "var(--font-mono)",
+                        cursor: "pointer",
+                        borderRadius: 3,
+                      }}
+                    >
+                      ✕ delete
+                    </button>
                   </td>
                 </tr>
               ))}

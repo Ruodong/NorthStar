@@ -56,6 +56,20 @@ interface ProjectRow {
   project_name: string;
 }
 
+interface ProjectSolutionGroup {
+  project_id: string;
+  project_name: string | null;
+  fiscal_year: string | null;
+  referenced_scope_apps: string[];
+  diagrams: Array<{
+    attachment_id: number;
+    title: string;
+    file_kind: string;
+    page_id: string;
+    page_title: string;
+  }>;
+}
+
 interface ScopeApp {
   app_id: string;
   name: string;
@@ -121,7 +135,7 @@ export default function DesignNewPage() {
     (async () => {
       try {
         const [tRes, bRes] = await Promise.all([
-          fetch("/api/design/templates", { cache: "no-store" }),
+          fetch("/api/design/standard-templates", { cache: "no-store" }),
           fetch("/api/business-capabilities", { cache: "no-store" }),
         ]);
         const [tJ, bJ] = await Promise.all([tRes.json(), bRes.json()]);
@@ -175,7 +189,7 @@ export default function DesignNewPage() {
 
   // Load catalog interfaces for selected apps (Step 4)
   useEffect(() => {
-    if (step !== 4 || scopeApps.length === 0) return;
+    if (step !== 3 || scopeApps.length === 0) return;
     setCatalogLoading(true);
     (async () => {
       // Query all interfaces where source or target is in our scope
@@ -311,16 +325,16 @@ export default function DesignNewPage() {
       {/* Tabs — freely clickable (not a linear stepper). The tabs are
           independent except that Step 4 (Interfaces) needs apps selected. */}
       <div style={{ display: "flex", gap: 2, marginBottom: 20 }}>
-        {["Context", "Template", "Apps", "Interfaces", "Review"].map((label, i) => {
+        {["Context", "Apps", "Interfaces", "Template", "Review"].map((label, i) => {
           const idx = i + 1;
           const active = step === idx;
 
           // Completion signal per tab
           let complete = false;
           if (idx === 1) complete = name.trim().length > 0;
-          if (idx === 2) complete = templateId !== null || name.trim().length > 0;
-          if (idx === 3) complete = scopeApps.length > 0;
-          if (idx === 4) complete = scopeApps.length > 0;
+          if (idx === 2) complete = scopeApps.length > 0;
+          if (idx === 3) complete = scopeApps.length > 0;  // interfaces step valid once scope exists
+          if (idx === 4) complete = true; // template is optional — blank canvas is valid
 
           return (
             <button
@@ -417,48 +431,18 @@ export default function DesignNewPage() {
         </div>
       )}
 
-      {/* ── Step 2: Template ── */}
-      {step === 2 && (
-        <div>
-          <div style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-            gap: 12,
-          }}>
-            <TemplateCard
-              title="Blank canvas"
-              subtitle="Start from scratch"
-              description="Empty drawio canvas — only your selected apps and interfaces will be drawn."
-              selected={templateId === null}
-              onSelect={() => setTemplateId(null)}
-            />
-            {templates.map(t => (
-              <TemplateCard
-                key={t.attachment_id}
-                title={t.title}
-                subtitle={
-                  [t.fiscal_year, t.project_id, t.page_title && t.page_title !== t.title ? t.page_title : null]
-                    .filter(Boolean)
-                    .join(" · ") || null
-                }
-                description={t.description || `drawio · #${t.attachment_id}`}
-                selected={templateId === t.attachment_id}
-                onSelect={() => setTemplateId(t.attachment_id)}
-                previewUrl={`/api/admin/confluence/attachments/${t.attachment_id}/preview`}
-                thumbnailUrl={`/api/admin/confluence/attachments/${t.attachment_id}/preview`}
-              />
-            ))}
-          </div>
-          {templates.length === 0 && (
-            <div style={{ color: "var(--text-dim)", fontSize: 12, padding: 12 }}>
-              No templates registered. You can proceed with a blank canvas.
-            </div>
-          )}
-        </div>
+      {/* ── Step 4 (now): Template — Standard + Project Solutions ── */}
+      {step === 4 && (
+        <TemplateStep
+          scopeApps={scopeApps}
+          templates={templates}
+          templateId={templateId}
+          setTemplateId={setTemplateId}
+        />
       )}
 
-      {/* ── Step 3: Apps ── */}
-      {step === 3 && (
+      {/* ── Step 2 (now): Apps — pick scope first ── */}
+      {step === 2 && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
           {/* Left: By name */}
           <div className="panel" style={{ padding: 14 }}>
@@ -554,8 +538,8 @@ export default function DesignNewPage() {
         </div>
       )}
 
-      {/* ── Step 4: Interfaces ── */}
-      {step === 4 && (
+      {/* ── Step 3 (now): Interfaces ── */}
+      {step === 3 && (
         <div className="panel" style={{ padding: 14 }}>
           <h3 style={{ marginTop: 0, fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>
             Existing interfaces between scope apps
@@ -679,21 +663,44 @@ export default function DesignNewPage() {
           </button>
         )}
         <div style={{ flex: 1 }} />
-        {/* Requirement hint for Generate button */}
+        {/* Clickable Generate — if requirements unmet, auto-jumps to
+            the offending tab instead of silently refusing to submit. */}
         {!(name.trim().length > 0 && scopeApps.length > 0) && (
-          <span style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
-            needs: {!name.trim() && "name"} {!name.trim() && !scopeApps.length && " + "} {!scopeApps.length && "≥1 app"}
+          <span style={{ fontSize: 11, color: "#e8b458", fontFamily: "var(--font-mono)" }}>
+            {!name.trim() && "missing design name"}
+            {!name.trim() && !scopeApps.length && " · "}
+            {!scopeApps.length && "no apps in scope"}
           </span>
         )}
         <button
-          onClick={submit}
-          disabled={submitting || !name.trim() || scopeApps.length === 0}
+          onClick={() => {
+            if (submitting) return;
+            if (!name.trim()) {
+              setStep(1);
+              setErr("Please fill in the design name on the Context tab.");
+              return;
+            }
+            if (scopeApps.length === 0) {
+              setStep(2);
+              setErr("Please select at least one application on the Apps tab.");
+              return;
+            }
+            setErr(null);
+            submit();
+          }}
+          disabled={submitting}
           style={{
             background: (submitting || !name.trim() || scopeApps.length === 0) ? "var(--surface-hover)" : "var(--accent)",
             color: (submitting || !name.trim() || scopeApps.length === 0) ? "var(--text-dim)" : "#07090d",
             fontWeight: 600,
             padding: "8px 16px",
+            cursor: submitting ? "default" : "pointer",
           }}
+          title={
+            !name.trim() ? "Click to go back and enter a design name" :
+            scopeApps.length === 0 ? "Click to go back and select apps" :
+            "Generate the AS-IS drawio canvas"
+          }
         >
           {submitting ? "Generating…" : "Generate design"}
         </button>
@@ -806,6 +813,204 @@ function TemplateCard({
           {description}
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ── Template step: Standard templates | Project solutions (filtered) ── */
+function TemplateStep({
+  scopeApps,
+  templates,
+  templateId,
+  setTemplateId,
+}: {
+  scopeApps: ScopeApp[];
+  templates: TemplateRow[];
+  templateId: number | null;
+  setTemplateId: (id: number | null) => void;
+}) {
+  const [source, setSource] = useState<"standard" | "project">("standard");
+  const [solutions, setSolutions] = useState<ProjectSolutionGroup[]>([]);
+  const [loadingSolutions, setLoadingSolutions] = useState(false);
+
+  // Fetch project solutions when switching to project source, filtered by scope apps.
+  useEffect(() => {
+    if (source !== "project") return;
+    if (scopeApps.length === 0) { setSolutions([]); return; }
+    setLoadingSolutions(true);
+    (async () => {
+      try {
+        const appIds = scopeApps.map(a => a.app_id).join(",");
+        const r = await fetch(
+          `/api/design/project-solutions?app_ids=${encodeURIComponent(appIds)}`,
+          { cache: "no-store" }
+        );
+        const j = await r.json();
+        if (j.success) setSolutions(j.data.projects || []);
+      } catch { /* ignore */ }
+      setLoadingSolutions(false);
+    })();
+  }, [source, scopeApps]);
+
+  return (
+    <div>
+      {/* Inner tabs */}
+      <div style={{ display: "flex", gap: 2, marginBottom: 14 }}>
+        {[
+          { key: "standard" as const, label: "Standard Templates", count: templates.length },
+          {
+            key: "project" as const,
+            label: "Project Solutions",
+            count: scopeApps.length === 0 ? null : solutions.length,
+            note: scopeApps.length === 0 ? "(select apps first)" : null,
+          },
+        ].map(t => {
+          const active = source === t.key;
+          return (
+            <button
+              key={t.key}
+              onClick={() => setSource(t.key)}
+              style={{
+                padding: "8px 14px",
+                border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
+                background: active ? "var(--accent-dim)" : "transparent",
+                color: active ? "var(--accent)" : "var(--text)",
+                fontSize: 12,
+                fontFamily: "var(--font-mono)",
+                cursor: "pointer",
+              }}
+            >
+              {t.label}
+              {t.count != null && (
+                <span style={{ opacity: 0.6, marginLeft: 8 }}>({t.count})</span>
+              )}
+              {t.note && (
+                <span style={{ opacity: 0.6, marginLeft: 8, fontSize: 10 }}>
+                  {t.note}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Blank canvas card — always visible at top */}
+      <div style={{ marginBottom: 12 }}>
+        <TemplateCard
+          title="Blank canvas"
+          subtitle="Start from scratch"
+          description="Empty drawio — only your apps + interfaces will be drawn."
+          selected={templateId === null}
+          onSelect={() => setTemplateId(null)}
+        />
+      </div>
+
+      {/* ── Standard Templates ── */}
+      {source === "standard" && (
+        <>
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+            gap: 12,
+          }}>
+            {templates.map(t => (
+              <TemplateCard
+                key={t.attachment_id}
+                title={t.title}
+                subtitle={t.page_title || null}
+                description={`standard · #${t.attachment_id}`}
+                selected={templateId === t.attachment_id}
+                onSelect={() => setTemplateId(t.attachment_id)}
+                previewUrl={`/api/admin/confluence/attachments/${t.attachment_id}/preview`}
+                thumbnailUrl={`/api/admin/confluence/attachments/${t.attachment_id}/preview`}
+              />
+            ))}
+          </div>
+          {templates.length === 0 && (
+            <div style={{ color: "var(--text-dim)", fontSize: 12, padding: 12 }}>
+              No standard templates registered. Configure pages in Settings →
+              Architecture Templates, or proceed with blank canvas.
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ── Project Solutions ── */}
+      {source === "project" && (
+        <>
+          {scopeApps.length === 0 && (
+            <div style={{ color: "var(--text-dim)", fontSize: 12, padding: 12 }}>
+              Go to the Apps tab first — project solutions are filtered by
+              which of your scope apps appear in each project's diagrams.
+            </div>
+          )}
+          {scopeApps.length > 0 && loadingSolutions && (
+            <div style={{ color: "var(--text-dim)", fontSize: 12, padding: 12 }}>
+              Loading project solutions…
+            </div>
+          )}
+          {scopeApps.length > 0 && !loadingSolutions && solutions.length === 0 && (
+            <div style={{ color: "var(--text-dim)", fontSize: 12, padding: 12 }}>
+              No project solutions found that reference your selected apps.
+            </div>
+          )}
+          {scopeApps.length > 0 && solutions.map(proj => (
+            <div
+              key={`${proj.project_id}-${proj.fiscal_year || "none"}`}
+              className="panel"
+              style={{ padding: 12, marginBottom: 12 }}
+            >
+              {/* Project header */}
+              <div style={{ display: "flex", alignItems: "baseline", gap: 10, marginBottom: 8 }}>
+                <code style={{ color: "var(--accent)", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                  {proj.project_id}
+                </code>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", flex: 1 }}>
+                  {proj.project_name || "(unnamed project)"}
+                </span>
+                {proj.fiscal_year && (
+                  <span style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
+                    {proj.fiscal_year}
+                  </span>
+                )}
+                <span className="status-pill" style={{
+                  fontSize: 10,
+                  color: "var(--accent)",
+                  background: "var(--accent-dim)",
+                  padding: "2px 8px",
+                }}>
+                  {proj.referenced_scope_apps.length} of your apps
+                </span>
+              </div>
+              {proj.referenced_scope_apps.length > 0 && (
+                <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 8 }}>
+                  References: {proj.referenced_scope_apps.slice(0, 10).join(", ")}
+                  {proj.referenced_scope_apps.length > 10 && ` +${proj.referenced_scope_apps.length - 10} more`}
+                </div>
+              )}
+              {/* Diagram cards in this project */}
+              <div style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+                gap: 10,
+              }}>
+                {proj.diagrams.map(d => (
+                  <TemplateCard
+                    key={d.attachment_id}
+                    title={d.title}
+                    subtitle={d.page_title !== d.title ? d.page_title : null}
+                    description={`project solution · #${d.attachment_id}`}
+                    selected={templateId === d.attachment_id}
+                    onSelect={() => setTemplateId(d.attachment_id)}
+                    previewUrl={`/api/admin/confluence/attachments/${d.attachment_id}/preview`}
+                    thumbnailUrl={`/api/admin/confluence/attachments/${d.attachment_id}/preview`}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
+        </>
+      )}
     </div>
   );
 }
