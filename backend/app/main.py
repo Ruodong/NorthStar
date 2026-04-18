@@ -14,6 +14,7 @@ from app.routers import (
     admin,
     aliases,
     analytics,
+    business_capabilities,
     ea_documents,
     graph,
     ingestion,
@@ -136,6 +137,7 @@ app.include_router(ingestion.router)
 app.include_router(masters.router)
 app.include_router(admin.router)
 app.include_router(aliases.router)
+app.include_router(business_capabilities.router)
 app.include_router(whats_new.router)
 app.include_router(search.router)
 app.include_router(ea_documents.router)
