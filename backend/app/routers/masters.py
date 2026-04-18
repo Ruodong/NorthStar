@@ -53,6 +53,19 @@ async def application_portfolios() -> ApiResponse:
     return ApiResponse(data=[dict(r) for r in rows])
 
 
+@router.get("/applications/service-areas")
+async def application_service_areas() -> ApiResponse:
+    rows = await pg_client.fetch(
+        """
+        SELECT COALESCE(u_service_area, '') AS service_area, count(*) AS count
+        FROM northstar.ref_application
+        GROUP BY COALESCE(u_service_area, '')
+        ORDER BY count DESC
+        """
+    )
+    return ApiResponse(data=[dict(r) for r in rows])
+
+
 @router.get("/projects/statuses")
 async def project_statuses() -> ApiResponse:
     rows = await pg_client.fetch(
@@ -99,6 +112,7 @@ async def list_applications(
     status: Optional[str] = None,
     app_ownership: Optional[str] = None,
     portfolio_mgt: Optional[str] = None,
+    u_service_area: Optional[str] = None,
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
 ) -> ApiResponse:
@@ -154,6 +168,19 @@ async def list_applications(
             parts.append(f"a.portfolio_mgt = ANY(${len(args)}::text[])")
         if has_empty:
             parts.append("(a.portfolio_mgt IS NULL OR a.portfolio_mgt = '')")
+        where.append(f"({' OR '.join(parts)})")
+
+    # Service Area — multi-value + __EMPTY__ sentinel
+    svc_vals = _parse_multi(u_service_area)
+    if svc_vals:
+        has_empty = EMPTY_SENTINEL in svc_vals
+        real_vals = [v for v in svc_vals if v != EMPTY_SENTINEL]
+        parts = []
+        if real_vals:
+            args.append(real_vals)
+            parts.append(f"a.u_service_area = ANY(${len(args)}::text[])")
+        if has_empty:
+            parts.append("(a.u_service_area IS NULL OR a.u_service_area = '')")
         where.append(f"({' OR '.join(parts)})")
 
     where_clause = ("WHERE " + " AND ".join(where)) if where else ""

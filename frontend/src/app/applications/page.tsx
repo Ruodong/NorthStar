@@ -26,6 +26,7 @@ interface FilterCount {
   status?: string;
   ownership?: string;
   portfolio?: string;
+  service_area?: string;
   count: number;
 }
 
@@ -70,7 +71,7 @@ function PillGroup({
   selected: string[];
   onToggle: (v: string) => void;
   colorMap: Record<string, string>;
-  labelKey: "status" | "ownership" | "portfolio";
+  labelKey: "status" | "ownership" | "portfolio" | "service_area";
 }) {
   return (
     <div style={{ display: "flex", gap: 4, flexWrap: "wrap", alignItems: "center" }}>
@@ -133,9 +134,11 @@ export default function ApplicationsPage() {
   const [selStatus, setSelStatus] = useState<string[]>(["Active"]);
   const [selOwnership, setSelOwnership] = useState<string[]>(["CIO/CDTO"]);
   const [selPortfolio, setSelPortfolio] = useState<string[]>(["Invest"]);
+  const [selServiceArea, setSelServiceArea] = useState<string[]>([]);
   const [statusOpts, setStatusOpts] = useState<FilterCount[]>([]);
   const [ownershipOpts, setOwnershipOpts] = useState<FilterCount[]>([]);
   const [portfolioOpts, setPortfolioOpts] = useState<FilterCount[]>([]);
+  const [serviceAreaOpts, setServiceAreaOpts] = useState<FilterCount[]>([]);
   const [page, setPage] = useState(0);
   const [data, setData] = useState<ListResult | null>(null);
   const [loading, setLoading] = useState(false);
@@ -144,12 +147,15 @@ export default function ApplicationsPage() {
   useEffect(() => {
     (async () => {
       try {
-        const [sRes, oRes, pRes] = await Promise.all([
+        const [sRes, oRes, pRes, aRes] = await Promise.all([
           fetch("/api/masters/applications/statuses", { cache: "no-store" }),
           fetch("/api/masters/applications/ownerships", { cache: "no-store" }),
           fetch("/api/masters/applications/portfolios", { cache: "no-store" }),
+          fetch("/api/masters/applications/service-areas", { cache: "no-store" }),
         ]);
-        const [sJ, oJ, pJ] = await Promise.all([sRes.json(), oRes.json(), pRes.json()]);
+        const [sJ, oJ, pJ, aJ] = await Promise.all([
+          sRes.json(), oRes.json(), pRes.json(), aRes.json(),
+        ]);
         // Sort: non-empty first (by count desc), empty last
         const sortEmptyLast = (arr: FilterCount[], key: keyof FilterCount) =>
           [...arr].sort((a, b) => {
@@ -161,6 +167,7 @@ export default function ApplicationsPage() {
         if (sJ.success) setStatusOpts(sortEmptyLast(sJ.data, "status"));
         if (oJ.success) setOwnershipOpts(sortEmptyLast(oJ.data, "ownership"));
         if (pJ.success) setPortfolioOpts(sortEmptyLast(pJ.data, "portfolio"));
+        if (aJ.success) setServiceAreaOpts(sortEmptyLast(aJ.data, "service_area"));
       } catch { /* non-blocking */ }
     })();
   }, []);
@@ -181,6 +188,7 @@ export default function ApplicationsPage() {
         if (selStatus.length) params.set("status", selStatus.join(","));
         if (selOwnership.length) params.set("app_ownership", selOwnership.join(","));
         if (selPortfolio.length) params.set("portfolio_mgt", selPortfolio.join(","));
+        if (selServiceArea.length) params.set("u_service_area", selServiceArea.join(","));
         params.set("limit", String(PAGE_SIZE));
         params.set("offset", String(page * PAGE_SIZE));
         const r = await fetch(`/api/masters/applications?${params}`, { cache: "no-store" });
@@ -194,7 +202,7 @@ export default function ApplicationsPage() {
       }
     })();
     return () => { cancelled = true; };
-  }, [qDebounced, selStatus, selOwnership, selPortfolio, page]);
+  }, [qDebounced, selStatus, selOwnership, selPortfolio, selServiceArea, page]);
 
   const toggle = useCallback(
     (setter: React.Dispatch<React.SetStateAction<string[]>>) =>
@@ -236,6 +244,7 @@ export default function ApplicationsPage() {
           { label: "Status", opts: statusOpts, sel: selStatus, set: setSelStatus, map: STATUS_COLORS, key: "status" as const },
           { label: "Ownership", opts: ownershipOpts, sel: selOwnership, set: setSelOwnership, map: OWNERSHIP_COLORS, key: "ownership" as const },
           { label: "Portfolio", opts: portfolioOpts, sel: selPortfolio, set: setSelPortfolio, map: PORTFOLIO_COLORS, key: "portfolio" as const },
+          { label: "Service Area", opts: serviceAreaOpts, sel: selServiceArea, set: setSelServiceArea, map: {} as Record<string, string>, key: "service_area" as const },
         ].map((f) => (
           <div key={f.label} style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <span style={{ fontSize: 11, color: "var(--text-dim)", fontFamily: "var(--font-mono)", minWidth: 70, textAlign: "right" }}>
