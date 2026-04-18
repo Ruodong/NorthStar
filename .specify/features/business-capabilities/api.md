@@ -54,9 +54,7 @@ L1 Domain → L2 Subdomain → L3 leaf, plus metadata for the tab footer.
       }
     ],
     "taxonomy_versions": ["1.4", "1.7", "1.8"],
-    "last_synced_at": "2026-04-18T08:00:00Z"
-  },
-  "meta": {
+    "last_synced_at": "2026-04-18T08:00:00Z",
     "orphan_mappings": 0
   },
   "error": null
@@ -86,7 +84,7 @@ L1 Domain → L2 Subdomain → L3 leaf, plus metadata for the tab footer.
 | `leaves[].source_updated_at` | ISO8601 \| null | From `biz_cap_map.update_at`. |
 | `taxonomy_versions` | string[] | Distinct non-null `data_version` across all mappings for this app, sorted. Empty array allowed. |
 | `last_synced_at` | ISO8601 \| null | Most recent `synced_at` across the mapping rows. `null` if never synced for this app. |
-| `meta.orphan_mappings` | int | Mapping rows whose `bcpf_master_id` didn't resolve — filtered from `l1_groups` but counted here for debugging. |
+| `orphan_mappings` | int | Mapping rows whose `bcpf_master_id` didn't resolve — filtered from `l1_groups` but counted here for debugging. (Lives directly in `data`, not in a separate `meta` envelope.) |
 
 #### Errors
 
