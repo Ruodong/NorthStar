@@ -1814,15 +1814,23 @@ function IntegrationLandscape({
   // middle) so expanding a box doesn't pull the curves downward.
   const appAnchorY = (boxY: number) => boxY + 20;
 
+  // Stagger curve endpoints on the app side when a peer uses multiple platforms,
+  // so the lines don't visually collapse into one at the app box edge.
+  // Each curve's y-endpoint is offset by (idx - (N-1)/2) * staggerPx.
+  const STAGGER_PX = 5;
+  const staggeredY = (baseY: number, idx: number, total: number) =>
+    baseY + (idx - (total - 1) / 2) * STAGGER_PX;
+
   const upstreamCurves: React.ReactElement[] = [];
   upstreamVisible.forEach((app, i) => {
     const boxY = upstreamYs[i];
-    for (const [platform, count] of Object.entries(app.by_platform)) {
+    const platforms = Object.entries(app.by_platform);
+    platforms.forEach(([platform, count], pi) => {
       const pIdx = upstreamPlatformIdx[platform];
-      if (pIdx === undefined) continue;
+      if (pIdx === undefined) return;
       const pPos = posUpstreamPlatform(pIdx);
       const x1 = cols.upstream_apps.x + APP_BOX_W;
-      const y1 = appAnchorY(boxY);
+      const y1 = staggeredY(appAnchorY(boxY), pi, platforms.length);
       const x2 = pPos.x;
       const y2 = pPos.y + PLATFORM_BOX_H / 2;
       const midX = (x1 + x2) / 2;
@@ -1831,12 +1839,12 @@ function IntegrationLandscape({
           key={`uc-${app.app_id}-${platform}`}
           d={`M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`}
           stroke={PLATFORM_COLORS[platform] || "#5f6a80"}
-          strokeOpacity={0.35}
+          strokeOpacity={0.4}
           strokeWidth={strokeWidth(count)}
           fill="none"
         />,
       );
-    }
+    });
   });
   const meLeftY = mePos.y + ME_BOX_H / 2;
   landscape.upstream_platforms.forEach((platform, i) => {
@@ -1880,26 +1888,27 @@ function IntegrationLandscape({
   });
   downstreamVisible.forEach((app, i) => {
     const boxY = downstreamYs[i];
-    for (const [platform, count] of Object.entries(app.by_platform)) {
+    const platforms = Object.entries(app.by_platform);
+    platforms.forEach(([platform, count], pi) => {
       const pIdx = downstreamPlatformIdx[platform];
-      if (pIdx === undefined) continue;
+      if (pIdx === undefined) return;
       const pPos = posDownstreamPlatform(pIdx);
       const x1 = pPos.x + PLATFORM_BOX_W;
       const y1 = pPos.y + PLATFORM_BOX_H / 2;
       const x2 = cols.downstream_apps.x;
-      const y2 = appAnchorY(boxY);
+      const y2 = staggeredY(appAnchorY(boxY), pi, platforms.length);
       const midX = (x1 + x2) / 2;
       downstreamCurves.push(
         <path
           key={`dc-${app.app_id}-${platform}`}
           d={`M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`}
           stroke={PLATFORM_COLORS[platform] || "#5f6a80"}
-          strokeOpacity={0.35}
+          strokeOpacity={0.4}
           strokeWidth={strokeWidth(count)}
           fill="none"
         />,
       );
-    }
+    });
   });
 
   const totalUpstream = landscape.upstream_apps.reduce((s, a) => s + a.total_interfaces, 0);
@@ -2186,6 +2195,29 @@ function LandscapeAppBox({
         onClick={isUnlinked ? undefined : scrollClick}
         style={pointerStyle}
       />
+      {/* Platform dots — visual indicator of which platforms this peer uses.
+          Multi-platform peers show multiple colored dots side-by-side. */}
+      {!isUnlinked && Object.keys(node.by_platform).length > 0 && (
+        <g>
+          {Object.keys(node.by_platform)
+            .sort()
+            .map((platform, pi) => (
+              <circle
+                key={platform}
+                cx={w - 54 - pi * 9}
+                cy={9}
+                r={3}
+                fill={PLATFORM_COLORS[platform] || "#5f6a80"}
+                stroke="var(--bg-elevated)"
+                strokeWidth={1}
+              >
+                <title>
+                  {`${platform}: ${node.by_platform[platform]} interface${node.by_platform[platform] === 1 ? "" : "s"}`}
+                </title>
+              </circle>
+            ))}
+        </g>
+      )}
       {/* Name — click scrolls */}
       <text
         x={8}
