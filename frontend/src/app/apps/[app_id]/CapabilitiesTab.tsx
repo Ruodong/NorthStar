@@ -76,7 +76,21 @@ export function CapabilitiesTab({ appId }: { appId: string }) {
   );
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  // Collapse state for L1 / L2 / L3 rows. Keys are prefixed by level so
+  // the same name at different levels never collides.
+  //   L1: "l1:{l1_domain}"
+  //   L2: "l2:{l1_domain}||{l2_subdomain}"
+  //   L3: "l3:{l1_domain}||{l2_subdomain}||{bc_id}||{idx}"
+  // Default (absent from set) = expanded.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const toggle = (key: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -161,7 +175,8 @@ export function CapabilitiesTab({ appId }: { appId: string }) {
         </div>
       ) : (
         data.l1_groups.map((l1) => {
-          const isCollapsed = collapsed.has(l1.l1_domain);
+          const l1Key = `l1:${l1.l1_domain}`;
+          const l1Closed = collapsed.has(l1Key);
           return (
             <div
               key={l1.l1_domain}
@@ -171,20 +186,16 @@ export function CapabilitiesTab({ appId }: { appId: string }) {
                 overflow: "hidden",
               }}
             >
+              {/* L1 Domain header — collapsible */}
               <button
                 type="button"
-                onClick={() => {
-                  const next = new Set(collapsed);
-                  if (isCollapsed) next.delete(l1.l1_domain);
-                  else next.add(l1.l1_domain);
-                  setCollapsed(next);
-                }}
+                onClick={() => toggle(l1Key)}
                 style={{
                   width: "100%",
                   textAlign: "left",
                   background: "var(--panel-raised, rgba(255,255,255,0.02))",
                   border: "none",
-                  borderBottom: isCollapsed
+                  borderBottom: l1Closed
                     ? "none"
                     : "1px solid var(--border-strong)",
                   color: "var(--text)",
@@ -207,7 +218,7 @@ export function CapabilitiesTab({ appId }: { appId: string }) {
                       marginRight: 6,
                     }}
                   >
-                    {isCollapsed ? "▸" : "▾"}
+                    {l1Closed ? "▸" : "▾"}
                   </span>
                   {l1.l1_domain || "(no domain)"}
                 </span>
@@ -221,92 +232,164 @@ export function CapabilitiesTab({ appId }: { appId: string }) {
                   {l1.count}
                 </span>
               </button>
-              {!isCollapsed &&
-                l1.l2_groups.map((l2) => (
-                  <div key={l2.l2_subdomain}>
-                    <div
-                      style={{
-                        padding: "8px 14px 4px 14px",
-                        fontSize: 11,
-                        textTransform: "uppercase",
-                        letterSpacing: 0.6,
-                        color: "var(--text-dim)",
-                      }}
-                    >
-                      {l2.l2_subdomain || "(no subdomain)"}
-                    </div>
-                    {l2.leaves.map((leaf, idx) => {
-                      const oline = ownerLine(leaf);
-                      return (
-                        <div
-                          key={leaf.bc_id + idx}
-                          title={leaf.bc_description || undefined}
-                          style={{
-                            padding: "8px 14px 10px 14px",
-                            borderTop:
-                              idx === 0
-                                ? "none"
-                                : "1px solid rgba(255,255,255,0.04)",
-                          }}
-                        >
-                          <div
+
+              {!l1Closed &&
+                l1.l2_groups.map((l2, l2Idx) => {
+                  const l2Key = `l2:${l1.l1_domain}||${l2.l2_subdomain}`;
+                  const l2Closed = collapsed.has(l2Key);
+                  return (
+                    <div key={l2.l2_subdomain}>
+                      {/* L2 Subdomain header — collapsible, same family as L1 */}
+                      <button
+                        type="button"
+                        onClick={() => toggle(l2Key)}
+                        style={{
+                          width: "100%",
+                          textAlign: "left",
+                          background: "transparent",
+                          border: "none",
+                          borderTop:
+                            l2Idx === 0
+                              ? "none"
+                              : "1px solid rgba(255,255,255,0.04)",
+                          color: "var(--text)",
+                          padding: "8px 14px 8px 30px",
+                          fontFamily: "var(--font-display)",
+                          fontSize: 12,
+                          fontWeight: 500,
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <span>
+                          <span
                             style={{
-                              display: "flex",
-                              gap: 10,
-                              alignItems: "baseline",
+                              display: "inline-block",
+                              width: 10,
+                              color: "var(--text-dim)",
+                              marginRight: 6,
                             }}
                           >
-                            <code
-                              style={{
-                                fontFamily: "var(--font-mono)",
-                                fontSize: 11,
-                                color: "var(--text-dim)",
-                                minWidth: 68,
-                              }}
-                            >
-                              {leaf.bc_id}
-                            </code>
-                            <span
-                              style={{
-                                fontFamily: "var(--font-display)",
-                                fontSize: 13,
-                                color: "var(--text)",
-                              }}
-                            >
-                              {leaf.bc_name}
-                            </span>
-                          </div>
-                          {leaf.bc_name_cn && (
+                            {l2Closed ? "▸" : "▾"}
+                          </span>
+                          {l2.l2_subdomain || "(no subdomain)"}
+                        </span>
+                        <span
+                          style={{
+                            fontFamily: "var(--font-mono)",
+                            fontSize: 11,
+                            color: "var(--text-dim)",
+                          }}
+                        >
+                          {l2.leaves.length}
+                        </span>
+                      </button>
+
+                      {!l2Closed &&
+                        l2.leaves.map((leaf, idx) => {
+                          const l3Key = `l3:${l1.l1_domain}||${l2.l2_subdomain}||${leaf.bc_id}||${idx}`;
+                          const l3Closed = collapsed.has(l3Key);
+                          const oline = ownerLine(leaf);
+                          const hasDetails = !!(leaf.bc_name_cn || oline);
+                          return (
                             <div
+                              key={leaf.bc_id + idx}
                               style={{
-                                marginLeft: 78,
-                                fontStyle: "italic",
-                                fontSize: 11,
-                                color: "var(--text-muted)",
-                                marginTop: 2,
+                                borderTop:
+                                  "1px solid rgba(255,255,255,0.04)",
                               }}
                             >
-                              {leaf.bc_name_cn}
+                              {/* L3 leaf header — clickable if there are details to fold */}
+                              <button
+                                type="button"
+                                onClick={() => hasDetails && toggle(l3Key)}
+                                title={leaf.bc_description || undefined}
+                                disabled={!hasDetails}
+                                style={{
+                                  width: "100%",
+                                  textAlign: "left",
+                                  background: "transparent",
+                                  border: "none",
+                                  color: "var(--text)",
+                                  padding: "8px 14px 8px 46px",
+                                  display: "flex",
+                                  gap: 10,
+                                  alignItems: "baseline",
+                                  cursor: hasDetails ? "pointer" : "default",
+                                  fontFamily: "var(--font-body)",
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    display: "inline-block",
+                                    width: 10,
+                                    color: "var(--text-dim)",
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  {hasDetails ? (l3Closed ? "▸" : "▾") : ""}
+                                </span>
+                                <code
+                                  style={{
+                                    fontFamily: "var(--font-mono)",
+                                    fontSize: 11,
+                                    color: "var(--text-dim)",
+                                    minWidth: 68,
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  {leaf.bc_id}
+                                </code>
+                                <span
+                                  style={{
+                                    fontFamily: "var(--font-display)",
+                                    fontSize: 13,
+                                    color: "var(--text)",
+                                  }}
+                                >
+                                  {leaf.bc_name}
+                                </span>
+                              </button>
+                              {hasDetails && !l3Closed && (
+                                <div
+                                  style={{
+                                    padding: "0 14px 10px 134px",
+                                  }}
+                                >
+                                  {leaf.bc_name_cn && (
+                                    <div
+                                      style={{
+                                        fontStyle: "italic",
+                                        fontSize: 11,
+                                        color: "var(--text-muted)",
+                                        marginTop: 2,
+                                      }}
+                                    >
+                                      {leaf.bc_name_cn}
+                                    </div>
+                                  )}
+                                  {oline && (
+                                    <div
+                                      style={{
+                                        fontSize: 11,
+                                        color: "var(--text-dim)",
+                                        marginTop: 4,
+                                        fontFamily: "var(--font-mono)",
+                                      }}
+                                    >
+                                      {oline}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
                             </div>
-                          )}
-                          {oline && (
-                            <div
-                              style={{
-                                marginLeft: 78,
-                                fontSize: 11,
-                                color: "var(--text-dim)",
-                                marginTop: 4,
-                                fontFamily: "var(--font-mono)",
-                              }}
-                            >
-                              {oline}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ))}
+                          );
+                        })}
+                    </div>
+                  );
+                })}
             </div>
           );
         })
