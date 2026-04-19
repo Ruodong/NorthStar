@@ -899,6 +899,12 @@ function OverviewTab({
       </Panel>
 
       <Panel title="Deployment">
+        {!(app.data_residency_geo || app.data_residency_country || app.data_center || app.patch_level || app.support || app.decommissioned_at) &&
+          !(deploySummary && (deploySummary.servers + deploySummary.containers + deploySummary.databases) > 0) && (
+          <div style={{ color: "var(--text-muted)", fontSize: 13, lineHeight: 1.6 }}>
+            No deployment data recorded for this application.
+          </div>
+        )}
         <CmdbField label="Data Residency" value={app.data_residency_geo} />
         <CmdbField label="Country" value={app.data_residency_country} />
         <CmdbField label="Data Center" value={app.data_center} />
