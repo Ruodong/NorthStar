@@ -290,7 +290,7 @@ export default function GraphPage() {
       <div className="toolbar" style={{ position: "relative" }}>
         <div style={{ position: "relative", minWidth: 360 }}>
           <input
-            placeholder="Search application name or ID\u2026"
+            placeholder={"Search application name or ID\u2026"}
             value={search}
             onChange={(e) => { setSearch(e.target.value); setShowSuggestions(true); }}
             onKeyDown={(e) => {
@@ -383,7 +383,7 @@ export default function GraphPage() {
 
         {loading && (
           <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-dim)" }}>
-            loading\u2026
+            loading{"\u2026"}
           </span>
         )}
       </div>
