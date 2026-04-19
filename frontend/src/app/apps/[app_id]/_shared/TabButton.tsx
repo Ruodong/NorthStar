@@ -63,6 +63,13 @@ export function TabButton({
           : "2px solid transparent",
         marginBottom: -1,
         fontFamily: "var(--font-body)",
+        // Keep every tab on a single line so the baseline stays even
+        // across the row. Multi-word labels ("Impact Analysis",
+        // "Knowledge Base") otherwise wrap and misalign with single-word
+        // neighbors. Horizontal overflow is handled by the tablist
+        // container (overflow-x: auto at ≤1024px per DESIGN.md).
+        whiteSpace: "nowrap",
+        flexShrink: 0,
       }}
     >
       {children}

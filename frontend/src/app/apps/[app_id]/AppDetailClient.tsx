@@ -297,6 +297,11 @@ export default function AppDetailClient({ initialData, appId }: Props) {
             display: "flex",
             gap: 56,
             borderBottom: "1px solid var(--border)",
+            // DESIGN.md §Responsive: tablist falls back to horizontal
+            // scroll at ≤1024px rather than wrapping tabs (keeps the
+            // row baseline stable — no multi-line labels).
+            overflowX: "auto",
+            scrollbarWidth: "thin",
           }}
         >
           {GROUP_ORDER.map((group) => (
