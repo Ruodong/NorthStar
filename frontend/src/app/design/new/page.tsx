@@ -11,8 +11,8 @@
  *   5. Generate — submit, redirect to /design/[id]
  */
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 
 // ── Types ────────────────────────────────────────────────────────
 interface TemplateRow {
@@ -114,11 +114,34 @@ const PLATFORM_COLORS: Record<string, string> = {
   "Goanywhere-job": "#6b7488", "Goanywhere-web user": "#6b7488",
 };
 
+// Top-level export wraps DesignNewPageInner in Suspense because it
+// calls useSearchParams() — Next 14 requires that during static
+// generation so the CSR bailout doesn't break `next build`.
 export default function DesignNewPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 40, color: "var(--text-dim)" }}>Loading…</div>}>
+      <DesignNewPageInner />
+    </Suspense>
+  );
+}
+
+function DesignNewPageInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  // Edit-mode: ?design_id=X prefills the wizard with an existing
+  // design's selections and switches Save to call PUT /selections
+  // instead of POST. See .specify/features/design-edit-wizard/spec.md.
+  const editDesignIdRaw = searchParams?.get("design_id") ?? null;
+  const editDesignId = editDesignIdRaw && /^\d+$/.test(editDesignIdRaw)
+    ? Number(editDesignIdRaw) : null;
+  const isEditMode = editDesignId != null;
+
   const [step, setStep] = useState(1);
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Edit-mode only: a fatal load error (404) that blocks Save.
+  const [editLoadError, setEditLoadError] = useState<string | null>(null);
+  const [editLoading, setEditLoading] = useState<boolean>(isEditMode);
 
   // Step 1: Context
   const [name, setName] = useState("");
@@ -162,6 +185,61 @@ export default function DesignNewPage() {
       } catch { /* non-blocking */ }
     })();
   }, []);
+
+  // Edit mode: GET the existing design and prefill all wizard state.
+  // Runs once on mount (editDesignId doesn't change within a session).
+  useEffect(() => {
+    if (!isEditMode || editDesignId == null) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/design/${editDesignId}`, { cache: "no-store" });
+        const j = await r.json();
+        if (cancelled) return;
+        if (!r.ok || !j.success) {
+          setEditLoadError(j.error || `Design #${editDesignId} not found.`);
+          setEditLoading(false);
+          return;
+        }
+        const d = j.data.design || {};
+        const loadedApps = (j.data.apps || []) as Array<{
+          app_id: string; name?: string | null; role?: string | null;
+          planned_status?: string | null; bc_id?: string | null;
+        }>;
+        const loadedIfaces = (j.data.interfaces || []) as Array<{
+          interface_id?: number | null;
+        }>;
+
+        setName(d.name || "");
+        setDescription(d.description || "");
+        if (d.fiscal_year) setFiscalYear(d.fiscal_year);
+        setProjectId(d.project_id || null);
+        setTemplateId(d.template_attachment_id ?? null);
+        setScopeApps(loadedApps.map(a => ({
+          app_id: a.app_id,
+          name: a.name || a.app_id,
+          // Normalise backend roles → wizard roles. "primary" is the
+          // Major set; "related"/"external" → Surround (UI treats both
+          // as passive per spec EC-6).
+          role: (a.role === "primary" ? "primary"
+                : a.role === "external" ? "external"
+                : "related") as ScopeApp["role"],
+          planned_status: (["keep", "change", "new", "sunset"].includes(a.planned_status || "")
+                          ? a.planned_status : "keep") as ScopeApp["planned_status"],
+          bc_id: a.bc_id ?? null,
+        })));
+        setKeepIfaceIds(new Set(
+          loadedIfaces.map(i => i.interface_id).filter((x): x is number => typeof x === "number")
+        ));
+        setEditLoading(false);
+      } catch (e) {
+        if (cancelled) return;
+        setEditLoadError(String(e));
+        setEditLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isEditMode, editDesignId]);
 
   // Debounced app search
   useEffect(() => {
@@ -412,56 +490,81 @@ export default function DesignNewPage() {
     setSubmitting(true);
     setErr(null);
     try {
-      const payload = {
-        name,
-        description,
-        fiscal_year: fiscalYear,
-        project_id: projectId,
-        template_attachment_id: templateId,
-        apps: scopeApps.map(a => ({
-          app_id: a.app_id, role: a.role, planned_status: a.planned_status, bc_id: a.bc_id ?? null,
-        })),
-        // Dedup by interface_id: same underlying interface may appear
-        // multiple times (once per scope app perspective).
-        interfaces: Array.from(
-          new Map(
-            scopedRows
-              .filter(r => keepIfaceIds.has(r.interface_id))
-              .map(r => {
-                // Normalize to (from_app, to_app) pair using role:
-                // provider role means the scope app SUPPLIES the endpoint;
-                // but the integration flow direction depends on platform.
-                // For design-edge rendering, use source→target from the
-                // original data: when scope app is provider for platforms
-                // where source=Provider (APIH/KPaaS/etc.), scope→counter;
-                // for WSO2, target=Provider so counter→scope.
-                const providerSide = (r.platform === "WSO2") ? "target" : "source";
-                const fromApp = r.role === "provider"
-                  ? (providerSide === "source" ? r.scope_app_id : r.counter_app_id)
-                  : (providerSide === "source" ? r.counter_app_id : r.scope_app_id);
-                const toApp = r.role === "provider"
-                  ? (providerSide === "source" ? r.counter_app_id : r.scope_app_id)
-                  : (providerSide === "source" ? r.scope_app_id : r.counter_app_id);
-                return [r.interface_id, {
-                  interface_id: r.interface_id,
-                  from_app: fromApp,
-                  to_app: toApp,
-                  platform: r.platform,
-                  interface_name: r.interface_name,
-                  planned_status: "keep",
-                }];
-              })
-          ).values()
-        ),
-      };
-      const r = await fetch("/api/design", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      const j = await r.json();
-      if (!j.success) throw new Error(j.error || "Create failed");
-      router.push(`/design/${j.data.design_id}`);
+      const appsPayload = scopeApps.map(a => ({
+        app_id: a.app_id, role: a.role, planned_status: a.planned_status, bc_id: a.bc_id ?? null,
+      }));
+      // Dedup by interface_id: same underlying interface may appear
+      // multiple times (once per scope app perspective).
+      const ifacesPayload = Array.from(
+        new Map(
+          scopedRows
+            .filter(r => keepIfaceIds.has(r.interface_id))
+            .map(r => {
+              // Normalize to (from_app, to_app) pair using role:
+              // provider role means the scope app SUPPLIES the endpoint;
+              // but the integration flow direction depends on platform.
+              // For design-edge rendering, use source→target from the
+              // original data: when scope app is provider for platforms
+              // where source=Provider (APIH/KPaaS/etc.), scope→counter;
+              // for WSO2, target=Provider so counter→scope.
+              const providerSide = (r.platform === "WSO2") ? "target" : "source";
+              const fromApp = r.role === "provider"
+                ? (providerSide === "source" ? r.scope_app_id : r.counter_app_id)
+                : (providerSide === "source" ? r.counter_app_id : r.scope_app_id);
+              const toApp = r.role === "provider"
+                ? (providerSide === "source" ? r.counter_app_id : r.scope_app_id)
+                : (providerSide === "source" ? r.scope_app_id : r.counter_app_id);
+              return [r.interface_id, {
+                interface_id: r.interface_id,
+                from_app: fromApp,
+                to_app: toApp,
+                platform: r.platform,
+                interface_name: r.interface_name,
+                planned_status: "keep",
+              }];
+            })
+        ).values()
+      );
+
+      if (isEditMode && editDesignId != null) {
+        // Edit mode: PUT /selections. Metadata (name / description / FY /
+        // project) is NOT updated here — the Context tab is read-only in
+        // edit mode per spec FR-9. The drawio canvas is also preserved;
+        // the architect triggers Regenerate manually on /design/[id].
+        const editPayload = {
+          template_attachment_id: templateId,
+          apps: appsPayload,
+          interfaces: ifacesPayload,
+        };
+        const r = await fetch(`/api/design/${editDesignId}/selections`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(editPayload),
+        });
+        const j = await r.json();
+        if (!j.success) throw new Error(j.error || "Save failed");
+        router.push(`/design/${editDesignId}`);
+      } else {
+        // Create mode: POST /api/design. Runs the generator and returns
+        // a fresh design_id.
+        const payload = {
+          name,
+          description,
+          fiscal_year: fiscalYear,
+          project_id: projectId,
+          template_attachment_id: templateId,
+          apps: appsPayload,
+          interfaces: ifacesPayload,
+        };
+        const r = await fetch("/api/design", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        const j = await r.json();
+        if (!j.success) throw new Error(j.error || "Create failed");
+        router.push(`/design/${j.data.design_id}`);
+      }
     } catch (e) {
       setErr(String(e));
       setSubmitting(false);
@@ -480,8 +583,39 @@ export default function DesignNewPage() {
         <Link href="/design" style={{ color: "var(--text-dim)", fontSize: 12, textDecoration: "none" }}>
           ← Designs
         </Link>
-        <h1 style={{ margin: 0 }}>New Design</h1>
+        <h1 style={{ margin: 0 }}>{isEditMode ? "Edit Design" : "New Design"}</h1>
       </div>
+
+      {/* Edit-mode banner — signals the wizard is in PUT-selections flow,
+          not create flow. Metadata fields in the Context tab are
+          read-only per spec FR-9; canvas page keeps editing those. */}
+      {isEditMode && (
+        <div className="panel" style={{
+          padding: "8px 14px", marginBottom: 12,
+          borderColor: "var(--accent)",
+          background: "var(--accent-dim)",
+          fontSize: 12,
+          display: "flex", alignItems: "center", gap: 10,
+        }}>
+          <span style={{ color: "var(--accent)", fontFamily: "var(--font-mono)" }}>
+            Editing Design #{editDesignId}
+          </span>
+          <span style={{ color: "var(--text-dim)" }}>
+            — {editLoading ? "loading…" : (name ? `"${name}"` : "")}
+          </span>
+          <div style={{ flex: 1 }} />
+          <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
+            Changes to apps / interfaces / template save here. Canvas stays as-is.
+          </span>
+        </div>
+      )}
+
+      {/* Fatal load error (FR-10) — stops Save from firing. */}
+      {editLoadError && (
+        <div className="panel" style={{ padding: 10, marginBottom: 12, borderColor: "#5b1f1f", fontSize: 12 }}>
+          Could not load design #{editDesignId}: {editLoadError}
+        </div>
+      )}
 
       {/* Tabs — freely clickable (not a linear stepper). The tabs are
           independent except that Step 4 (Interfaces) needs apps selected. */}
@@ -548,11 +682,30 @@ export default function DesignNewPage() {
       {/* ── Step 1: Context ── */}
       {step === 1 && (
         <div className="panel" style={{ padding: 24, display: "grid", gap: 16 }}>
+          {isEditMode && (
+            <div style={{
+              fontSize: 11, color: "var(--text-muted)",
+              padding: 10,
+              border: "1px dashed var(--border)",
+              borderRadius: 4,
+              background: "var(--surface)",
+            }}>
+              Metadata (name / description / fiscal year / project) is
+              read-only here. To edit these, use the canvas page at{" "}
+              <Link href={`/design/${editDesignId}`} style={{ color: "var(--accent)" }}>
+                /design/{editDesignId}
+              </Link>
+              .
+            </div>
+          )}
           <Field label="Design name *">
             <input
-              autoFocus value={name} onChange={e => setName(e.target.value)}
+              autoFocus={!isEditMode}
+              value={name} onChange={e => setName(e.target.value)}
               placeholder="e.g. FY2627 Digital Customer Journey"
               style={{ width: "100%" }}
+              readOnly={isEditMode}
+              disabled={isEditMode}
             />
           </Field>
           <Field label="Description">
@@ -560,10 +713,13 @@ export default function DesignNewPage() {
               value={description} onChange={e => setDescription(e.target.value)}
               placeholder="(optional) the problem this design addresses"
               rows={3} style={{ width: "100%" }}
+              readOnly={isEditMode}
+              disabled={isEditMode}
             />
           </Field>
           <Field label="Fiscal year">
-            <select value={fiscalYear} onChange={e => setFiscalYear(e.target.value)}>
+            <select value={fiscalYear} onChange={e => setFiscalYear(e.target.value)}
+                    disabled={isEditMode}>
               {["FY2526", "FY2627", "FY2728"].map(y => <option key={y}>{y}</option>)}
             </select>
           </Field>
@@ -573,6 +729,8 @@ export default function DesignNewPage() {
                 value={projectSearch} onChange={e => setProjectSearch(e.target.value)}
                 placeholder="Search by project name or ID…"
                 style={{ width: "100%" }}
+                readOnly={isEditMode}
+                disabled={isEditMode}
               />
               {projectCandidates.length > 0 && (
                 <div style={{
@@ -740,8 +898,9 @@ export default function DesignNewPage() {
             <dd>{keepIfaceIds.size} of {scopedRows.length}</dd>
           </dl>
           <div style={{ marginTop: 20, padding: 12, background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 4, fontSize: 12, color: "var(--text-muted)" }}>
-            The system will generate an AS-IS drawio canvas from these inputs.
-            You'll be able to edit it using the embedded draw.io editor on the next screen.
+            {isEditMode
+              ? "Save will update this design's apps / interfaces / template. The drawio canvas stays exactly as it is — to redraw from the new selections, click ↻ Regenerate AS-IS on the canvas page."
+              : "The system will generate an AS-IS drawio canvas from these inputs. You'll be able to edit it using the embedded draw.io editor on the next screen."}
           </div>
         </div>
       )}
@@ -778,6 +937,7 @@ export default function DesignNewPage() {
         <button
           onClick={() => {
             if (submitting) return;
+            if (editLoadError) return;
             if (!name.trim()) {
               setStep(1);
               setErr("Please fill in the design name on the Context tab.");
@@ -791,21 +951,27 @@ export default function DesignNewPage() {
             setErr(null);
             submit();
           }}
-          disabled={submitting}
+          disabled={submitting || editLoading || !!editLoadError}
           style={{
-            background: (submitting || !name.trim() || scopeApps.length === 0) ? "var(--surface-hover)" : "var(--accent)",
-            color: (submitting || !name.trim() || scopeApps.length === 0) ? "var(--text-dim)" : "#07090d",
+            background: (submitting || editLoading || !!editLoadError || !name.trim() || scopeApps.length === 0) ? "var(--surface-hover)" : "var(--accent)",
+            color: (submitting || editLoading || !!editLoadError || !name.trim() || scopeApps.length === 0) ? "var(--text-dim)" : "#07090d",
             fontWeight: 600,
             padding: "8px 16px",
             cursor: submitting ? "default" : "pointer",
           }}
           title={
+            editLoadError ? "Cannot save — design failed to load" :
+            editLoading ? "Loading existing design…" :
             !name.trim() ? "Click to go back and enter a design name" :
             scopeApps.length === 0 ? "Click to go back and select apps" :
+            isEditMode ? "Save changes — updates apps / interfaces / template; canvas unchanged" :
             "Generate the AS-IS drawio canvas"
           }
         >
-          {submitting ? "Generating…" : "Generate design"}
+          {submitting ? (isEditMode ? "Saving…" : "Generating…")
+            : editLoading ? "Loading…"
+            : isEditMode ? "Save changes"
+            : "Generate design"}
         </button>
       </div>
     </div>

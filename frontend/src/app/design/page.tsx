@@ -182,7 +182,23 @@ export default function DesignListPage() {
                     {r.updated_at ? new Date(r.updated_at).toISOString().slice(0, 16).replace("T", " ") : "—"}
                   </td>
                   <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
-                    {/* Icon-only action buttons — tooltip shows label */}
+                    {/* Icon-only action buttons — tooltip shows label.
+                        ✎ opens the 4-tab wizard pre-loaded in edit mode so
+                        the architect can add/remove apps + interfaces and
+                        save a new selection set without touching the
+                        canvas's manual edits. See spec
+                        .specify/features/design-edit-wizard/spec.md. */}
+                    <IconButton
+                      title="Edit selections (apps / interfaces / template)"
+                      color="var(--accent)"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        window.location.href = `/design/new?design_id=${r.design_id}`;
+                      }}
+                    >
+                      ✎
+                    </IconButton>
                     <IconButton
                       title="Download as .drawio"
                       color="var(--accent)"

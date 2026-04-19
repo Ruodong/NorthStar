@@ -6,6 +6,7 @@ Endpoints:
   POST   /api/design                              Create new design + generate AS-IS XML
   GET    /api/design/{id}                         Get design metadata + apps + interfaces
   PUT    /api/design/{id}                         Update design metadata
+  PUT    /api/design/{id}/selections               Bulk-replace apps / ifaces / template
   DELETE /api/design/{id}                         Delete design
   GET    /api/design/{id}/drawio                  Get current drawio XML (raw)
   PUT    /api/design/{id}/drawio                  Save edited drawio XML
@@ -158,6 +159,20 @@ class DesignUpdate(BaseModel):
     fiscal_year: Optional[str] = None
     project_id: Optional[str] = None
     status: Optional[str] = None
+
+
+class DesignSelectionsUpdate(BaseModel):
+    """Bulk-replace an existing design's scope selections.
+
+    Written to `design_app`, `design_interface`, and
+    `design_session.template_attachment_id` inside a single transaction.
+    Does NOT touch `drawio_xml` or `as_is_snapshot_xml` — the architect's
+    canvas edits survive. To regenerate the AS-IS diagram from the new
+    selections, call POST /{id}/regenerate separately.
+    """
+    template_attachment_id: Optional[int] = None
+    apps: list[AppScope] = []
+    interfaces: list[InterfaceScope] = []
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -758,6 +773,89 @@ async def update_design(design_id: int, payload: DesignUpdate) -> ApiResponse:
         *args,
     )
     return ApiResponse(data={"updated": True})
+
+
+@router.put("/{design_id}/selections")
+async def replace_design_selections(
+    design_id: int, payload: DesignSelectionsUpdate,
+) -> ApiResponse:
+    """Bulk-replace apps + interfaces + template on an existing design.
+
+    Written in a single transaction: UPDATE template_attachment_id,
+    DELETE+INSERT design_app, DELETE+INSERT design_interface. Does NOT
+    touch drawio_xml — the architect's canvas edits survive. To redraw
+    the AS-IS from the new selections, call POST /{id}/regenerate.
+
+    Enforces duplicate-app_id detection at the API boundary (FR-15 in
+    .specify/features/design-edit-wizard/spec.md): the wizard dedupes
+    before submit, so duplicates here mean a bug.
+    """
+    seen_apps: set[str] = set()
+    for a in payload.apps:
+        if a.app_id in seen_apps:
+            raise HTTPException(
+                status_code=400,
+                detail=f"duplicate app_id in payload: {a.app_id}",
+            )
+        seen_apps.add(a.app_id)
+
+    pool = await pg_client.connect()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            exists = await conn.fetchval(
+                "SELECT 1 FROM northstar.design_session WHERE design_id = $1",
+                design_id,
+            )
+            if exists is None:
+                raise HTTPException(status_code=404, detail="design not found")
+
+            await conn.execute(
+                """
+                UPDATE northstar.design_session
+                SET template_attachment_id = $1
+                WHERE design_id = $2
+                """,
+                payload.template_attachment_id, design_id,
+            )
+            await conn.execute(
+                "DELETE FROM northstar.design_app WHERE design_id = $1",
+                design_id,
+            )
+            for app in payload.apps:
+                await conn.execute(
+                    """
+                    INSERT INTO northstar.design_app (
+                        design_id, app_id, role, planned_status, bc_id, notes
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    """,
+                    design_id, app.app_id, app.role, app.planned_status,
+                    app.bc_id, app.notes,
+                )
+
+            await conn.execute(
+                "DELETE FROM northstar.design_interface WHERE design_id = $1",
+                design_id,
+            )
+            for iface in payload.interfaces:
+                await conn.execute(
+                    """
+                    INSERT INTO northstar.design_interface (
+                        design_id, interface_id, from_app, to_app,
+                        platform, interface_name, planned_status
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    """,
+                    design_id, iface.interface_id, iface.from_app,
+                    iface.to_app, iface.platform, iface.interface_name,
+                    iface.planned_status,
+                )
+
+    return ApiResponse(data={
+        "saved": True,
+        "apps_count": len(payload.apps),
+        "ifaces_count": len(payload.interfaces),
+    })
 
 
 @router.delete("/{design_id}")
