@@ -70,12 +70,18 @@ interface ProjectSolutionGroup {
   }>;
 }
 
+interface SelectedBC {
+  bc_id: string;
+  bc_name: string;
+}
+
 interface ScopeApp {
   app_id: string;
   name: string;
   role: "primary" | "related" | "external";
   planned_status: "keep" | "change" | "new" | "sunset";
   bc_id?: string | null;
+  selected_bcs?: SelectedBC[];
 }
 
 interface CatalogInterface {
@@ -410,6 +416,10 @@ function DesignNewPageInner() {
     setAppCandidates([]);
   };
 
+  const updateAppBcs = (appId: string, bcs: SelectedBC[]) => {
+    setScopeApps(prev => prev.map(a => a.app_id === appId ? { ...a, selected_bcs: bcs } : a));
+  };
+
   const removeApp = (appId: string) => {
     setScopeApps(prev => prev.filter(a => a.app_id !== appId));
     // keepIfaceIds cleanup + orphan related-app cleanup both happen in the
@@ -504,6 +514,7 @@ function DesignNewPageInner() {
     try {
       const appsPayload = scopeApps.map(a => ({
         app_id: a.app_id, role: a.role, planned_status: a.planned_status, bc_id: a.bc_id ?? null,
+        selected_bcs: (a.selected_bcs || []).map(bc => ({ bc_id: bc.bc_id, bc_name: bc.bc_name })),
       }));
       // Dedup by interface_id: same underlying interface may appear
       // multiple times (once per scope app perspective).
@@ -686,6 +697,7 @@ function DesignNewPageInner() {
         keepIfaceIds={keepIfaceIds}
         onJumpTab={setStep}
         onRemoveApp={removeApp}
+        onUpdateAppBcs={updateAppBcs}
         onRemoveInterface={removeInterface}
       />
 
@@ -909,6 +921,34 @@ function DesignNewPageInner() {
             <dt style={{ color: "var(--text-dim)" }}>Interfaces kept</dt>
             <dd>{keepIfaceIds.size} of {scopedRows.length}</dd>
           </dl>
+          {/* Per-app BC breakdown */}
+          {scopeApps.filter(a => a.selected_bcs && a.selected_bcs.length > 0).length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--text-dim)", marginBottom: 8 }}>
+                Business Capabilities per Application
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 10 }}>
+                {scopeApps.filter(a => a.selected_bcs && a.selected_bcs.length > 0).map(a => (
+                  <div key={a.app_id} style={{
+                    padding: "8px 10px", background: "var(--bg-elevated)",
+                    border: "1px solid var(--border)", borderRadius: 4, fontSize: 11,
+                  }}>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
+                      <code style={{ color: "var(--accent)", fontFamily: "var(--font-mono)", fontSize: 10 }}>{a.app_id}</code>
+                      <span style={{ fontWeight: 500 }}>{a.name}</span>
+                      <span style={{ fontSize: 9, color: "var(--text-dim)", marginLeft: "auto" }}>{a.selected_bcs!.length} BC</span>
+                    </div>
+                    {a.selected_bcs!.map(bc => (
+                      <div key={bc.bc_id} style={{ display: "flex", gap: 6, fontSize: 10, color: "var(--text-muted)", marginLeft: 4 }}>
+                        <span style={{ fontFamily: "var(--font-mono)", fontSize: 9, color: "var(--text-dim)", flexShrink: 0 }}>{bc.bc_id}</span>
+                        <span>{bc.bc_name}</span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div style={{ marginTop: 20, padding: 12, background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 4, fontSize: 12, color: "var(--text-muted)" }}>
             {isEditMode
               ? "Save will update this design's apps / interfaces / template. The drawio canvas stays exactly as it is — to redraw from the new selections, click ↻ Regenerate AS-IS on the canvas page."
@@ -1000,7 +1040,7 @@ function DesignNewPageInner() {
 function SummaryBar({
   name, fiscalYear, projectId, templateId, templateTitle,
   scopeApps, scopedRows, keepIfaceIds,
-  onJumpTab, onRemoveApp, onRemoveInterface,
+  onJumpTab, onRemoveApp, onUpdateAppBcs, onRemoveInterface,
 }: {
   name: string;
   fiscalYear: string;
@@ -1012,6 +1052,7 @@ function SummaryBar({
   keepIfaceIds: Set<number>;
   onJumpTab: (idx: number) => void;
   onRemoveApp: (appId: string) => void;
+  onUpdateAppBcs: (appId: string, bcs: SelectedBC[]) => void;
   onRemoveInterface: (interfaceId: number) => void;
 }) {
   // Prefer the human title when we have it (either set by the user on
@@ -1113,7 +1154,7 @@ function SummaryBar({
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 8, alignItems: "start" }}>
               {majorApps.map(a => (
-                <MajorAppChip key={a.app_id} app={a} onRemove={() => onRemoveApp(a.app_id)} />
+                <MajorAppChip key={a.app_id} app={a} onRemove={() => onRemoveApp(a.app_id)} onUpdateBcs={(bcs) => onUpdateAppBcs(a.app_id, bcs)} />
               ))}
             </div>
           )}
@@ -1206,31 +1247,69 @@ interface BCGroup {
   l2_groups: { l2_subdomain: string; leaves: { bc_id: string; bc_name: string; bc_name_cn?: string | null }[] }[];
 }
 
-function MajorAppChip({ app, onRemove }: { app: ScopeApp; onRemove: () => void }) {
+function MajorAppChip({ app, onRemove, onUpdateBcs }: {
+  app: ScopeApp;
+  onRemove: () => void;
+  onUpdateBcs: (bcs: SelectedBC[]) => void;
+}) {
   const [expanded, setExpanded] = useState(true);
   const [bcData, setBcData] = useState<BCGroup[] | null>(null);
   const [bcLoading, setBcLoading] = useState(false);
+  const [removed, setRemoved] = useState<Set<string>>(new Set());
 
-  // Auto-fetch BC data on mount
+  // Auto-fetch BC data on mount + init selected_bcs
   useEffect(() => {
     (async () => {
       setBcLoading(true);
       try {
         const r = await fetch(`/api/apps/${encodeURIComponent(app.app_id)}/business-capabilities`);
         const j = await r.json();
-        if (j.success) setBcData(j.data.l1_groups || []);
-        else setBcData([]);
+        if (j.success) {
+          const groups: BCGroup[] = j.data.l1_groups || [];
+          setBcData(groups);
+          // Auto-populate selected_bcs if not already set
+          if (!app.selected_bcs || app.selected_bcs.length === 0) {
+            const allLeaves: SelectedBC[] = [];
+            for (const l1 of groups)
+              for (const l2 of l1.l2_groups)
+                for (const leaf of l2.leaves)
+                  allLeaves.push({ bc_id: leaf.bc_id, bc_name: leaf.bc_name });
+            onUpdateBcs(allLeaves);
+          }
+        } else {
+          setBcData([]);
+        }
       } catch { setBcData([]); }
       finally { setBcLoading(false); }
     })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [app.app_id]);
 
+  const removeBc = (bcId: string) => {
+    const next = new Set(removed);
+    next.add(bcId);
+    setRemoved(next);
+    // Update parent with remaining BCs
+    const remaining: SelectedBC[] = [];
+    if (bcData) {
+      for (const l1 of bcData)
+        for (const l2 of l1.l2_groups)
+          for (const leaf of l2.leaves)
+            if (!next.has(leaf.bc_id))
+              remaining.push({ bc_id: leaf.bc_id, bc_name: leaf.bc_name });
+    }
+    onUpdateBcs(remaining);
+  };
+
   const toggleExpand = () => setExpanded((p) => !p);
+  const activeCount = bcData
+    ? bcData.reduce((a, l1) => a + l1.l2_groups.reduce((b, l2) => b + l2.leaves.filter((lf) => !removed.has(lf.bc_id)).length, 0), 0)
+    : 0;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
       <span
-        title={`${app.app_id} — ${app.name} (click to show business capabilities)`}
+        title={`${app.app_id} — ${app.name}`}
         style={{
           display: "inline-flex", alignItems: "center", gap: 6,
           background: expanded ? "var(--surface)" : "var(--bg-elevated)",
@@ -1244,73 +1323,77 @@ function MajorAppChip({ app, onRemove }: { app: ScopeApp; onRemove: () => void }
         <span style={{ fontSize: 9, color: "var(--text-dim)", flexShrink: 0 }}>
           {expanded ? "\u25be" : "\u25b8"}
         </span>
-        <code style={{
-          color: "var(--accent)", fontFamily: "var(--font-mono)",
-          flexShrink: 0, fontSize: 11,
-        }}>
+        <code style={{ color: "var(--accent)", fontFamily: "var(--font-mono)", flexShrink: 0, fontSize: 11 }}>
           {app.app_id}
         </code>
-        <span style={{
-          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-          minWidth: 0, flex: 1,
-        }}>
+        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0, flex: 1 }}>
           {app.name}
         </span>
+        {activeCount > 0 && (
+          <span style={{ fontSize: 9, color: "var(--text-dim)", flexShrink: 0, fontFamily: "var(--font-mono)" }}>
+            {activeCount} BC
+          </span>
+        )}
         <button
           onClick={(e) => { e.stopPropagation(); onRemove(); }}
           aria-label={`Remove ${app.name}`}
-          style={{
-            background: "none", border: "none", color: "var(--text-dim)",
-            cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0,
-            flexShrink: 0,
-          }}
+          style={{ background: "none", border: "none", color: "var(--text-dim)", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0, flexShrink: 0 }}
         >{"\u00d7"}</button>
       </span>
-      {/* BC context panel */}
       {expanded && (
         <div style={{
-          border: "1px solid var(--accent)",
-          borderTop: "none",
-          borderRadius: "0 0 3px 3px",
-          padding: "6px 10px",
-          background: "var(--surface)",
-          fontSize: 10,
-          maxHeight: 240,
-          overflowY: "auto",
+          border: "1px solid var(--accent)", borderTop: "none",
+          borderRadius: "0 0 3px 3px", padding: "6px 10px",
+          background: "var(--surface)", fontSize: 10,
+          maxHeight: 240, overflowY: "auto",
         }}>
           {bcLoading ? (
             <span style={{ color: "var(--text-dim)" }}>Loading...</span>
           ) : !bcData || bcData.length === 0 ? (
             <span style={{ color: "var(--text-dim)" }}>No business capabilities mapped</span>
           ) : (
-            bcData.map((l1) => (
-              <div key={l1.l1_domain} style={{ marginBottom: 6 }}>
-                <div style={{
-                  fontSize: 9, fontWeight: 600, textTransform: "uppercase",
-                  letterSpacing: 0.4, color: "var(--accent)", marginBottom: 2,
-                }}>
-                  {l1.l1_domain} ({l1.count})
-                </div>
-                {l1.l2_groups.map((l2) => (
-                  <div key={l2.l2_subdomain} style={{ marginLeft: 8, marginBottom: 3 }}>
-                    <div style={{ fontSize: 9, color: "var(--text-muted)", fontWeight: 500 }}>
-                      {l2.l2_subdomain}
-                    </div>
-                    {l2.leaves.map((leaf) => (
-                      <div key={leaf.bc_id} style={{
-                        marginLeft: 8, fontSize: 10, color: "var(--text)",
-                        display: "flex", gap: 4, alignItems: "baseline",
-                      }}>
-                        <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: 8 }}>
-                          {leaf.bc_id}
-                        </span>
-                        <span>{leaf.bc_name}</span>
-                      </div>
-                    ))}
+            bcData.map((l1) => {
+              const visibleLeaves = l1.l2_groups.reduce((a, l2) => a + l2.leaves.filter((lf) => !removed.has(lf.bc_id)).length, 0);
+              if (visibleLeaves === 0) return null;
+              return (
+                <div key={l1.l1_domain} style={{ marginBottom: 6 }}>
+                  <div style={{ fontSize: 9, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.4, color: "var(--accent)", marginBottom: 2 }}>
+                    {l1.l1_domain} ({visibleLeaves})
                   </div>
-                ))}
-              </div>
-            ))
+                  {l1.l2_groups.map((l2) => {
+                    const leaves = l2.leaves.filter((lf) => !removed.has(lf.bc_id));
+                    if (leaves.length === 0) return null;
+                    return (
+                      <div key={l2.l2_subdomain} style={{ marginLeft: 8, marginBottom: 3 }}>
+                        <div style={{ fontSize: 9, color: "var(--text-muted)", fontWeight: 500 }}>{l2.l2_subdomain}</div>
+                        {leaves.map((leaf) => (
+                          <div key={leaf.bc_id} style={{
+                            marginLeft: 8, fontSize: 10, color: "var(--text)",
+                            display: "flex", gap: 4, alignItems: "center",
+                          }}>
+                            <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: 8, flexShrink: 0 }}>
+                              {leaf.bc_id}
+                            </span>
+                            <span style={{ flex: 1 }}>{leaf.bc_name}</span>
+                            <button
+                              onClick={() => removeBc(leaf.bc_id)}
+                              title={`Remove ${leaf.bc_name}`}
+                              style={{
+                                background: "none", border: "none", color: "var(--text-dim)",
+                                cursor: "pointer", fontSize: 11, lineHeight: 1, padding: "0 2px",
+                                flexShrink: 0, opacity: 0.5,
+                              }}
+                              onMouseOver={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.color = "var(--error)"; }}
+                              onMouseOut={(e) => { e.currentTarget.style.opacity = "0.5"; e.currentTarget.style.color = "var(--text-dim)"; }}
+                            >{"\u00d7"}</button>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })
           )}
         </div>
       )}
