@@ -1111,7 +1111,7 @@ function SummaryBar({
               >Apps tab</button>)
             </div>
           ) : (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "flex-start" }}>
               {majorApps.map(a => (
                 <MajorAppChip key={a.app_id} app={a} onRemove={() => onRemoveApp(a.app_id)} />
               ))}
@@ -1200,39 +1200,121 @@ function InfoRow({
   );
 }
 
+interface BCGroup {
+  l1_domain: string;
+  count: number;
+  l2_groups: { l2_subdomain: string; leaves: { bc_id: string; bc_name: string; bc_name_cn?: string | null }[] }[];
+}
+
 function MajorAppChip({ app, onRemove }: { app: ScopeApp; onRemove: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const [bcData, setBcData] = useState<BCGroup[] | null>(null);
+  const [bcLoading, setBcLoading] = useState(false);
+
+  const toggleExpand = async () => {
+    if (expanded) { setExpanded(false); return; }
+    setExpanded(true);
+    if (!bcData) {
+      setBcLoading(true);
+      try {
+        const r = await fetch(`/api/apps/${encodeURIComponent(app.app_id)}/business-capabilities`);
+        const j = await r.json();
+        if (j.success) setBcData(j.data.l1_groups || []);
+        else setBcData([]);
+      } catch { setBcData([]); }
+      finally { setBcLoading(false); }
+    }
+  };
+
   return (
-    <span
-      title={`${app.app_id} — ${app.name}`}
-      style={{
-        display: "inline-flex", alignItems: "center", gap: 6,
-        background: "var(--bg-elevated)", border: "1px solid var(--border-strong)",
-        borderRadius: 3, padding: "4px 8px", fontSize: 12,
-        maxWidth: 280, minWidth: 0,
-      }}
-    >
-      <code style={{
-        color: "var(--accent)", fontFamily: "var(--font-mono)",
-        flexShrink: 0, fontSize: 11,
-      }}>
-        {app.app_id}
-      </code>
-      <span style={{
-        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-        minWidth: 0, flex: 1,
-      }}>
-        {app.name}
-      </span>
-      <button
-        onClick={onRemove}
-        aria-label={`Remove ${app.name}`}
+    <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+      <span
+        title={`${app.app_id} — ${app.name} (click to show business capabilities)`}
         style={{
-          background: "none", border: "none", color: "var(--text-dim)",
-          cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0,
-          flexShrink: 0,
+          display: "inline-flex", alignItems: "center", gap: 6,
+          background: expanded ? "var(--surface)" : "var(--bg-elevated)",
+          border: `1px solid ${expanded ? "var(--accent)" : "var(--border-strong)"}`,
+          borderRadius: expanded ? "3px 3px 0 0" : 3,
+          padding: "4px 8px", fontSize: 12,
+          maxWidth: 320, minWidth: 0, cursor: "pointer",
         }}
-      >×</button>
-    </span>
+        onClick={toggleExpand}
+      >
+        <span style={{ fontSize: 9, color: "var(--text-dim)", flexShrink: 0 }}>
+          {expanded ? "\u25be" : "\u25b8"}
+        </span>
+        <code style={{
+          color: "var(--accent)", fontFamily: "var(--font-mono)",
+          flexShrink: 0, fontSize: 11,
+        }}>
+          {app.app_id}
+        </code>
+        <span style={{
+          overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+          minWidth: 0, flex: 1,
+        }}>
+          {app.name}
+        </span>
+        <button
+          onClick={(e) => { e.stopPropagation(); onRemove(); }}
+          aria-label={`Remove ${app.name}`}
+          style={{
+            background: "none", border: "none", color: "var(--text-dim)",
+            cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0,
+            flexShrink: 0,
+          }}
+        >{"\u00d7"}</button>
+      </span>
+      {/* BC context panel */}
+      {expanded && (
+        <div style={{
+          border: "1px solid var(--accent)",
+          borderTop: "none",
+          borderRadius: "0 0 3px 3px",
+          padding: "6px 10px",
+          background: "var(--surface)",
+          fontSize: 10,
+          maxWidth: 320,
+          maxHeight: 200,
+          overflowY: "auto",
+        }}>
+          {bcLoading ? (
+            <span style={{ color: "var(--text-dim)" }}>Loading...</span>
+          ) : !bcData || bcData.length === 0 ? (
+            <span style={{ color: "var(--text-dim)" }}>No business capabilities mapped</span>
+          ) : (
+            bcData.map((l1) => (
+              <div key={l1.l1_domain} style={{ marginBottom: 6 }}>
+                <div style={{
+                  fontSize: 9, fontWeight: 600, textTransform: "uppercase",
+                  letterSpacing: 0.4, color: "var(--accent)", marginBottom: 2,
+                }}>
+                  {l1.l1_domain} ({l1.count})
+                </div>
+                {l1.l2_groups.map((l2) => (
+                  <div key={l2.l2_subdomain} style={{ marginLeft: 8, marginBottom: 3 }}>
+                    <div style={{ fontSize: 9, color: "var(--text-muted)", fontWeight: 500 }}>
+                      {l2.l2_subdomain}
+                    </div>
+                    {l2.leaves.map((leaf) => (
+                      <div key={leaf.bc_id} style={{
+                        marginLeft: 8, fontSize: 10, color: "var(--text)",
+                        display: "flex", gap: 4, alignItems: "baseline",
+                      }}>
+                        <span style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: 8 }}>
+                          {leaf.bc_id}
+                        </span>
+                        <span>{leaf.bc_name}</span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
