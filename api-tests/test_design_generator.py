@@ -109,6 +109,85 @@ def test_detect_legend_none_when_too_few_cells():
     assert _detect_legend_region(graph_root) is None
 
 
+def test_detect_legend_marker_with_parent_group():
+    """A cell labeled 'Legend' whose drawio parent is a group uses the
+    group's bbox + all sibling children, regardless of where on the
+    canvas it lives."""
+    cells = (
+        # The group container itself (big rectangle)
+        '<mxCell id="leg_grp" value="" style="group" vertex="1" parent="1">'
+        '<mxGeometry x="800" y="700" width="400" height="200" as="geometry"/>'
+        '</mxCell>'
+        # The "Legend" label, child of the group
+        + '<mxCell id="leg_label" value="&lt;b&gt;Legend&lt;/b&gt;" '
+          'style="text;" vertex="1" parent="leg_grp">'
+          '<mxGeometry x="10" y="10" width="80" height="20" as="geometry"/>'
+          '</mxCell>'
+        # A card inside the group
+        + '<mxCell id="leg_card" value="Example A" style="rounded=1;" '
+          'vertex="1" parent="leg_grp">'
+          '<mxGeometry x="10" y="40" width="120" height="80" as="geometry"/>'
+          '</mxCell>'
+        # Unrelated body cell far away — should NOT be in the region
+        + _mk_cell("body", x=100, y=100, w=200, h=80, value="Body")
+    )
+    graph_root = _parse_graph_root(_wrap_template(cells))
+    region = _detect_legend_region(graph_root)
+    assert region is not None
+    xmin, ymin, xmax, ymax = region
+    # Legend region should cover the group (800..1200, 700..900)
+    assert xmin <= 800 and xmax >= 1200
+    assert ymin <= 700 and ymax >= 900
+    # Must NOT cover the body cell at (100,100)
+    assert not (xmin <= 100 <= xmax and ymin <= 100 <= ymax), \
+        "Legend region must not wrap the unrelated body cell"
+
+
+def test_detect_legend_marker_with_geometric_container():
+    """A 'Legend' text cell with no explicit parent group falls through
+    to geometric-containment detection: the smallest vertex bbox that
+    contains the marker becomes the Legend region."""
+    cells = (
+        # Big outer rectangle, no children via parent attr
+        _mk_cell("outer", x=100, y=100, w=500, h=300, value="", style="rounded=0;")
+        # A "Legend" sticky inside the outer rectangle (bbox-wise)
+        + _mk_cell("sticky", x=120, y=120, w=100, h=30, value="Legend", style="text;")
+        # Another card inside the outer rectangle — should be protected too
+        + _mk_cell("card", x=250, y=150, w=120, h=80, value="Example")
+        # Body cell, well outside, at (800, 800)
+        + _mk_cell("body", x=800, y=800, w=200, h=80, value="Body")
+    )
+    graph_root = _parse_graph_root(_wrap_template(cells))
+    region = _detect_legend_region(graph_root)
+    assert region is not None
+    xmin, ymin, xmax, ymax = region
+    # Region must contain the full outer rect (100..600, 100..400)
+    assert xmin <= 100 and xmax >= 600
+    assert ymin <= 100 and ymax >= 400
+    # Must NOT cover the body cell at (800,800)
+    assert xmax < 800 or ymax < 800
+
+
+def test_marker_box_and_contents_protected_during_generate():
+    """End-to-end: a box with 'Legend' text + its inner objects survive
+    generate_as_is_xml; the body cell does not."""
+    tpl = _wrap_template(
+        _mk_cell("outer", x=100, y=100, w=500, h=300, value="", style="rounded=0;")
+        + _mk_cell("sticky", x=120, y=120, w=100, h=30, value="Legend")
+        + _mk_cell("inner1", x=250, y=150, w=120, h=80, value="IceA")
+        + _mk_cell("inner2", x=400, y=150, w=120, h=80, value="IceB")
+        + _mk_cell("body", x=800, y=800, w=200, h=80, value="Body")
+    )
+    out = generate_as_is_xml(
+        tpl, [_app("M1", "Major", role="major")], [],
+    )
+    graph_root = _parse_graph_root(out)
+    ids = {c.get("id") for c in graph_root.iter("mxCell")}
+    assert {"outer", "sticky", "inner1", "inner2"} <= ids, \
+        "all cells inside the Legend box must be preserved"
+    assert "body" not in ids, "cell outside the Legend box must be cleared"
+
+
 def test_detect_legend_top_band_needs_body_below():
     """The top-band heuristic only fires when there's non-legend content
     below it. A template whose ONLY cells are legend-row cells returns

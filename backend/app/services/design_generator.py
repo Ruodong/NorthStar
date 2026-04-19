@@ -252,17 +252,112 @@ def _iter_edge_cells(graph_root: ET.Element) -> list[ET.Element]:
 # ── Legend region detection ──────────────────────────────────────
 
 
+_HTML_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _clean_text(s: str) -> str:
+    """Strip HTML tags and collapse whitespace."""
+    return " ".join(_HTML_TAG_RE.sub(" ", s).split())
+
+
+def _collect_marker_texts(graph_root: ET.Element) -> list[tuple[ET.Element, str]]:
+    """Return (cell, cleaned-text) for every vertex cell plus every
+    <object>/<UserObject> wrapper. Wrappers' attrs (label, c4Name,
+    c4Description) carry the visible label when the inner ``mxCell`` has
+    an empty value.
+    """
+    out: list[tuple[ET.Element, str]] = []
+    seen_cells: set[int] = set()
+    for obj in graph_root.iter():
+        if obj.tag in ("object", "UserObject"):
+            inner = obj.find("mxCell")
+            if inner is None or inner.get("vertex") != "1":
+                continue
+            text_parts: list[str] = []
+            for attr in ("label", "c4Name", "c4Description"):
+                v = obj.get(attr)
+                if v:
+                    text_parts.append(v)
+            v = (inner.get("value") or "").strip()
+            if v:
+                text_parts.append(v)
+            text = _clean_text(" ".join(text_parts))
+            if text:
+                out.append((inner, text))
+                seen_cells.add(id(inner))
+    for cell in graph_root.iter("mxCell"):
+        if cell.get("id") in ("0", "1"):
+            continue
+        if cell.get("vertex") != "1":
+            continue
+        if id(cell) in seen_cells:
+            continue
+        v = (cell.get("value") or "").strip()
+        if not v:
+            continue
+        text = _clean_text(v)
+        if text:
+            out.append((cell, text))
+    return out
+
+
+def _bbox_contains(outer: tuple[float, float, float, float],
+                   inner: tuple[float, float, float, float]) -> bool:
+    """True if ``outer`` geometrically contains ``inner`` (edges may touch)."""
+    return (outer[0] <= inner[0] and outer[1] <= inner[1]
+            and outer[2] >= inner[2] and outer[3] >= inner[3])
+
+
+def _bbox_area(bb: tuple[float, float, float, float]) -> float:
+    return max(0.0, bb[2] - bb[0]) * max(0.0, bb[3] - bb[1])
+
+
+def _smallest_enclosing_bbox(
+    target: tuple[float, float, float, float],
+    candidates: list[tuple[ET.Element, tuple[float, float, float, float]]],
+    exclude: Optional[ET.Element] = None,
+) -> Optional[tuple[float, float, float, float]]:
+    """Return the bbox of the smallest-area vertex that geometrically
+    CONTAINS target (and is strictly bigger than target). None if none.
+    """
+    best: Optional[tuple[float, float, float, float]] = None
+    best_area = float("inf")
+    target_area = _bbox_area(target)
+    for c, bb in candidates:
+        if exclude is not None and c is exclude:
+            continue
+        if not _bbox_contains(bb, target):
+            continue
+        area = _bbox_area(bb)
+        if area <= target_area:
+            continue  # same bbox or smaller — doesn't count as "container"
+        if area < best_area:
+            best = bb
+            best_area = area
+    return best
+
+
 def _detect_legend_region(
     graph_root: ET.Element,
 ) -> Optional[tuple[float, float, float, float]]:
     """Return the Legend bbox (xmin, ymin, xmax, ymax) or None.
 
-    Two strategies, first-match wins:
+    Detection strategies, first-match wins:
 
-    1. Explicit marker — a vertex cell whose value matches
-       /legend|illustrative/i. Use the union bbox of all cells inside
-       the same parent group (same ``parent`` attribute).
-    2. Top-band cluster — group vertex cells by y-position, clusters
+    1. **Explicit marker** — any cell whose visible text (value, or its
+       wrapping ``<object>``'s ``label``/``c4Name``/``c4Description``)
+       matches /legend|illustrative/i. To find the *container* (the box
+       that encloses the marker and all its contents):
+
+         a. The marker's drawio ``parent`` (if non-sentinel). Use the
+            parent cell's bbox unioned with all children sharing that
+            parent.
+         b. The smallest vertex cell that geometrically CONTAINS the
+            marker's bbox. Everything inside that bbox is Legend.
+         c. The marker cell's own bbox (last resort — the marker IS the
+            Legend).
+
+    2. **Top-band cluster** — group vertex cells by y-position, clusters
        separated by > _LEGEND_CLUSTER_GAP px. If the topmost cluster
        sits within the top _LEGEND_TOP_FRACTION of the graph bbox AND
        has ≥ 3 cells, use its padded bbox.
@@ -280,26 +375,49 @@ def _detect_legend_region(
 
     # Strategy 1 — explicit marker
     marker_cell: Optional[ET.Element] = None
-    for c, _ in vertex_bboxes:
-        v = (c.get("value") or "").strip()
-        if not v:
-            # Also check enclosing <object>'s c4Name / label attrs
-            continue
-        if _LEGEND_LABEL_RE.search(v):
-            marker_cell = c
-            break
-    if marker_cell is not None:
+    marker_bbox: Optional[tuple[float, float, float, float]] = None
+    for cell, text in _collect_marker_texts(graph_root):
+        if _LEGEND_LABEL_RE.search(text):
+            marker_cell = cell
+            marker_bbox = _cell_bbox(cell)
+            if marker_bbox is not None:
+                break
+    if marker_cell is not None and marker_bbox is not None:
+        # (a) Explicit drawio parent — use the parent cell's own bbox.
+        # drawio groups carry their own geometry (union of children +
+        # padding); children use RELATIVE coords and can't be safely
+        # unioned into absolute space from here.
         parent = marker_cell.get("parent")
         if parent and parent not in ("0", "1"):
-            sibling_bbs = [
-                bb for c, bb in vertex_bboxes if c.get("parent") == parent
-            ]
-            if sibling_bbs:
-                xmin = min(b[0] for b in sibling_bbs) - _LEGEND_PADDING
-                ymin = min(b[1] for b in sibling_bbs) - _LEGEND_PADDING
-                xmax = max(b[2] for b in sibling_bbs) + _LEGEND_PADDING
-                ymax = max(b[3] for b in sibling_bbs) + _LEGEND_PADDING
-                return (xmin, ymin, xmax, ymax)
+            for c, bb in vertex_bboxes:
+                if c.get("id") == parent:
+                    return (
+                        bb[0] - _LEGEND_PADDING,
+                        bb[1] - _LEGEND_PADDING,
+                        bb[2] + _LEGEND_PADDING,
+                        bb[3] + _LEGEND_PADDING,
+                    )
+            # Parent id doesn't resolve to a vertex — fall through.
+
+        # (b) Geometric enclosure — find the smallest vertex containing
+        #     the marker. This picks up "the outer rectangle that has
+        #     the Legend text inside it" even when there's no parent link.
+        container_bb = _smallest_enclosing_bbox(
+            marker_bbox, vertex_bboxes, exclude=marker_cell,
+        )
+        if container_bb is not None:
+            return (
+                container_bb[0] - _LEGEND_PADDING,
+                container_bb[1] - _LEGEND_PADDING,
+                container_bb[2] + _LEGEND_PADDING,
+                container_bb[3] + _LEGEND_PADDING,
+            )
+
+        # (c) Marker-only. The Legend text IS the legend (e.g. a lone
+        #     "Illustrative" sticky with nothing containing it). Treat
+        #     the marker cell as a protected 1-cell region and let
+        #     Strategy 2 try to augment via the top-band heuristic.
+        # → fall through to Strategy 2
 
     # Strategy 2 — top-band cluster
     # Overall graph bbox
@@ -366,6 +484,11 @@ def _strip_non_legend_cells(
     """Delete every vertex AND edge cell that lives outside the Legend
     region. Sentinels (id=0, id=1) are preserved.
 
+    Vertex cells whose drawio parent chain lands inside the Legend region
+    are also preserved, even if their own (x, y) coords look "outside" —
+    drawio children use coords RELATIVE to the parent, so their bboxes
+    can't be compared to the absolute region bbox directly.
+
     If `legend_region` is None, delete all non-sentinel cells.
     """
     # Collect ids of vertex cells we're keeping, so edges between kept
@@ -373,16 +496,48 @@ def _strip_non_legend_cells(
     kept_vertex_ids: set[str] = set()
     to_remove: list[ET.Element] = []
 
-    # Build parent→child map so we can remove cleanly
+    # First pass: figure out which vertex ids are "inside" the Legend
+    # either geometrically OR by parent-chain membership. We have to
+    # walk parents BOTTOM-UP repeatedly until stable, because a child's
+    # parent might itself be a child of the kept region.
+    id_to_cell: dict[str, ET.Element] = {}
+    parent_of: dict[str, str] = {}
+    vertex_ids_geometric: set[str] = set()
     for child in list(graph_root):
-        # child can be <mxCell> (direct) or <object> / <UserObject> wrapping one
+        cell = child if child.tag == "mxCell" else child.find("mxCell")
+        if cell is None:
+            continue
+        cid = cell.get("id")
+        if not cid or cid in ("0", "1"):
+            continue
+        id_to_cell[cid] = cell
+        pid = cell.get("parent")
+        if pid:
+            parent_of[cid] = pid
+        if cell.get("vertex") == "1":
+            bb = _cell_bbox(cell)
+            if legend_region and _inside_region(bb, legend_region):
+                vertex_ids_geometric.add(cid)
+
+    def _inside_by_parent_chain(cid: str) -> bool:
+        """Walk parent chain; if any ancestor is in vertex_ids_geometric,
+        the cell is considered part of the Legend."""
+        seen: set[str] = set()
+        cur = cid
+        while cur and cur not in ("0", "1") and cur not in seen:
+            seen.add(cur)
+            if cur in vertex_ids_geometric:
+                return True
+            cur = parent_of.get(cur, "")
+        return False
+
+    for child in list(graph_root):
         tag = child.tag
         if tag == "mxCell":
             cell = child
         else:
             cell = child.find("mxCell")
             if cell is None:
-                # weird wrapper, keep it
                 continue
 
         cid = cell.get("id")
@@ -390,15 +545,12 @@ def _strip_non_legend_cells(
             continue
 
         if cell.get("vertex") == "1":
-            bb = _cell_bbox(cell)
-            if legend_region and _inside_region(bb, legend_region):
-                if cid:
-                    kept_vertex_ids.add(cid)
+            if legend_region and cid and _inside_by_parent_chain(cid):
+                kept_vertex_ids.add(cid)
             else:
                 to_remove.append(child)
         elif cell.get("edge") == "1":
-            # Second pass handles edges (need to know kept_vertex_ids
-            # first). Tag for now and skip.
+            # handled below
             continue
         else:
             # non-vertex, non-edge, non-sentinel: preserve (e.g. groups)

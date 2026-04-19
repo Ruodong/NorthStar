@@ -14,11 +14,14 @@ This feature throws out slot substitution. The template becomes a **style refere
 
 Before any substitution, the generator computes a **Legend protected region** — an axis-aligned rectangle `(xmin, ymin, xmax, ymax)` in template coordinates that is preserved byte-for-byte in the output. Detection runs in this order:
 
-1. **Explicit marker (preferred)** — if the template contains a cell whose `value` matches `/legend|illustrative/i` AND that cell has a parent group/container, use the parent group's bbox as the Legend region.
+1. **Explicit marker (preferred)** — if **any** cell's visible text (its `value`, or an enclosing `<object>`/`<UserObject>`'s `label` / `c4Name` / `c4Description`) matches `/legend|illustrative/i`, resolve the container of that marker in this priority:
+   1. **drawio parent group** — if the marker's `parent` attribute points to a non-sentinel vertex cell, use the parent cell's own bbox. Child cells of that group (whose coords are drawio-relative) are preserved via parent-chain membership, not bbox overlap.
+   2. **Geometric enclosure** — otherwise, find the smallest vertex cell whose bbox geometrically CONTAINS the marker's bbox (edges may touch). Use that vertex's bbox.
+   3. **Marker alone** — if neither resolves, the marker cell's own bbox is too small to be useful on its own; fall through to Strategy 2.
 2. **Top-band heuristic (fallback)** — compute the bbox of every vertex cell in the graph. Group cells by y-position (clusters separated by > 60px vertical gap). If the **topmost cluster** is within the top 35% of the total bbox height AND contains at least 3 vertex cells, treat that cluster's bbox (padded by 20px) as the Legend region.
 3. **No Legend detected** — if neither rule fires, treat the whole canvas as unprotected and proceed with a blank hub-and-spoke. Log a warning so the operator can flag the template.
 
-The region is inclusive of edges whose both endpoints are inside the region (interface-style keys in the Legend connect example cards to each other).
+The region is inclusive of edges whose both endpoints are inside the region (interface-style keys in the Legend connect example cards to each other), AND of cells whose drawio parent chain lands inside the region (child cells of a protected group use relative coordinates, so their own bbox cannot be compared to the absolute region bbox directly).
 
 ### FR-2: Canvas Clearing
 
@@ -59,6 +62,8 @@ The pako compress/inflate path (`_extract_graph_model`, `_set_graph_model`) is u
 
 - [ ] `_detect_legend_region()` returns the top-band cluster bbox for a template with the EA-style Illustrative banner.
 - [ ] `_detect_legend_region()` returns `None` for a completely blank template.
+- [ ] Any cell whose visible text matches /legend|illustrative/i triggers container resolution: the drawio parent group's bbox, or the smallest geometrically enclosing vertex, wins.
+- [ ] Cells whose drawio parent chain lands inside the Legend region are preserved during `_strip_non_legend_cells`, even when their own (x, y) coords would put them outside (drawio child coords are relative).
 - [ ] `generate_as_is_xml()` preserves every Legend cell byte-for-byte in `(x, y, value, style)` when a Legend is detected.
 - [ ] Cells outside the Legend region are removed from the output.
 - [ ] With 1 major + 3 surrounds, the output contains exactly 4 app vertex cells outside the Legend, the major is at the canvas center, and the 3 surrounds are on a circle around it (angles at -90°, 30°, 150° ± 1° tolerance).
