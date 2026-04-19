@@ -689,17 +689,26 @@ async def create_design(payload: DesignCreate) -> ApiResponse:
 
 @router.get("/{design_id}")
 async def get_design(design_id: int) -> ApiResponse:
-    """Return design metadata + apps + interfaces (no XML here — use /drawio)."""
+    """Return design metadata + apps + interfaces (no XML here — use /drawio).
+
+    LEFT JOIN on confluence_attachment resolves the template's visible
+    title so the Design wizard's Basic Information summary can render
+    "Name" instead of "#98800334" — attachment_id is VARCHAR in
+    confluence_attachment but an int on design_session, so cast.
+    """
     session = await pg_client.fetchrow(
         """
         SELECT
-            design_id, name, description, fiscal_year, project_id,
-            template_attachment_id, owner_itcode, status,
-            created_at, updated_at,
-            (as_is_snapshot_xml IS NOT NULL) AS has_as_is,
-            (drawio_xml IS NOT NULL) AS has_current
-        FROM northstar.design_session
-        WHERE design_id = $1
+            ds.design_id, ds.name, ds.description, ds.fiscal_year,
+            ds.project_id, ds.template_attachment_id, ds.owner_itcode,
+            ds.status, ds.created_at, ds.updated_at,
+            ca.title AS template_title,
+            (ds.as_is_snapshot_xml IS NOT NULL) AS has_as_is,
+            (ds.drawio_xml IS NOT NULL) AS has_current
+        FROM northstar.design_session ds
+        LEFT JOIN northstar.confluence_attachment ca
+            ON ca.attachment_id = ds.template_attachment_id::text
+        WHERE ds.design_id = $1
         """,
         design_id,
     )

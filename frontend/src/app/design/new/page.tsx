@@ -154,6 +154,15 @@ function DesignNewPageInner() {
   // Step 2: Template
   const [templates, setTemplates] = useState<TemplateRow[]>([]);
   const [templateId, setTemplateId] = useState<number | null>(null);
+  // The picked template's human title — separate from `templates` because
+  // that list only holds Standard templates; Project Solution templates and
+  // edit-mode prefills need their titles carried through this channel
+  // otherwise the top-bar Template row falls back to "#{attachment_id}".
+  const [selectedTemplateTitle, setSelectedTemplateTitle] = useState<string | null>(null);
+  const chooseTemplate = (id: number | null, title: string | null) => {
+    setTemplateId(id);
+    setSelectedTemplateTitle(id === null ? null : title);
+  };
 
   // Step 3: Apps
   const [scopeApps, setScopeApps] = useState<ScopeApp[]>([]);
@@ -214,7 +223,10 @@ function DesignNewPageInner() {
         setDescription(d.description || "");
         if (d.fiscal_year) setFiscalYear(d.fiscal_year);
         setProjectId(d.project_id || null);
-        setTemplateId(d.template_attachment_id ?? null);
+        chooseTemplate(
+          d.template_attachment_id ?? null,
+          d.template_title ?? null,
+        );
         setScopeApps(loadedApps.map(a => ({
           app_id: a.app_id,
           name: a.name || a.app_id,
@@ -667,8 +679,8 @@ function DesignNewPageInner() {
         name={name}
         fiscalYear={fiscalYear}
         projectId={projectId}
-        templates={templates}
         templateId={templateId}
+        templateTitle={selectedTemplateTitle}
         scopeApps={scopeApps}
         scopedRows={scopedRows}
         keepIfaceIds={keepIfaceIds}
@@ -773,7 +785,7 @@ function DesignNewPageInner() {
           scopeApps={scopeApps}
           templates={templates}
           templateId={templateId}
-          setTemplateId={setTemplateId}
+          chooseTemplate={chooseTemplate}
         />
       )}
 
@@ -891,7 +903,7 @@ function DesignNewPageInner() {
             <dt style={{ color: "var(--text-dim)" }}>FY</dt><dd>{fiscalYear}</dd>
             {projectId && <><dt style={{ color: "var(--text-dim)" }}>Project</dt><dd><code style={{ color: "var(--accent)" }}>{projectId}</code></dd></>}
             <dt style={{ color: "var(--text-dim)" }}>Template</dt>
-            <dd>{templateId ? (templates.find(t => t.attachment_id === templateId)?.title || `#${templateId}`) : "Blank canvas"}</dd>
+            <dd>{templateId ? (selectedTemplateTitle || `#${templateId}`) : "Blank canvas"}</dd>
             <dt style={{ color: "var(--text-dim)" }}>Major Applications</dt>
             <dd>{scopeApps.length}</dd>
             <dt style={{ color: "var(--text-dim)" }}>Interfaces kept</dt>
@@ -986,15 +998,15 @@ function DesignNewPageInner() {
       the counterparty id+name, with × on the chip removing the interface
       and cascading to drop orphan related apps. ── */
 function SummaryBar({
-  name, fiscalYear, projectId, templates, templateId,
+  name, fiscalYear, projectId, templateId, templateTitle,
   scopeApps, scopedRows, keepIfaceIds,
   onJumpTab, onRemoveApp, onRemoveInterface,
 }: {
   name: string;
   fiscalYear: string;
   projectId: string | null;
-  templates: TemplateRow[];
   templateId: number | null;
+  templateTitle: string | null;
   scopeApps: ScopeApp[];
   scopedRows: ScopedIfaceRow[];
   keepIfaceIds: Set<number>;
@@ -1002,9 +1014,14 @@ function SummaryBar({
   onRemoveApp: (appId: string) => void;
   onRemoveInterface: (interfaceId: number) => void;
 }) {
+  // Prefer the human title when we have it (either set by the user on
+  // template selection, or prefilled from GET /api/design/{id} in edit
+  // mode). Fall back to `#{id}` only when the title hasn't been
+  // resolved — this happens briefly during edit-mode load and never
+  // after a successful prefill.
   const templateName = templateId === null
     ? "Blank canvas"
-    : (templates.find(t => t.attachment_id === templateId)?.title || `#${templateId}`);
+    : (templateTitle || `#${templateId}`);
 
   const majorApps = scopeApps.filter(a => a.role === "primary");
 
@@ -1895,12 +1912,12 @@ function TemplateStep({
   scopeApps,
   templates,
   templateId,
-  setTemplateId,
+  chooseTemplate,
 }: {
   scopeApps: ScopeApp[];
   templates: TemplateRow[];
   templateId: number | null;
-  setTemplateId: (id: number | null) => void;
+  chooseTemplate: (id: number | null, title: string | null) => void;
 }) {
   const [source, setSource] = useState<"standard" | "project">("standard");
   const [solutions, setSolutions] = useState<ProjectSolutionGroup[]>([]);
@@ -1974,7 +1991,7 @@ function TemplateStep({
           subtitle="Start from scratch"
           description="Empty drawio — only your apps + interfaces will be drawn."
           selected={templateId === null}
-          onSelect={() => setTemplateId(null)}
+          onSelect={() => chooseTemplate(null, null)}
         />
       </div>
 
@@ -1993,7 +2010,7 @@ function TemplateStep({
                 subtitle={t.page_title || null}
                 description={`standard · #${t.attachment_id}`}
                 selected={templateId === t.attachment_id}
-                onSelect={() => setTemplateId(t.attachment_id)}
+                onSelect={() => chooseTemplate(t.attachment_id, t.title)}
                 previewUrl={`/api/admin/confluence/attachments/${t.attachment_id}/preview`}
                 thumbnailUrl={`/api/admin/confluence/attachments/${t.attachment_id}/thumbnail`}
               />
@@ -2090,7 +2107,7 @@ function TemplateStep({
                     subtitle={d.page_title !== d.title ? d.page_title : null}
                     description={`project solution · #${d.attachment_id}`}
                     selected={templateId === d.attachment_id}
-                    onSelect={() => setTemplateId(d.attachment_id)}
+                    onSelect={() => chooseTemplate(d.attachment_id, d.title)}
                     previewUrl={`/api/admin/confluence/attachments/${d.attachment_id}/preview`}
                     thumbnailUrl={`/api/admin/confluence/attachments/${d.attachment_id}/thumbnail`}
                   />
