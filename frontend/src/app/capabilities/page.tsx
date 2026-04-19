@@ -28,7 +28,7 @@ const PORTFOLIO_COLORS: Record<string, string> = {
   Invest: "#5fc58a",
   Migrate: "#6ba6e8",
   Tolerate: "#e8b458",
-  Eliminate: "#e8716b",
+  Retire: "#e8716b",
 };
 
 interface BCResponse {
@@ -106,10 +106,11 @@ export default function CapabilitiesPage() {
           ...l2,
           children: l2.children.filter(
             (l3) =>
-              !lowerFilter ||
+              l3.app_count > 0 &&
+              (!lowerFilter ||
               l3.bc_name.toLowerCase().includes(lowerFilter) ||
               (l3.bc_name_cn || "").toLowerCase().includes(lowerFilter) ||
-              l3.bc_id.toLowerCase().includes(lowerFilter)
+              l3.bc_id.toLowerCase().includes(lowerFilter))
           ),
         }))
         .filter((l2) => l2.children.length > 0);
