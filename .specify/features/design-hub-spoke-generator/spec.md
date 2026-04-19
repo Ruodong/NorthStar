@@ -14,7 +14,7 @@ This feature throws out slot substitution. The template becomes a **style refere
 
 Before any substitution, the generator computes a **Legend protected region** — an axis-aligned rectangle `(xmin, ymin, xmax, ymax)` in template coordinates that is preserved byte-for-byte in the output. Detection runs in this order:
 
-1. **Explicit marker (preferred)** — if **any** cell's visible text (its `value`, or an enclosing `<object>`/`<UserObject>`'s `label` / `c4Name` / `c4Description`) matches `/legend|illustrative/i`, resolve the container of that marker in this priority:
+1. **Explicit marker (preferred)** — if **any** cell's visible text (its `value`, or an enclosing `<object>`/`<UserObject>`'s `label` / `c4Name` / `c4Description`) matches `/legend|illustrative|图例|示例|说明|图示/i` (English + Chinese Legend terms; HTML tags stripped before matching), resolve the container of that marker in this priority:
    1. **drawio parent group** — if the marker's `parent` attribute points to a non-sentinel vertex cell, use the parent cell's own bbox. Child cells of that group (whose coords are drawio-relative) are preserved via parent-chain membership, not bbox overlap.
    2. **Geometric enclosure** — otherwise, find the smallest vertex cell whose bbox geometrically CONTAINS the marker's bbox (edges may touch). Use that vertex's bbox.
    3. **Marker alone** — if neither resolves, the marker cell's own bbox is too small to be useful on its own; fall through to Strategy 2.
@@ -34,10 +34,9 @@ Cells that straddle the Legend boundary (bbox partially inside, partially outsid
 After clearing, the generator draws a new hub in the **largest empty rectangle below the Legend region**:
 
 - **Canvas bounds** — `xmin = legend.xmin` (or 40 if no Legend), `ymin = legend.ymax + 80`, `xmax = max(legend.xmax, xmin + 1400)`, `ymax = ymin + 900`. Canvas is minimum 1400×900 so there's always room to fan out ~12 surround apps.
-- **Major app** — the first app with role ∈ {major, primary}. Placed centered at `(canvas.cx, canvas.cy)`. Box 260×120.
-- **Additional majors** (if any) — placed in a small horizontal row immediately above the central major, 20px gap between, centered.
+- **Major app** — **exactly one** hub. The first app with role ∈ {major, primary} becomes the Major and is placed centered at `(canvas.cx, canvas.cy)`. Box 260×120. If the caller supplies multiple major/primary apps, the extras are demoted to Surround and a single-line `INFO` log is emitted so the operator can see the demotion. If no major/primary is supplied, the first app (any role) is promoted to Major so the hub has a center.
 - **Surround apps** — arranged on a single circle around the Major cluster. Radius `r = max(320, 80 + box_diag * N / π)` where N is surround count and box_diag is 200 (diagonal of a surround box). Angle for surround `i` is `-π/2 + 2π · i / N` (first surround at 12 o'clock, going clockwise). Box 180×80.
-- **Interfaces** — every user-selected interface whose endpoints both landed on the canvas gets an `<mxCell edge="1">` with the `_edge_style(platform, planned_status)` palette. Edge label is `interface_name` only — the platform / integration tier is intentionally omitted so the picture stays business-readable. drawio auto-routes the line; we just set `source` + `target`.
+- **Interfaces** — every user-selected interface whose endpoints both landed on the canvas gets an `<mxCell edge="1">`. Edge style is a **neutral gray classic arrow** (`strokeColor=#666666`, width 1.5); platform (APIH / KPaaS / WSO2 / …) does NOT drive color because the Legend already defines its own interface-category visual language (Command / Event / Service / Content / Query / Embed) and a competing platform palette would fight it. `planned_status` still affects the line: `new` = dashed thicker, `sunset` = dotted red, `change` = thicker solid. Edge label is `interface_name` only.
 - **Orphan interfaces** — edges whose endpoint app didn't make it onto the canvas (e.g., an interface referencing an app not in the apps list) are silently dropped.
 
 Box color policy (tied to the architect's Legend):

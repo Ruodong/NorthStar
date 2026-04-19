@@ -469,6 +469,55 @@ def test_promotes_surround_when_no_major():
     assert len(new_vertex) == 2
 
 
+def test_multiple_primaries_demoted_to_single_major():
+    """Hub-and-spoke has ONE Major. Extra primaries go to Surround."""
+    tpl = _ea_style_template()
+    apps = [
+        # omit planned_status so role-based default (Modify/yellow) kicks in
+        {"app_id": "M1", "name": "First primary", "role": "primary"},
+        {"app_id": "M2", "name": "Second primary", "role": "primary"},
+        {"app_id": "R1", "name": "Related app", "role": "related"},
+    ]
+    out = generate_as_is_xml(tpl, apps, [])
+    graph_root = _parse_graph_root(out)
+    new_cells = [
+        c for c in graph_root.iter("mxCell")
+        if c.get("vertex") == "1" and c.get("id") not in ("L1", "L2", "L3", "L4")
+    ]
+
+    def _style(app_id: str) -> str:
+        for c in new_cells:
+            if f"ID: {app_id}" in (c.get("value") or ""):
+                return c.get("style") or ""
+        raise AssertionError(f"no cell for {app_id}")
+
+    # Only M1 gets Major (yellow) styling; M2 and R1 become Surrounds (blue)
+    assert "fillColor=#fff2cc" in _style("M1"), "first primary should be Major"
+    assert "fillColor=#dae8fc" in _style("M2"), "second primary should be demoted to Surround"
+    assert "fillColor=#dae8fc" in _style("R1"), "related stays Surround"
+
+
+def test_edge_style_is_neutral_not_platform_colored():
+    """Edges are neutral gray; platform (APIH blue / KPaaS green / etc.) is ignored."""
+    tpl = _ea_style_template()
+    apps = [_app("M1", "Major", role="major"), _app("S1", "S", role="surround")]
+    for platform in ("APIH", "KPaaS", "WSO2", "SomethingUnknown"):
+        iface = {
+            "from_app": "M1", "to_app": "S1",
+            "platform": platform, "interface_name": "x",
+            "planned_status": "change",
+        }
+        out = generate_as_is_xml(tpl, apps, [iface])
+        graph_root = _parse_graph_root(out)
+        edge = next(c for c in graph_root.iter("mxCell") if c.get("edge") == "1")
+        style = edge.get("style") or ""
+        assert "strokeColor=#666666" in style, f"{platform}: expected neutral, got {style}"
+        # No platform-specific colors bleed through
+        assert "#6ba6e8" not in style  # APIH blue
+        assert "#5fc58a" not in style  # KPaaS green
+        assert "#f6a623" not in style  # WSO2 amber
+
+
 def test_dedupes_apps():
     tpl = _ea_style_template()
     apps = [

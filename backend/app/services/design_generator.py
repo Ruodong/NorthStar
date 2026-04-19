@@ -28,6 +28,7 @@ contract.
 from __future__ import annotations
 
 import base64
+import logging
 import math
 import re
 import urllib.parse
@@ -35,6 +36,8 @@ import uuid
 import zlib
 from typing import Optional
 from xml.etree import ElementTree as ET
+
+logger = logging.getLogger(__name__)
 
 
 # Colors by planned_status (CMDB app lifecycle).
@@ -63,9 +66,14 @@ _PLATFORM_EDGE_COLOR: dict[str, str] = {
     "Goanywhere-web user": "#6b7488",
 }
 
-_LEGEND_LABEL_RE = re.compile(r"legend|illustrative", re.IGNORECASE)
-_LEGEND_TOP_FRACTION = 0.35
-_LEGEND_CLUSTER_GAP = 60.0
+_LEGEND_LABEL_RE = re.compile(
+    # English: legend / illustrative / key / reference
+    # Chinese: 图例 (legend), 示例 (example/illustration), 说明 (description/key)
+    r"legend|illustrative|图例|示例|说明|图示",
+    re.IGNORECASE,
+)
+_LEGEND_TOP_FRACTION = 0.40   # top 40% of graph bbox
+_LEGEND_CLUSTER_GAP = 60.0    # cluster split threshold
 _LEGEND_PADDING = 20.0
 
 # Hub-and-spoke canvas geometry.
@@ -141,10 +149,21 @@ def _app_style(planned_status: str, role: str = "major") -> str:
 
 
 def _edge_style(platform: str, planned_status: str) -> str:
-    color = _PLATFORM_EDGE_COLOR.get(platform, "#666666")
+    """Edge style: neutral gray classic arrow, status drives pattern.
+
+    The architect's Legend defines interface-category styles (Command /
+    Event / Service / Content / Query / Embed). Our data model doesn't
+    carry the category, so we use a single neutral style for all edges
+    and let drawio inherit the Legend's visual conventions rather than
+    inventing competing platform colors (APIH blue, KPaaS green …).
+
+    The `platform` parameter is preserved in the signature for backward
+    compat but no longer affects color.
+    """
+    _ = platform  # intentionally unused
     base = (
-        f"endArrow=classic;html=1;strokeColor={color};"
-        f"strokeWidth=1.5;fontSize=10;fontColor=#666;"
+        "endArrow=classic;html=1;strokeColor=#666666;"
+        "strokeWidth=1.5;fontSize=10;fontColor=#333;"
     )
     if planned_status == "new":
         base += "dashPattern=8 4;strokeWidth=2;"
@@ -594,22 +613,44 @@ def _dedupe_apps(apps: list[dict]) -> list[dict]:
 
 
 def _split_apps_by_role(apps: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Return (majors, surrounds). Majors = role in {major, primary}.
+    """Return ([single_major], surrounds).
 
-    If there are no majors, promote the first surround to major so the
-    hub has a center.
+    Hub-and-spoke has exactly ONE Major at the center. If the caller
+    supplies multiple apps with role ∈ {major, primary}, we honor the
+    FIRST and demote the rest to Surround. This matches the architect's
+    mental model of a hub-and-spoke ("middle apps is the Major, others
+    are context") — multi-primary would produce a visually ambiguous
+    output where the architect can't tell what the design is *about*.
+
+    If no majors are supplied, promote the first app to Major so the hub
+    has a center.
     """
-    majors: list[dict] = []
-    surrounds: list[dict] = []
+    primaries: list[dict] = []
+    others: list[dict] = []
     for a in apps:
         role = a.get("role") or "major"
         if role in ("major", "primary"):
-            majors.append(a)
+            primaries.append(a)
         else:
-            surrounds.append(a)
-    if not majors and surrounds:
-        majors.append(surrounds.pop(0))
-    return majors, surrounds
+            others.append(a)
+
+    if primaries:
+        major = primaries[0]
+        demoted = primaries[1:]
+        if demoted:
+            logger.info(
+                "design_generator: %d primary/major app(s) demoted to Surround "
+                "(hub-and-spoke allows one Major at the center): %s",
+                len(demoted),
+                [a.get("app_id") for a in demoted],
+            )
+        surrounds = demoted + others
+        return [major], surrounds
+
+    # No primary — promote the first of the 'others'
+    if others:
+        return [others[0]], others[1:]
+    return [], []
 
 
 def _compute_canvas_bounds(
@@ -829,6 +870,27 @@ def generate_as_is_xml(
 
     # Step 1: detect Legend, strip everything else
     legend_region = _detect_legend_region(graph_root)
+    if legend_region is None:
+        # Flag this loudly — a template that shipped a Legend but whose
+        # Legend we failed to detect means we'll clear the entire canvas
+        # below (including the Legend), which is the bug the architect
+        # was seeing. Surfaces in uvicorn logs on 71.
+        vertex_count = sum(
+            1 for c in graph_root.iter("mxCell")
+            if c.get("vertex") == "1" and c.get("id") not in ("0", "1")
+        )
+        logger.warning(
+            "design_generator: no Legend detected in template (%d vertex cells). "
+            "Add a cell containing 'Legend' / 'Illustrative' / '图例' inside the "
+            "region you want preserved, or rely on the top-band heuristic "
+            "(top 40%% cluster of >=3 vertex cells separated by a 60px gap).",
+            vertex_count,
+        )
+    else:
+        logger.info(
+            "design_generator: Legend region detected at (%.0f, %.0f, %.0f, %.0f)",
+            *legend_region,
+        )
     _strip_non_legend_cells(graph_root, legend_region)
 
     # Step 2: nothing to draw? return the stripped template as-is
