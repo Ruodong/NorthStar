@@ -295,13 +295,14 @@ export default function AppDetailClient({ initialData, appId }: Props) {
           aria-orientation="horizontal"
           style={{
             display: "flex",
-            gap: 56,
+            // Inter-group gap: tuned down from the 56px mockup value to
+            // 32px so all 9 tabs fit on one line at 1440px baseline
+            // without a scrollbar. Matches the 1280 fallback in
+            // DESIGN.md §Responsive — applying it at 1440 too because
+            // Lenovo internal display width is often ≤1280.
+            gap: 32,
             borderBottom: "1px solid var(--border)",
-            // DESIGN.md §Responsive: tablist falls back to horizontal
-            // scroll at ≤1024px rather than wrapping tabs (keeps the
-            // row baseline stable — no multi-line labels).
-            overflowX: "auto",
-            scrollbarWidth: "thin",
+            flexWrap: "nowrap",
           }}
         >
           {GROUP_ORDER.map((group) => (
@@ -319,7 +320,7 @@ export default function AppDetailClient({ initialData, appId }: Props) {
               >
                 {group}
               </div>
-              <div style={{ display: "flex", gap: 18 }}>
+              <div style={{ display: "flex", gap: 12 }}>
                 {TABS.filter((t) => t.group === group).map((def) => {
                   const count = def.count?.(data, extras);
                   const selected = tab === def.id;

@@ -54,7 +54,10 @@ export function TabButton({
         background: "transparent",
         border: "none",
         color: selected ? "var(--text)" : "var(--text-muted)",
-        padding: "10px 16px",
+        // Tighter horizontal padding so all 9 tabs fit on one line at
+        // 1440 without overflow. Vertical padding keeps the original
+        // feel.
+        padding: "10px 8px",
         fontSize: 13,
         fontWeight: selected ? 600 : 400,
         cursor: "pointer",
@@ -66,8 +69,7 @@ export function TabButton({
         // Keep every tab on a single line so the baseline stays even
         // across the row. Multi-word labels ("Impact Analysis",
         // "Knowledge Base") otherwise wrap and misalign with single-word
-        // neighbors. Horizontal overflow is handled by the tablist
-        // container (overflow-x: auto at ≤1024px per DESIGN.md).
+        // neighbors. NO scrollbar fallback — the row MUST fit.
         whiteSpace: "nowrap",
         flexShrink: 0,
       }}
