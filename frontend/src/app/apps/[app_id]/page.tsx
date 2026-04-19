@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { DeploymentMap } from "@/components/DeploymentMap";
 import { Pill } from "@/components/Pill";
-import { CapabilitiesTab } from "./CapabilitiesTab";
+import { CapabilitiesTab } from "./tabs/CapabilitiesTab";
 import {
   AppNode,
   OutboundEdge,
