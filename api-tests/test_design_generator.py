@@ -673,6 +673,50 @@ def test_cross_column_edge_uses_left_right_anchors():
     assert "entryX=0;" in s, f"expected entryX=0 (left), got {s}"
 
 
+def test_multiple_edges_between_same_pair_get_distinct_anchors():
+    """Two interfaces between the same (source, target) pair must use
+    different anchor y-fractions, so their lines don't overlap."""
+    tpl = _ea_style_template()
+    apps = [
+        _app("M1", "Major", role="major"),
+        _app("S1", "Side", role="surround"),
+    ]
+    ifaces = [
+        {"from_app": "M1", "to_app": "S1", "platform": "",
+         "interface_name": "JOB_A", "planned_status": "change"},
+        {"from_app": "M1", "to_app": "S1", "platform": "",
+         "interface_name": "JOB_B", "planned_status": "change"},
+    ]
+    out = generate_as_is_xml(tpl, apps, ifaces)
+    graph_root = _parse_graph_root(out)
+    edges = [c for c in graph_root.iter("mxCell") if c.get("edge") == "1"]
+    assert len(edges) == 2
+
+    def _exit_y(style: str) -> float:
+        import re as _re
+        m = _re.search(r"exitY=([\d.]+)", style)
+        return float(m.group(1)) if m else -1.0
+
+    ys = sorted(_exit_y(e.get("style") or "") for e in edges)
+    # They must be DIFFERENT — no more perfect overlap
+    assert ys[0] != ys[1], f"expected distinct anchors, both at {ys[0]}"
+    # And neither should be the default 0.5
+    assert all(y != 0.5 for y in ys), f"expected spread anchors, got {ys}"
+
+
+def test_single_edge_still_uses_center_anchor():
+    """Regression: a lone edge between a pair still anchors at the
+    middle (y=0.5)."""
+    tpl = _ea_style_template()
+    apps = [_app("M1", "Major", role="major"), _app("S1", "Side", role="surround")]
+    ifaces = [{"from_app": "M1", "to_app": "S1", "platform": "",
+               "interface_name": "only", "planned_status": "change"}]
+    out = generate_as_is_xml(tpl, apps, ifaces)
+    edge = next(c for c in _parse_graph_root(out).iter("mxCell") if c.get("edge") == "1")
+    style = edge.get("style") or ""
+    assert "exitY=0.500" in style or "exitY=0.5" in style
+
+
 def test_same_column_edge_uses_top_bottom_anchors():
     """Two Majors stacked vertically connect via TOP/BOTTOM anchors."""
     tpl = _ea_style_template()

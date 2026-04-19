@@ -887,45 +887,64 @@ def _emit_app_cell(
 _COL_ORDER = {"left": 0, "center": 1, "right": 2}
 
 
-def _anchor_style(src_info: dict, tgt_info: dict) -> str:
+def _side_fractions(n: int) -> list[float]:
+    """Distribute N anchor points along a side so N edges between the
+    same pair of apps don't overlap.
+
+    N=1 → [0.5] (single centered anchor, unchanged behaviour)
+    N=2 → [0.3, 0.7]
+    N=3 → [0.25, 0.5, 0.75]
+    N≥4 → evenly spread across [0.2, 0.8] to keep anchors away from the
+          corners where drawio's elbow-routing gets cramped.
+    """
+    if n <= 1:
+        return [0.5]
+    if n == 2:
+        return [0.3, 0.7]
+    lo, hi = 0.2, 0.8
+    step = (hi - lo) / (n - 1)
+    return [lo + i * step for i in range(n)]
+
+
+def _anchor_style(src_info: dict, tgt_info: dict, fraction: float = 0.5) -> str:
     """Return the exit*/entry* style fragment that forces the edge to
     connect on the LEFT/RIGHT side when the two apps live in different
     columns, or TOP/BOTTOM when they share a column.
 
-    This prevents drawio's default routing from taking a shortcut
-    through a neighbouring app box (e.g. routing SOC-ROW → KPAAS via
-    SOC-ROW's bottom edge, which would cross LSC 2.0).
+    `fraction` is the position along the chosen side (0..1). With a
+    single edge between a pair of apps, fraction=0.5 → middle. With
+    multiple edges, callers pass distinct fractions so the anchors
+    spread along the side and the lines don't overlap.
     """
     src_col = src_info.get("col")
     tgt_col = tgt_info.get("col")
     src_cy = src_info.get("cy", 0.0)
     tgt_cy = tgt_info.get("cy", 0.0)
+    f = max(0.05, min(0.95, fraction))
 
     if src_col == tgt_col:
-        # Same column → vertical connection. Exit from BOTTOM of the
-        # upper cell, enter at TOP of the lower cell (or mirror).
+        # Same column → vertical connection. Fraction maps to X.
         if tgt_cy > src_cy:
             return (
-                "exitX=0.5;exitY=1;exitDx=0;exitDy=0;"
-                "entryX=0.5;entryY=0;entryDx=0;entryDy=0;"
+                f"exitX={f:.3f};exitY=1;exitDx=0;exitDy=0;"
+                f"entryX={f:.3f};entryY=0;entryDx=0;entryDy=0;"
             )
         return (
-            "exitX=0.5;exitY=0;exitDx=0;exitDy=0;"
-            "entryX=0.5;entryY=1;entryDx=0;entryDy=0;"
+            f"exitX={f:.3f};exitY=0;exitDx=0;exitDy=0;"
+            f"entryX={f:.3f};entryY=1;entryDx=0;entryDy=0;"
         )
 
-    # Different columns → horizontal connection. Exit from the SIDE of
-    # the source that faces the target, enter on the opposite side.
+    # Different columns → horizontal. Fraction maps to Y.
     if _COL_ORDER.get(tgt_col, 1) > _COL_ORDER.get(src_col, 1):
-        # target is to the RIGHT of source
+        # target to the RIGHT of source
         return (
-            "exitX=1;exitY=0.5;exitDx=0;exitDy=0;"
-            "entryX=0;entryY=0.5;entryDx=0;entryDy=0;"
+            f"exitX=1;exitY={f:.3f};exitDx=0;exitDy=0;"
+            f"entryX=0;entryY={f:.3f};entryDx=0;entryDy=0;"
         )
-    # target is to the LEFT of source
+    # target to the LEFT of source
     return (
-        "exitX=0;exitY=0.5;exitDx=0;exitDy=0;"
-        "entryX=1;entryY=0.5;entryDx=0;entryDy=0;"
+        f"exitX=0;exitY={f:.3f};exitDx=0;exitDy=0;"
+        f"entryX=1;entryY={f:.3f};entryDx=0;entryDy=0;"
     )
 
 
@@ -937,10 +956,35 @@ def _emit_edges(
 ) -> int:
     """Create one edge cell per interface where both endpoints landed on
     the canvas. Returns the number of edges emitted.
+
+    When multiple interfaces connect the same pair of apps, the edges
+    get DIFFERENT anchor fractions along the chosen side so they don't
+    overlap and the labels remain separable.
     """
     app_to_info = app_to_info or {}
+
+    # First pass: count edges per unordered pair, and assign each edge
+    # an index within its pair so we can spread anchors later.
+    pair_count: dict[frozenset, int] = {}
+    pair_order: dict[int, int] = {}  # interface index → its position in the pair group
+    for i, iface in enumerate(interfaces):
+        src = iface.get("from_app")
+        tgt = iface.get("to_app")
+        if not src or not tgt or src == tgt:
+            continue
+        if src not in app_to_cell_id or tgt not in app_to_cell_id:
+            continue
+        key = frozenset((src, tgt))
+        pair_order[i] = pair_count.get(key, 0)
+        pair_count[key] = pair_order[i] + 1
+
+    # Resolve per-pair fraction list: index-within-pair → Y (or X) fraction
+    pair_fractions: dict[frozenset, list[float]] = {
+        key: _side_fractions(n) for key, n in pair_count.items()
+    }
+
     emitted = 0
-    for iface in interfaces:
+    for i, iface in enumerate(interfaces):
         src_id = app_to_cell_id.get(iface.get("from_app"))
         tgt_id = app_to_cell_id.get(iface.get("to_app"))
         if not src_id or not tgt_id:
@@ -953,12 +997,18 @@ def _emit_edges(
         planned = iface.get("planned_status", "change")
 
         # Anchor hint: force left/right-side connection for cross-column
-        # edges, top/bottom for same-column edges.
+        # edges, top/bottom for same-column edges. Multiple edges between
+        # the same pair get distinct fractions so their lines don't
+        # overlap.
         anchor = ""
         src_info = app_to_info.get(iface.get("from_app"))
         tgt_info = app_to_info.get(iface.get("to_app"))
         if src_info and tgt_info:
-            anchor = _anchor_style(src_info, tgt_info)
+            key = frozenset((iface["from_app"], iface["to_app"]))
+            fracs = pair_fractions.get(key, [0.5])
+            idx = pair_order.get(i, 0)
+            fraction = fracs[idx] if idx < len(fracs) else 0.5
+            anchor = _anchor_style(src_info, tgt_info, fraction=fraction)
 
         edge = ET.SubElement(graph_root, "mxCell")
         edge.set("id", _new_cell_id())
