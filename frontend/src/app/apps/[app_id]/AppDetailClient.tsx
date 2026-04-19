@@ -218,13 +218,9 @@ export default function AppDetailClient({ initialData, appId }: Props) {
     pills.push({ label: app.portfolio_mgt, tone: "amber" });
   }
 
-  // Metadata rows — concise overview, only 3 rows as per mockup A2.
-  const ownerText = [
-    app.owned_by_name && `Biz: ${app.owned_by_name}`,
-    app.app_dt_owner_name && `DT: ${app.app_dt_owner_name}`,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  // Metadata rows — concise overview. Owners and Source intentionally
+  // omitted: Owners has a dedicated section in OverviewTab, and source_system
+  // is an internal-sync field architects don't need above the fold.
   const geoText = [
     app.data_residency_geo,
     app.data_residency_country,
@@ -251,9 +247,7 @@ export default function AppDetailClient({ initialData, appId }: Props) {
           investments: investments.length,
         }}
         metadata={[
-          { label: "Owners", value: ownerText || null },
           { label: "Geo", value: geoText || null },
-          { label: "Source", value: app.source_system || null, mono: true },
         ]}
       />
 
