@@ -1207,14 +1207,13 @@ interface BCGroup {
 }
 
 function MajorAppChip({ app, onRemove }: { app: ScopeApp; onRemove: () => void }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const [bcData, setBcData] = useState<BCGroup[] | null>(null);
   const [bcLoading, setBcLoading] = useState(false);
 
-  const toggleExpand = async () => {
-    if (expanded) { setExpanded(false); return; }
-    setExpanded(true);
-    if (!bcData) {
+  // Auto-fetch BC data on mount
+  useEffect(() => {
+    (async () => {
       setBcLoading(true);
       try {
         const r = await fetch(`/api/apps/${encodeURIComponent(app.app_id)}/business-capabilities`);
@@ -1223,8 +1222,10 @@ function MajorAppChip({ app, onRemove }: { app: ScopeApp; onRemove: () => void }
         else setBcData([]);
       } catch { setBcData([]); }
       finally { setBcLoading(false); }
-    }
-  };
+    })();
+  }, [app.app_id]);
+
+  const toggleExpand = () => setExpanded((p) => !p);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
