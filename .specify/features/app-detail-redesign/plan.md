@@ -77,7 +77,9 @@ This plan captures findings + locked decisions from a 7-pass design review and b
 
 ---
 
-## 4. Scope (3 sequential PRs)
+## 4. Scope (4 sequential PRs)
+
+Per eng review Issue 16: NorthStar has no frontend test framework today. The 12 ACs listed in §5 are unverifiable without one. PR 4 (this scope expansion) introduces Playwright + axe-core, writes E2E tests for all 12 ACs plus a11y automation, and establishes the pattern for future UI PRs to use. Committed scope expansion (chosen over shortcut options B/C/D).
 
 ### PR 1 — DESIGN.md updates (doc-only)
 
@@ -104,8 +106,8 @@ partial: same surface as success but show "(N rows filtered)" in --text-muted
 NorthStar is desktop-only. ≥1024px supported. Below 1024 shows a single
 "Use a desktop browser" placeholder.
 - 1440 — design baseline (4 columns of metadata fit, full tab row visible)
-- 1280 — panels collapse from 4 cols → 3 cols
-- 1024 — panels collapse from 3 cols → 2 cols, tab nav scrolls horizontally
+- 1280 — panels collapse from 4 cols → 3 cols; tab nav inter-group gap 56→32, intra-group tab gap 18→12 (per eng review Issue 8)
+- 1024 — panels collapse from 3 cols → 2 cols; tab nav falls back to horizontal scroll if 3 groups still overflow
 
 ## Accessibility
 Focus: outline 1px solid var(--accent), outline-offset 2px on :focus-visible.
@@ -176,8 +178,22 @@ frontend/src/app/apps/[app_id]/
 
 **Constraint:** zero behavior change. Just file moves + import wiring. Each extracted file's first commit is "move only" (mechanical), second commit (if any) is "fix imports / cleanup". Easy diff to review.
 
+**State passing (per eng review Issue 4):** explicit props, NOT React Context.
+- Each tab declares its own props interface listing only the fields it consumes.
+- `page.tsx` destructures `AppDetailResponse` once and passes the slice each tab needs:
+  ```tsx
+  {tab === "overview" && <OverviewTab app={app} investments={investments} confluencePages={confluence_pages} tco={tco} />}
+  {tab === "integrations" && <IntegrationsTab appId={app.app_id} />}
+  ```
+- Reasons: (a) PR 2's "zero behavior change" constraint forbids introducing new primitives; (b) explicit > clever (eng preference); (c) Context can be added later when a sibling page (e.g. `/projects/[id]`) needs the same primitives.
+
+**Verification of "zero behavior change":** since NorthStar has no automated frontend tests, PR 2 ships with a manual checklist appended to its commit message:
+- Visit each of `/apps/A002856`, `/apps/A000005`, `/apps/A999999` (404), `/apps/A003000` (sparse) before AND after PR 2; screenshot each tab; diff visually.
+- Run `next build` inside the docker container — clean build with zero new TS errors.
+- See PR 2 §verification-checklist for full repro steps.
+
 **Affected files:**
-- `frontend/src/app/apps/[app_id]/page.tsx` — strip tab bodies
+- `frontend/src/app/apps/[app_id]/page.tsx` — strip tab bodies, retain destructure + tab nav + conditional render
 - `frontend/src/app/apps/[app_id]/tabs/*.tsx` — 9 new files
 - `frontend/src/app/apps/[app_id]/CapabilitiesTab.tsx` — moves to `tabs/CapabilitiesTab.tsx`
 - Imports adjust accordingly.
@@ -187,9 +203,16 @@ frontend/src/app/apps/[app_id]/
 Layered against PR 1 + PR 2.
 
 **1. Add `AnswerBlock.tsx`** above the tab nav. Renders:
-- Title row: `app_id` (mono, dim) + `name` (h1, 28px Space Grotesk 600) + status pills inline + activity timestamp right-aligned ("Updated 4h ago by sync_from_egm")
+- Title row: `app_id` (mono, dim) + `name` (h1, 28px Space Grotesk 600) + status pills inline + activity timestamp right-aligned ("Updated 4h ago" — drop the "by sync_from_egm" suffix; not user-facing signal)
+- CMDB indicator: mono 11px green `✓ cmdb-linked` immediately after name when `cmdb_linked === true`; red `✗ not in cmdb` when false
 - Purpose line: `short_description` truncated to first sentence; falls back to "(no description)"
-- KPI anchor row: 3 numbers in 38px Space Grotesk 600 tabular-nums. Format: `**24** integrations · **7** capabilities · **6** investments`
+- KPI anchor row: 3 numbers in 38px Space Grotesk 600 tabular-nums. Format: `**N** integrations · **N** capabilities · **N** investments`
+- **Data source per KPI** (per eng review Issue 3 — graph counts, not integration_interface counts):
+  - `integrations` = `outbound.length + inbound.length` from existing `/api/graph/nodes/{app_id}` response (architecture-side count, matches the "what diagram says" model)
+  - `capabilities` = `total_count` from `/api/apps/{app_id}/business-capabilities` (already pre-fetched as `capCount`)
+  - `investments` = `investments.length` from existing `/api/graph/nodes/{app_id}` response
+  - **All three derive from existing fetches. No new HTTP call.** AnswerBlock receives them as props from page.tsx.
+  - Explicit choice over `integration_interface` count (43 for A002856) because architects use NorthStar as a reference tool for the architectural model, not as a platform-registration audit (per CEO plan + design review Pass 3).
 - 3-row metadata: Last change · Owners · Geo
 
 **2. Reorder tabs into 3 groups under title:**
@@ -210,13 +233,20 @@ Visual: small group label above each group's tabs (caption 11px uppercase var(--
 - Top banner: red strip (full width), "Sunset — decommissioned 2025-03-15. Data shown for reference only."
 - Title-row status pill becomes red `SUNSET`.
 - Rest of page renders normally (per Pass 2 B).
+- **Source-of-truth conflict** (per eng review Issue 7): if `app.status === 'Active'` AND `decommissioned_at !== null`, trust `decommissioned_at` (concrete timestamp beats stale string). Banner appends a one-line note: "Status mismatch detected — CMDB lists Active but decommissioned 2025-03-15. Treating as sunset."
 
 **6. Non-CMDB X-prefixed apps** (`app.cmdb_linked === false`):
 - Don't 404. Render the page with available graph data.
-- AnswerBlock notes "Found in graph data, not in CMDB. Limited info."
+- **Backend already supports this** — `graph_query.get_application()` returns 200 + partial app_dict when graph has the node but CMDB doesn't (verified in eng review: `graph_query.py:121-123`). The router only 404s when BOTH graph AND CMDB miss the id. No backend changes required.
+- Frontend logic: check `app.cmdb_linked === false` in the response. AnswerBlock notes "Found in graph data, not in CMDB. Limited info available."
 - Tabs that need CMDB data (Deployment, TCO panel) show empty state with "Requires CMDB linkage."
 
-**7. Page-level error boundary** wraps `<main>`. Renders "NorthStar can't load this app right now. [Retry] [Back to home]" on any unhandled exception below.
+**7. Page-level error handling** uses Next.js App Router file convention, not a custom ErrorBoundary class:
+- Create `frontend/src/app/apps/[app_id]/error.tsx` (Next.js auto-wraps page.tsx with this).
+- Client component, props `{ error: Error & { digest?: string }; reset: () => void }`.
+- Renders: "NorthStar can't load this app right now. [Retry → calls reset()] [Back to home]"
+- Spec: https://nextjs.org/docs/app/api-reference/file-conventions/error
+- **NOT** a custom `<ErrorBoundary>` component — Next.js convention covers exactly this case (per eng review Issue 2).
 
 **8. Initial-load skeleton** for the AnswerBlock + first tab (Overview). 120ms fade-in once data arrives.
 
@@ -237,14 +267,147 @@ Visual: small group label above each group's tabs (caption 11px uppercase var(--
 
 **12. Per-tab count badge logic**: hide when 0 or undefined (already shipped, codify per DESIGN.md `CountBadge` primitive).
 
+**13. DRY — `useTabFetch` hook** (per eng review Issue 9):
+- Create `frontend/src/lib/hooks/useTabFetch.ts`:
+  ```tsx
+  export function useTabFetch<T>(url: string, deps: React.DependencyList) {
+    const [data, setData] = useState<T | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [err, setErr] = useState<string | null>(null);
+    useEffect(() => {
+      let cancelled = false;
+      (async () => {
+        setLoading(true); setErr(null);
+        try {
+          const r = await fetch(url, { cache: "no-store" });
+          if (!r.ok) throw new Error(`HTTP ${r.status}`);
+          const j = await r.json();
+          if (cancelled) return;
+          if (!j.success) { setErr(j.error || "Request failed"); return; }
+          setData(j.data as T);
+        } catch (e) {
+          if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
+        } finally {
+          if (!cancelled) setLoading(false);
+        }
+      })();
+      return () => { cancelled = true; };
+    }, deps);
+    return { data, loading, error: err };
+  }
+  ```
+- Migrate 4 heaviest tabs to use it in the redesign PR:
+  - `tabs/CapabilitiesTab.tsx` (-~15 lines)
+  - `tabs/ImpactTab.tsx` (-~15 lines)
+  - `tabs/DeploymentTab.tsx` (-~15 lines)
+  - `tabs/KnowledgeBaseTab.tsx` (-~15 lines)
+- Remaining tabs (Integrations, etc.) migrate when next touched — not required for this PR.
+- Net: ~60 lines of duplication removed, one canonical pattern that future tabs reuse.
+
+**14. Status pill CSS uses `--pill-color` pattern** (per eng review Issue 11) — codified in DESIGN.md `StatusPill` primitive:
+  ```css
+  .pill {
+    --pill-color: currentColor;
+    color: var(--pill-color);
+    border: 1px solid color-mix(in srgb, var(--pill-color) 40%, transparent);
+    background: color-mix(in srgb, var(--pill-color) 8%, transparent);
+  }
+  .pill.green { --pill-color: var(--status-green); }
+  .pill.blue  { --pill-color: var(--status-blue); }
+  .pill.amber { --pill-color: var(--accent); }
+  .pill.red   { --pill-color: var(--status-red); }
+  ```
+  No more copy-paste of `color-mix` per color.
+
+**15. capCount stays in page.tsx** (per eng review Issue 10), passed as prop to AnswerBlock. Shared with `<TabButton value="capabilities" count={capCount}>`. No double-fetch.
+
+**16. error.tsx is a client component** — first line `'use client'` required by Next.js App Router (per eng review Issue 14).
+
 **Affected files:**
 - `frontend/src/app/apps/[app_id]/page.tsx` — layout rewrite, tab grouping, AnswerBlock + CTA bar mount
 - `frontend/src/app/apps/[app_id]/AnswerBlock.tsx` — NEW
+- `frontend/src/app/apps/[app_id]/error.tsx` — NEW (Next.js error boundary file convention; replaces the originally-planned `components/ErrorBoundary.tsx`)
 - `frontend/src/app/apps/[app_id]/tabs/OverviewTab.tsx` — replace 4-panel grid with MetadataList
 - `frontend/src/app/apps/[app_id]/tabs/CapabilitiesTab.tsx` — back-port: aria-tree
 - `frontend/src/app/globals.css` — focus-visible style, sr-only utility class
-- `frontend/src/components/ErrorBoundary.tsx` — NEW (page-level)
-- (no backend changes — all data already exposed)
+- (no backend changes — verified during eng review that `graph_query.get_application()` already returns 200 for non-CMDB X-prefixed apps that exist in graph)
+
+### PR 4 — Playwright + axe-core automation (scope-expansion from eng review)
+
+First-time introduction of Playwright to NorthStar. Establishes the pattern; this redesign is the first consumer but future UI PRs inherit it.
+
+**1. Install + configure Playwright:**
+```bash
+cd frontend
+npm install --save-dev @playwright/test@latest @axe-core/playwright@latest
+npx playwright install chromium  # single browser, keep CI cost low
+```
+
+**2. Create `frontend/playwright.config.ts`:**
+- `testDir: '../e2e-tests'` (project root already has empty `e2e-tests/` dir — use it)
+- `baseURL: process.env.PLAYWRIGHT_BASE_URL ?? 'http://192.168.68.71:3003'`
+- One project `desktop-chromium` at 1440×900 viewport
+- `retries: 1` on CI, 0 local
+- `reporter: [['list'], ['html', { outputFolder: 'playwright-report' }]]`
+
+**3. Add scripts to `frontend/package.json`:**
+```json
+"scripts": {
+  "e2e": "playwright test",
+  "e2e:headed": "playwright test --headed",
+  "e2e:ui": "playwright test --ui"
+}
+```
+
+**4. E2E test files** — one file per concern, mapped to ACs:
+
+| Test file | ACs covered |
+|-----------|-------------|
+| `e2e-tests/app-detail/answer-block.spec.ts` | AC-1, AC-2, AC-3 (populated + no-description + zero-count) |
+| `e2e-tests/app-detail/sunset-variant.spec.ts` | AC-4 (sunset banner + status mismatch) |
+| `e2e-tests/app-detail/non-cmdb-app.spec.ts` | AC-5 (X-prefixed render with limited info) |
+| `e2e-tests/app-detail/a11y.spec.ts` | AC-6, AC-7 (keyboard focus + aria-expanded) + axe-core scan |
+| `e2e-tests/app-detail/error-boundary.spec.ts` | AC-8 (backend 500 → error.tsx; mock fetch failure) |
+| `e2e-tests/app-detail/responsive.spec.ts` | AC-9, AC-10 (1280/1024 gap fallback + <1024 placeholder) |
+| `e2e-tests/app-detail/pr-refactor-smoke.spec.ts` | Verifies PR 2 refactor: baseline screenshot diff for 5 key paths |
+| `e2e-tests/app-detail/migration-checks.spec.ts` | AC-11 (DESIGN.md primitives present), AC-12 (page.tsx ≤ 700 lines) — lightweight file/grep assertions |
+
+**5. CI integration (optional for this PR, required TODO):**
+- Flag as P1 TODO: add `.github/workflows/e2e.yml` (or GitLab CI equivalent) that spins up the docker-compose stack on a runner, waits for health, runs `npm run e2e`, uploads report on failure.
+- This PR ships with a documented LOCAL run command: `cd frontend && npx playwright test`. CI automation is a separate, follow-up PR.
+
+**6. axe-core integration** in `a11y.spec.ts`:
+```ts
+import { test, expect } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
+
+test('AC-6+AC-7: /apps/A002856 passes WCAG AA', async ({ page }) => {
+  await page.goto('/apps/A002856');
+  const results = await new AxeBuilder({ page })
+    .withTags(['wcag2a', 'wcag2aa'])
+    .analyze();
+  expect(results.violations).toEqual([]);
+});
+```
+
+**Test anchor apps** (consistent across all E2E):
+- `A002856` — populated, CMDB-linked, 7 BCs, 24 integrations (happy path)
+- `A003000` — unmapped (empty states)
+- `A999999` — truly missing (404 → not-found)
+- An X-prefixed id from the actual graph (query `ns_graph` for one during test setup; if none, skip with `test.skip()`)
+- A sunset app (query `ref_application` for one with `decommissioned_at IS NOT NULL`; if none, skip)
+
+**Affected files:**
+- `frontend/package.json` — add Playwright + axe deps, 3 scripts
+- `frontend/playwright.config.ts` — NEW
+- `e2e-tests/app-detail/*.spec.ts` — 8 NEW files
+- `e2e-tests/README.md` — NEW (describes pattern so next UI PR extends it)
+- `CLAUDE.md` — update Testing section: "E2E: `cd frontend && npm run e2e`. Runs against 71 by default; override via `PLAYWRIGHT_BASE_URL`."
+- `frontend/.gitignore` — add `playwright-report/`, `test-results/`
+
+**Constraint:** E2E tests run **against the deployed 71 stack by default** (matches how NorthStar actually works — no local stack). CI TODO will change this to spin up an ephemeral stack. Don't over-engineer for CI now.
+
+**Effort (per eng review):** human 1 week / CC 4h.
 
 ---
 
@@ -255,7 +418,7 @@ Visual: small group label above each group's tabs (caption 11px uppercase var(--
 | AC-1 | **Given** a populated app like A002856, **When** the App Detail page loads, **Then** the AnswerBlock shows name + 1-sentence purpose + 3 KPI numbers + last-change row above the tab nav. |
 | AC-2 | **Given** an app with no `short_description`, **When** the page loads, **Then** AnswerBlock shows "(no description)" — does not error or hide the field. |
 | AC-3 | **Given** an unmapped app like A003000 (no BCs, no integrations beyond a couple), **When** opened, **Then** the KPI anchor shows "0 integrations · 0 capabilities · 0 investments" using the same KPI typography (no missing-data fallback). |
-| AC-4 | **Given** a sunset app (`decommissioned_at` not null), **When** the page loads, **Then** the page-top sunset banner appears in red, the status pill is red SUNSET, and the rest of the page renders normally. |
+| AC-4 | **Given** a sunset app (`decommissioned_at` is a non-null timestamp), **When** the page loads, **Then** the page-top sunset banner appears in red with the decommissioned date formatted as `YYYY-MM-DD`, the status pill is red SUNSET, and the rest of the page renders normally. |
 | AC-5 | **Given** a non-CMDB X-prefixed app, **When** the page is opened directly via URL, **Then** it renders with available data (does NOT 404), AnswerBlock notes the CMDB-absent state, and CMDB-dependent tabs show "Requires CMDB linkage" empty state. |
 | AC-6 | **Given** any architect using only the keyboard, **When** they tab into the page, **Then** focus is visible (1px amber outline + 2px offset) on every interactive element, AND a "Skip to main content" link appears as the first tab stop. |
 | AC-7 | **Given** a screen-reader user, **When** they navigate the Capabilities tab tree, **Then** each L1/L2/L3 button announces its expanded/collapsed state and ARIA level. |
@@ -353,7 +516,7 @@ PR 3 implementation MUST match these token assignments:
 - **MetadataList** (replaces the 4-panel mosaic):
   - `display: grid; grid-template-columns: 120px 1fr; row-gap: 8px; column-gap: 24px`
   - No borders, no card chrome
-  - Labels: Mono 10px `var(--text-dim)` uppercase, 0.8px tracking
+  - Labels: Mono 11px `var(--text-dim)` uppercase, 0.7px tracking (caption token — per eng review Issue 13)
   - Values: Geist 13px `var(--text)`
   - Fields in order (Pass 7 D5 A): Identity → Ownership → Posture → Geo → TCO → System metadata
 
@@ -364,7 +527,7 @@ PR 3 implementation MUST match these token assignments:
   - Spacing: 10px gap between buttons, 26px margin below
 
 - **Tab navigation (3 groups)**:
-  - Group labels: Mono 10px `var(--text-dim)` uppercase, 1.6px tracking, 8px below → tab row
+  - Group labels: Mono 11px `var(--text-dim)` uppercase, 1.6px tracking, 8px below → tab row (per eng review Issue 12 — use existing `caption` token, don't invent 10px micro-caption)
   - Tabs: Geist 14px, inactive `var(--text-muted)` / active `var(--text)` + 2px `var(--accent)` underline
   - Count badges: Mono 11px `var(--text-dim)`, 6px left margin (hide when 0 or undefined)
   - Inter-group gap: 56px
@@ -432,3 +595,361 @@ Estimated effort:
 - PR 1: 1 hour CC (doc-only).
 - PR 2: 4 hours CC (mechanical extraction, 9 files, tests stay green).
 - PR 3: 1 day CC (the actual redesign — AnswerBlock, layout, sunset variant, a11y, error boundary).
+
+> **Estimates above are POST-DESIGN-REVIEW. Eng review (§12) found multiple incorrect repo assumptions and a class of architectural shortcuts. Effort revised in §13.**
+
+---
+
+## 12. Eng Review Cross-Model Findings
+
+`/plan-eng-review` ran 2026-04-19 on commit `7321e09`. 4 sections + outside voice (codex). 19 issues found across review sections + 17 additional findings from codex independent review.
+
+### 12.1 Pure fixes already applied to §4 (no decisions, written above)
+
+| # | Issue | Fix |
+|---|-------|-----|
+| 1 | Issue 1 — non-CMDB X-prefixed app | verified backend already supports it (`graph_query.py:121-123`); no backend change needed |
+| 2 | Issue 2 — custom ErrorBoundary | use Next.js `error.tsx` file convention instead |
+| 3 | Issue 3 — KPI integrations count ambiguity | use graph counts (`outbound + inbound`), not `integration_interface` count |
+| 4 | Issue 4 — state passing after PR 2 | explicit props, not Context |
+| 5 | Issue 7 — sunset source-of-truth | trust `decommissioned_at` over `status`, surface mismatch |
+| 6 | Issue 8 — tab nav 1280 fallback | gap 56→32, intra 18→12 |
+| 7 | Issue 9 — DRY useTabFetch hook | created (but see codex finding C — must preserve abort+timeout) |
+| 8 | Issue 10 — capCount placement | stays in page.tsx, prop down |
+| 9 | Issue 12, 13 — group/metadata label size | 11px (caption token), not 10px |
+| 10 | Issue 14 — error.tsx 'use client' | required first line |
+| 11 | Issue 19 — AnswerBlock 'use client' | required (uses hooks) |
+
+### 12.2 Codex independent review — 17 findings
+
+Run 2026-04-19, codex-cli 0.92.0, model_reasoning_effort=high. Result file `~/.gstack/projects/Ruodong-NorthStar/...` All hard claims verified against repo:
+
+- ✓ Stack is **Next 14.2.18 + React 18.3.1** (plan had assumed 15/19) — `frontend/package.json:15`
+- ✓ Vitest already configured at `frontend/vitest.config.ts`
+- ✓ Playwright already configured at root `playwright.config.ts` with specs in `e2e-tests/app-detail.spec.ts` etc., wired into `scripts/run_all_tests.sh:67`
+- ✓ Shared `Pill` component already exists at `frontend/src/components/Pill.tsx` (designed exactly for our StatusPill use case)
+- ✓ `frontend/src/app/layout.tsx:44` already renders `<main className="main">{children}</main>`
+- ✓ KnowledgeBaseTab already has AbortController + 15s timeout (`page.tsx:4099`)
+
+These all invalidate parts of the original plan.
+
+### 12.3 Cross-model tension decisions (all chose A — accept codex)
+
+| Tension | Codex's challenge | Decision |
+|---------|-------------------|----------|
+| **T1** | `error.tsx` doesn't catch `useEffect` async failures (Next.js error boundaries only catch render errors). AC-8 in §5 wouldn't actually work. | **A — RSC rewrite.** Move main app fetch from client `useEffect` to server component. `error.tsx` + `not-found.tsx` then naturally catch failures. Tabs remain client-side, lazy-loaded. |
+| **T2** | a11y plan only added `nav aria-label` and `role="tree"` attributes. Real tabs need `tablist`/`tab`/`tabpanel` + roving tabindex. Real tree needs keyboard arrow navigation. | **A — full ARIA.** Implement complete tablist pattern + tree keyboard navigation. ~2-3h CC. |
+| **T3** | PR 2 not "mechanical" — page.tsx has shared helpers + subcomponents lines 398-4826, not just tab bodies. Extraction requires deciding shared boundaries. | **A — PR 2 expansion.** First write a shared-boundary inventory (every helper → tab-local or `components/`), THEN extract. ~+1d CC. |
+| **T4** | AnswerBlock declared as "primitive" but planned at `apps/[app_id]/AnswerBlock.tsx` — that's page code, not a primitive. | **A — true primitive.** Move to `frontend/src/components/AnswerBlock.tsx`. Future `/projects/[id]` and `/capabilities/[id]` reuse. |
+| **T5** | Hero KPI capability count is fetched in a separate `useEffect` AFTER initial render → "0 capabilities" flash on first paint. | **A — backend support.** Add `capability_count` field to `/api/graph/nodes/{id}` response (one extra COUNT in `graph_query.get_application()`). Zero flash, zero extra HTTP call. |
+
+### 12.4 Codex findings handled by other corrections
+
+- **Existing Pill component** → §13 PR 1 reuses, drops invented "StatusPill"
+- **PR count inconsistency** → fixed in §13
+- **AC-11/12 are not E2E** (file length, DESIGN.md content) → §13 PR 4 moves these to lint/grep scripts
+- **PR 4 duplicates existing infra** → §13 PR 4 extends root `playwright.config.ts` + `e2e-tests/`, doesn't create frontend-local duplicates
+- **useTabFetch downgrades KnowledgeBaseTab abort/timeout** → §13 hook signature accepts optional `{ signal, timeoutMs }`
+- **Live-data test fragility** (skip if no sunset/X-prefixed app) → §13 ships seed-data fixture script
+- **cmdb_linked is optional, not strict bool** → §13 explicit `cmdb_linked === false` only when defined; `undefined` triggers "limited info" path same as false but with different copy
+- **PR 1 doc-first is backwards** → §13 keeps PR 1 doc-only but only documents primitives that actually exist OR ship in same PR set
+- **Skip-link / main landmark wrong** → §13 puts skip link in `layout.tsx` (NOT page.tsx) before existing `<main>`. Doesn't add nested main.
+
+---
+
+## 13. Revised PR Scope (post-eng-review, supersedes §4)
+
+**4 sequential PRs.** Effort doubled vs original §4 estimate due to RSC rewrite + full a11y + shared boundary work.
+
+### PR 1 — DESIGN.md updates (doc-only)
+
+Append to `DESIGN.md`. **Drop** `StatusPill` (Pill exists). Document only what ships in PR 2-4 OR already exists:
+
+```
+## Motion
+(unchanged from §4 PR 1)
+
+## Interaction States
+(unchanged from §4 PR 1)
+
+## Responsive
+(unchanged + 1280 tab nav gap fallback per Issue 8)
+
+## Accessibility
+- Focus: outline 1px solid var(--accent), outline-offset 2px on :focus-visible.
+- Skip link lives in layout.tsx (NOT per-page) — first tab stop, before nav.
+- Tab pattern: every tabbed UI uses role="tablist" / role="tab" / role="tabpanel"
+  with arrow-key navigation (left/right) and roving tabindex.
+- Tree pattern: hierarchical lists use role="tree" / role="treeitem"
+  with arrow-key navigation (up/down/left to collapse/right to expand)
+  + roving tabindex.
+- Contrast: WCAG AA via axe-core scan in E2E.
+
+## Component Primitives
+Pill — existing at frontend/src/components/Pill.tsx. Reuse, don't reinvent.
+  Add semantic shorthand variants (green/blue/amber/red) via tone="green" prop
+  if not already supported.
+
+AnswerBlock — frontend/src/components/AnswerBlock.tsx (NEW, shared primitive).
+  (spec from §9 mockup A2)
+
+MetadataList — frontend/src/components/MetadataList.tsx (NEW, shared primitive).
+  (spec from §9)
+
+CapabilityTree — pattern documented; ref impl tabs/CapabilitiesTab.tsx.
+  Full ARIA tree + keyboard navigation included.
+
+CountBadge — pattern documented; lives inline in TabButton.
+```
+
+CJK fallback for font stack: unchanged.
+
+**Effort:** 1.5h CC.
+
+### PR 2 — Restructure (RSC + tab extraction + shared boundary inventory)
+
+**Step 2a — Inventory.** Read page.tsx end-to-end. Produce `apps/[app_id]/REFACTOR-INVENTORY.md` listing every helper / subcomponent in page.tsx with disposition: `tab-local-X` (lives in tabs/X.tsx) | `app-detail-shared` (lives in apps/[app_id]/_shared/) | `app-wide-shared` (lives in components/). Commit this file BEFORE moving any code.
+
+**Step 2b — RSC conversion.** Convert `page.tsx` to a server component:
+
+```tsx
+// app/apps/[app_id]/page.tsx — RSC, no "use client"
+import { fetchAppDetail } from "@/lib/api-server";
+import { notFound } from "next/navigation";
+import AppDetailClient from "./AppDetailClient";
+
+export default async function Page({ params }: { params: { app_id: string } }) {
+  const data = await fetchAppDetail(params.app_id);
+  if (!data) notFound();
+  return <AppDetailClient initialData={data} appId={params.app_id} />;
+}
+```
+
+- New `AppDetailClient.tsx` is the existing client tree (with `'use client'`), receives `initialData` as prop instead of fetching.
+- New `frontend/src/lib/api-server.ts` — server-only fetch wrappers (uses internal docker DNS or `BACKEND_URL`).
+- `not-found.tsx` (NEW) — renders the "App not found" state currently in page.tsx.
+- `error.tsx` (NEW) — renders backend-error fallback. Now actually catches errors because `fetchAppDetail()` runs at render time.
+
+**Step 2c — Tab extraction** (matches original §4 PR 2 plan):
+- `apps/[app_id]/tabs/*.tsx` — 9 files, each `'use client'`, lazy-loaded via `React.lazy()` / `next/dynamic()` from AppDetailClient.
+- Move existing `CapabilitiesTab.tsx` into `tabs/`.
+
+**Step 2d — Shared promotion** (per inventory):
+- `components/Pill.tsx` already shared.
+- `components/Panel.tsx` (if used by ≥2 places) — promote.
+- Anything that's only used by App Detail stays in `apps/[app_id]/_shared/`.
+
+**Verification (replaces previous "manual checklist"):**
+- Existing `e2e-tests/app-detail.spec.ts` runs green before/after (was missed by original plan — these tests already exist).
+- Vitest unit tests run green.
+- `next build` clean, bundle size diff ≤ ±5KB.
+
+**Effort:** 1d CC (was 4h — RSC + inventory adds depth).
+
+### PR 3 — Redesign visual + a11y full + sunset + non-CMDB + backend KPI count
+
+**3a. Backend mini-change** — add `capability_count` to graph_query response:
+- `backend/app/services/graph_query.py` — add `SELECT count(*) FROM ref_app_business_capability WHERE app_id = $1` to `get_application()`, include in returned dict.
+- Backend response now includes: `app, outbound, inbound, investments, diagrams, confluence_pages, tco, review_pages, capability_count` (last is new).
+- Update `backend/app/models/schemas.py` ApplicationDetailResponse if typed.
+- Add api-test in `api-tests/test_graph.py` (or create) verifying the new field.
+
+**3b. AnswerBlock** — new at `frontend/src/components/AnswerBlock.tsx`:
+- Spec per §9 mockup A2.
+- Receives all data via props (RSC-fetched in page.tsx, passed through).
+- Uses existing `<Pill>` component (not custom).
+- Handles `cmdb_linked === false` AND `cmdb_linked === undefined` — both render the "limited info" indicator (different copy: false = "not in CMDB", undefined = "CMDB status unknown").
+- Non-CMDB graph-only apps: degrade gracefully across owners/geo/posture (not just deployment/TCO) per codex finding.
+
+**3c. CTA bar + tab grouping** — page.tsx (now AppDetailClient.tsx):
+- 4 CTA buttons (View Impact / See Investments / Show Diagrams / Show Confluence).
+- 3 group sections (ABOUT/CONNECTIONS/WORK).
+- **Full ARIA tablist pattern** (Tension 2A):
+  ```tsx
+  <div role="tablist" aria-orientation="horizontal" onKeyDown={handleArrowKeys}>
+    <button role="tab" aria-selected={...} aria-controls="panel-overview" tabIndex={...}>
+  ```
+  - Arrow keys (←/→) move between tabs within a group; Home/End jump to first/last.
+  - Roving tabindex (active tab tabindex=0, others tabindex=-1).
+  - `aria-controls` ID matches the visible tabpanel.
+- 3-group rendering: each `<div role="tablist">` per group OR single tablist + visual grouping. Verify with axe what's compliant.
+
+**3d. CapabilitiesTab full ARIA tree** (Tension 2A):
+- `role="tree"` on root.
+- `role="treeitem"` + `aria-level={1|2|3}` + `aria-expanded` on each.
+- Arrow-key navigation: ↑/↓ moves focus, → expands or descends, ← collapses or ascends.
+- Roving tabindex.
+- Reference: WAI-ARIA Authoring Practices tree pattern.
+
+**3e. Sunset variant** — banner in AnswerBlock surface. Source of truth = `decommissioned_at` (Issue 7). Banner copy includes formatted date.
+
+**3f. MetadataList** — new shared primitive at `frontend/src/components/MetadataList.tsx`. OverviewTab consumes it (replaces 4-panel mosaic).
+
+**3g. Pill semantic variants** — extend existing `Pill.tsx` with green/blue/amber/red shorthand if not present (likely needs ~10 lines).
+
+**3h. useTabFetch hook** — preserve abort + timeout (Issue 16 + codex):
+```tsx
+export function useTabFetch<T>(url: string, deps: React.DependencyList, opts?: { timeoutMs?: number }) {
+  // ... existing pattern + AbortController + setTimeout(controller.abort, opts.timeoutMs ?? 30000)
+}
+```
+KnowledgeBaseTab migration must keep its 15s timeout via `{ timeoutMs: 15000 }`.
+
+**3i. Skip link in layout.tsx, NOT page.tsx**:
+- Add `<a className="sr-only focus:not-sr-only" href="#main-content">Skip to main content</a>` as the FIRST element inside `<body>` (before `<nav>`).
+- Existing `<main className="main">` already exists; add `id="main-content"` to it.
+- DO NOT add another `<main>` in page.tsx.
+- `globals.css` adds `.sr-only` utility + `:focus-visible` style.
+
+**Effort:** 2d CC (was 1d — full ARIA + RSC integration + backend touch + shared primitive promotion).
+
+### PR 4 — Extend existing E2E (NOT create new)
+
+**4a. Extend root `playwright.config.ts`** — add new test files to `e2e-tests/app-detail/` (subdir of existing `e2e-tests/`). Keep using root config.
+
+**4b. Add `@axe-core/playwright`** as devDep at the **root** package.json (matches root playwright dep), not frontend.
+
+**4c. Test files** (mostly per original §4 PR 4 list, BUT remove AC-11/12 specs):
+
+| File | ACs |
+|------|-----|
+| `e2e-tests/app-detail/answer-block.spec.ts` | AC-1, AC-2, AC-3 |
+| `e2e-tests/app-detail/sunset-variant.spec.ts` | AC-4 |
+| `e2e-tests/app-detail/non-cmdb.spec.ts` | AC-5 |
+| `e2e-tests/app-detail/a11y.spec.ts` | AC-6, AC-7 + axe-core scan |
+| `e2e-tests/app-detail/error-boundary.spec.ts` | AC-8 (now realistic with RSC) |
+| `e2e-tests/app-detail/responsive.spec.ts` | AC-9, AC-10 |
+| Existing `e2e-tests/app-detail.spec.ts` | regression smoke (don't delete, don't conflict) |
+
+**4d. Fixtures over live data** — to avoid codex's flakiness concern:
+- Create `e2e-tests/fixtures/seed-test-apps.sql` — idempotent SQL that seeds (or asserts existence of):
+  - `A002856` (real, populated)
+  - `A_TEST_SUNSET` (synthetic, decommissioned_at = '2025-01-01')
+  - `XTESTNONCMDB` (synthetic, in graph only)
+- pre-test hook runs the seed against the test DB.
+- IF seeding the production-like 71 DB is undesirable, add `e2e-tests/fixtures/skip-marker.ts` documenting which tests need real data.
+
+**4e. AC-11 / AC-12 → lint scripts** (NOT E2E):
+- `frontend/package.json` adds:
+  ```json
+  "lint:design": "node ../scripts/check-design-md-primitives.mjs",
+  "lint:page-size": "node ../scripts/check-page-size.mjs"
+  ```
+- Run as part of `next build` precondition or pre-commit hook.
+
+**4f. CI integration** — flag as P1 TODO, not in this PR.
+
+**Effort:** 6h CC (was 4h — fixture infra + axe + extending instead of creating).
+
+### Revised total effort
+
+| PR | Original | Revised |
+|----|----------|---------|
+| PR 1 (DESIGN.md doc) | 1h | 1.5h |
+| PR 2 (restructure) | 4h | 1d |
+| PR 3 (redesign + a11y + backend) | 1d | 2d |
+| PR 4 (E2E extension) | 4h | 6h |
+| **Total** | **~2d** | **~4.5d CC** |
+
+The doubling reflects **doing it right the first time** vs the original plan's optimistic shortcuts.
+
+---
+
+## 14. Failure Modes (per eng review §4)
+
+| # | Failure mode | Test? | Error handling? | User-visible? |
+|---|-------------|-------|-----------------|---------------|
+| F1 | Backend 500 on `/api/graph/nodes/{id}` during initial render | error.tsx (PR 4 a11y.spec.ts mocks fetch failure) | error.tsx renders Retry/Home | Yes — clear message |
+| F2 | Backend 404 on app | not-found.tsx | Renders "App not found" + back link | Yes — clean |
+| F3 | Network timeout mid-render | RSC throws → error.tsx | Same as F1 | Yes |
+| F4 | Capability count fetch returns null | AnswerBlock fallback to "0 capabilities" or "—" | KPI shows "—" with mono dim | Subtle, no error |
+| F5 | Sunset banner with malformed `decommissioned_at` (non-ISO) | Date parse guard in AnswerBlock | Falls back to "decommissioned (date unknown)" | Visible degradation |
+| F6 | X-prefixed app with zero graph data (loader failed) | not-found.tsx (graph row missing → backend returns null) | Same as F2 | Yes |
+| F7 | Tab nav arrow keys in non-Latin keyboard layout | a11y.spec.ts checks `ArrowLeft`/`ArrowRight` keycodes | Standard keys, locale-independent | No issue |
+| **F8** ⚠ | **CapabilityTree roving tabindex bug** (focus lost after collapse) | **CRITICAL GAP** — needs custom test (no easy axe rule) | None planned in PR 3 | Silent — keyboard user gets stuck |
+
+**F8 is the one critical gap.** Plan adds explicit a11y.spec.ts test: collapse focused L1 → focus moves to L1 button itself (not lost to body).
+
+---
+
+## 15. Worktree Parallelization
+
+| Step | Modules touched | Depends on |
+|------|----------------|------------|
+| PR 1 (DESIGN.md) | `DESIGN.md` only | — |
+| PR 2 (restructure) | `frontend/src/app/apps/[app_id]/*`, `frontend/src/lib/api-server.ts`, `components/Pill.tsx` (if extending) | PR 1 (cites primitives) |
+| PR 3 (redesign) | same as PR 2 + `backend/app/services/graph_query.py` + `backend/app/models/schemas.py` + `frontend/src/components/{AnswerBlock,MetadataList}.tsx` + `frontend/src/lib/hooks/useTabFetch.ts` + `frontend/src/app/layout.tsx` (skip link) + `frontend/src/app/globals.css` | PR 2 |
+| PR 4 (E2E extension) | `e2e-tests/app-detail/*`, `playwright.config.ts`, root `package.json`, `frontend/package.json` (lint scripts) | PR 3 |
+
+**Lanes:**
+- **Lane A (sequential):** PR 1 → PR 2 → PR 3 → PR 4
+- **No parallel opportunity.** Each PR depends on the previous because PR 2 RSC restructure changes file shapes that PR 3 builds on, and PR 4 tests PR 3 behavior.
+
+**Worktree note:** PR 2 + PR 3 both touch `apps/[app_id]/`, so even with worktrees they'd merge-conflict. Strict serial.
+
+---
+
+## 16. TODOS Generated (final, supersedes §8)
+
+To append to `TODOS.md`:
+
+| ID | What | Priority |
+|----|------|----------|
+| T1 | AI-generated `ai_summary` pipeline (P1 from CEO plan; redesign uses `short_description` fallback) | P1 |
+| T2 | "Pin / follow app" + recent-views feed | P2 |
+| T3 | Related-apps sidebar (similarity model) | P3 |
+| T4 | Keyboard shortcuts for power users (`/`, `j/k`, `g o`) | P3 |
+| T5 | High-contrast theme variant | P3 |
+| T6 | Audit color contrast across NorthStar with axe-core (one-shot scan) | P1 (PR 4 covers App Detail; site-wide is follow-up) |
+| T7 | Mobile placeholder page ("use a desktop browser") | P2 |
+| **T8** | **CI integration: spin up docker-compose on runner, run `npm run e2e`, upload report on failure** | **P1** (gates routine PR safety; PR 4 ships local-only) |
+| **T9** | **Migrate remaining tabs (IntegrationsTab, InvestmentsTab, DiagramsTab, ConfluenceTab, OverviewTab) to `useTabFetch` hook** | P2 (do as touched) |
+| **T10** | **Promote shared App Detail helpers (`Panel`, etc.) to `frontend/src/components/` after PR 2 inventory shows ≥2 callers** | P2 |
+| **T11** | **Tab state URL sync** (`?tab=capabilities` deep-linkable; today local useState only) | P2 |
+
+---
+
+## 17. Completion Summary (eng review)
+
+```
++====================================================================+
+|         PLAN ENG REVIEW — COMPLETION SUMMARY                       |
++====================================================================+
+| Step 0 (Scope Challenge)     | scope expanded (T1+T2+T3 chosen A)  |
+| Section 1 (Architecture)     | 8 issues found, all addressed        |
+| Section 2 (Code Quality)     | 7 issues found, all addressed        |
+| Section 3 (Tests)            | 1 critical issue (no FE framework) — |
+|                              | resolved via PR 4 expansion          |
+| Section 4 (Performance)      | 2 minor issues, addressed inline     |
+| Outside Voice (codex)        | RAN — 17 findings, all verified true |
+| Cross-Model Tensions         | 5 raised, all resolved (5x A)        |
+| NOT in scope                 | written (§6)                         |
+| What already exists          | written (§7)                         |
+| TODOS proposed               | 11 (T1-T11)                          |
+| Failure modes flagged        | 8 modes, 1 critical gap (F8)         |
+| Parallelization              | none — strict serial 4-PR chain      |
+| Lake Score                   | 5/5 chose complete option            |
++====================================================================+
+```
+
+**Initial plan score (post-design-review): 8/10. After eng review: 7/10 (lower because revealed true scope is 2.25x estimated). After PR 4 ships: target 9/10.**
+
+---
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Codex Review | `/codex review` | Independent 2nd opinion | 1 | issues_found | 17 findings, all verified, drove 5 tension decisions |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | issues_open | 19 issues + 1 critical failure-mode gap (F8) — resolved in §13 |
+| Design Review | `/plan-design-review` | UI/UX gaps | 1 | clean | score: 6/10 → 8/10, 12 decisions |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+
+**CODEX:** 17 findings against original §4 plan; cross-model tension on RSC architecture, full a11y, shared boundary work, primitive promotion, backend KPI count. All A-decisions accepted by user.
+
+**CROSS-MODEL:** Codex found 11 facts that invalidated original plan assumptions (stack version, existing test infra, existing Pill component, layout main, KnowledgeBaseTab abort). All verified true against repo.
+
+**UNRESOLVED:** 0 (all 5 tensions decided, 19 issues addressed, 1 critical failure-mode F8 has explicit test plan).
+
+**VERDICT:** ENG + DESIGN CLEARED — ready to implement starting PR 1. CEO review optional (substantial scope expansion happened — could re-validate with CEO mode if you want).
