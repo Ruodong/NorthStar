@@ -40,6 +40,12 @@ Layers are independent — a failure on one does not abort the others. The scrip
 ### FR-5: Weekly Sync Integration
 Add a non-fatal stage to `scripts/weekly_sync.sh` that invokes `sync_architecture_templates.py`. Failures are logged but do not block the weekly pipeline.
 
+### FR-7: Design Wizard Template Visibility (added 2026-04-19)
+
+The Design wizard template picker (`GET /api/design/standard-templates` and the legacy `GET /api/design/templates`) MUST filter by `confluence_attachment.template_active`. The predicate is `COALESCE(a.template_active, true) = true` — so NULL (freshly synced, never-toggled) defaults to visible, and any diagram an architect marks inactive in `/settings` is excluded.
+
+This makes Settings the single control surface: "visible in Settings → pickable in Design." There is no separate "available-in-Design" flag, and no UI label is required — the Settings toggle is already the user-facing control.
+
 ### FR-6: Frontend Settings Page
 A new top-level `/settings` page (`frontend/src/app/settings/page.tsx`) with three stacked cards, one per layer. Each card shows:
 
@@ -74,6 +80,7 @@ Styling follows DESIGN.md Orbital Ops: dark base, single amber accent for primar
 - [ ] `/settings` page renders three cards with the design-system styling, nav link visible, Cmd+K includes entries for each layer.
 - [ ] `scripts/weekly_sync.sh` includes the new stage and does not abort on sync failure.
 - [ ] `api-tests/test_settings_architecture_templates.py` passes with all FR-3 and FR-2 cases.
+- [ ] `GET /api/design/standard-templates` excludes attachments with `template_active=false` (FR-7). Toggling a diagram inactive in Settings removes it from the Design wizard's picker; toggling it back restores it.
 
 ## Edge Cases
 

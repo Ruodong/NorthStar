@@ -36,7 +36,10 @@
       "api": ["api-tests/test_aliases.py"]
     },
     "backend/app/routers/settings.py": {
-      "api": ["api-tests/test_settings_architecture_templates.py"]
+      "api": ["api-tests/test_settings_architecture_templates.py", "api-tests/test_design_templates.py"]
+    },
+    "backend/app/routers/design.py": {
+      "api": ["api-tests/test_design_templates.py"]
     },
     "backend/app/routers/business_capabilities.py": {
       "api": ["api-tests/test_business_capabilities.py"]
