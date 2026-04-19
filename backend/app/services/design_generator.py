@@ -51,12 +51,23 @@ _APP_STATUS_STYLE: dict[str, str] = {
     "sunset": "fillColor=#f8cecc;strokeColor=#b85450;",
 }
 
+# Surround Applications — apps referenced by interfaces but not chosen by
+# the architect in the Apps panel. Rendered as muted grey boxes with a
+# dashed border so they read as context, not focus.
+_SURROUND_STYLE: str = "fillColor=#eef0f4;strokeColor=#9aa4b8;dashed=1;"
+
 # c4Type relabel so the reader can see each box's role at a glance.
+# "major" role wins over planned_status — architect-selected apps always
+# render as Major Applications.
 _C4_TYPE_BY_STATUS: dict[str, str] = {
     "change": "Major Application",
     "new":    "New Application",
     "sunset": "Sunset Application",
     "keep":   "Existing Application",
+}
+_C4_TYPE_BY_ROLE: dict[str, str] = {
+    "major":    "Major Application",
+    "surround": "Surround Application",
 }
 
 _PLATFORM_EDGE_COLOR: dict[str, str] = {
@@ -138,14 +149,23 @@ def _edge_style(platform: str, planned_status: str) -> str:
     return base
 
 
-def _recolor_cell_style(cell: ET.Element, planned_status: str) -> None:
-    """Overwrite fillColor / strokeColor in the cell's style, keep rest."""
+def _recolor_cell_style(
+    cell: ET.Element, planned_status: str, role: str = "major",
+) -> None:
+    """Overwrite fillColor / strokeColor / dashed in the cell's style.
+
+    Surround apps always render muted grey + dashed, regardless of the
+    planned_status field — they're context, not focus. Major apps pick
+    their color from planned_status (change/keep/new/sunset).
+    """
     old = cell.get("style", "") or ""
-    color = _APP_STATUS_STYLE.get(planned_status, _APP_STATUS_STYLE["keep"])
-    # Strip existing fill/stroke, then append the new ones.
+    if role == "surround":
+        color = _SURROUND_STYLE
+    else:
+        color = _APP_STATUS_STYLE.get(planned_status, _APP_STATUS_STYLE["keep"])
     kept = [
         p for p in old.split(";")
-        if p and not p.lower().startswith(("fillcolor=", "strokecolor="))
+        if p and not p.lower().startswith(("fillcolor=", "strokecolor=", "dashed="))
     ]
     kept.append(color.rstrip(";"))
     cell.set("style", ";".join(kept) + ";")
@@ -310,7 +330,13 @@ def _substitute_slot(slot: dict, app: dict) -> str:
     """Write `app` into `slot`. Returns the mxCell id used (for edge wiring)."""
     cell = slot["cell"]
     kind = slot["kind"]
+    role = app.get("role") or "major"
     planned = app.get("planned_status", "change")
+
+    # Pick the c4Type the reader will see. Role wins over status — a
+    # surround app is always "Surround Application" regardless of the
+    # planned_status flag on its interface row.
+    c4_type = _C4_TYPE_BY_ROLE.get(role) or _C4_TYPE_BY_STATUS.get(planned, "Application")
 
     if kind == "c4_object":
         obj = slot["element"]
@@ -320,34 +346,16 @@ def _substitute_slot(slot: dict, app: dict) -> str:
         # drawio re-renders the label.
         if app.get("name") or app.get("app_id"):
             obj.set("c4Name", app.get("name") or app.get("app_id") or "")
-        obj.set(
-            "c4Description",
-            (app.get("short_description") or "")[:140],
-        )
-        obj.set(
-            "c4Type",
-            _C4_TYPE_BY_STATUS.get(planned, "Application"),
-        )
-        # Some C4 templates put the app_id in an attribute we can write too.
+        obj.set("c4Description", (app.get("short_description") or "")[:140])
+        obj.set("c4Type", c4_type)
         if app.get("app_id"):
             obj.set("c4Id", app["app_id"])
-        # Remove the object-level label placeholder cache if present so
-        # drawio re-interprets %c4Name%.
-        if obj.get("label"):
-            # keep existing label template — it uses % substitution vars
-            pass
     else:
         # Plain mxCell — rewrite the value. We don't preserve the old
         # template literal; the user's app name is what matters.
         cell.set("value", _app_label(app))
 
-    # Recolor the mxCell for every slot kind (C4 cell is the child of object).
-    _recolor_cell_style(cell, planned)
-    # Mark external apps with a dashed border regardless of kind.
-    if app.get("role") == "external":
-        style = cell.get("style") or ""
-        if "dashed=1" not in style:
-            cell.set("style", style + ("" if style.endswith(";") else ";") + "dashed=1;")
+    _recolor_cell_style(cell, planned, role)
 
     cid = cell.get("id") or _new_cell_id()
     cell.set("id", cid)
@@ -358,8 +366,20 @@ def _substitute_slot(slot: dict, app: dict) -> str:
 
 
 def _role_priority(app: dict) -> int:
-    """Order for filling template slots: primary first, then related, then external."""
-    return {"primary": 0, "related": 1, "external": 2}.get(app.get("role", "primary"), 3)
+    """Order for filling template slots.
+
+    Major apps (architect-selected) fill central slots first; surround
+    apps (auto-derived from interfaces) take whatever's left. The old
+    primary/related/external vocabulary still routes here for backward
+    compat with regenerate flows that haven't been migrated yet.
+    """
+    return {
+        "major":    0,
+        "primary":  0,
+        "related":  1,
+        "surround": 2,
+        "external": 2,
+    }.get(app.get("role", "major"), 3)
 
 
 def _find_graph_root_in_mxfile(mxfile_root: ET.Element) -> Optional[ET.Element]:

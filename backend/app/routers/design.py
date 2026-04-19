@@ -53,6 +53,74 @@ def _resolve_attachment_file(local_path: Optional[str]) -> Optional[Path]:
     return p if p.is_file() else None
 
 
+async def _enrich_apps_with_surround(
+    selected: list[dict], interfaces: list[dict],
+) -> list[dict]:
+    """Return generator-ready app records.
+
+    - `selected` is the Apps panel picks; each is tagged role="major" so the
+      generator puts them into the template's central slots with the
+      Major Application color.
+    - Surround Applications are auto-derived: any app_id that appears on
+      either side of an interface but is NOT already in `selected`. They
+      get role="surround" and planned_status="keep" so the generator
+      styles them as muted / dashed context boxes.
+
+    CMDB names are fetched for both sets in one round trip; if an app_id
+    has no CMDB match (non-CMDB entity, e.g. LI-prefixed project ids)
+    we fall back to the id itself for the label.
+    """
+    selected_ids = [a["app_id"] for a in selected if a.get("app_id")]
+    selected_set = set(selected_ids)
+
+    referenced: set[str] = set()
+    for iface in interfaces:
+        for key in ("from_app", "to_app"):
+            v = iface.get(key)
+            if v:
+                referenced.add(v)
+
+    surround_ids = [i for i in referenced if i and i not in selected_set]
+    all_ids = list({*selected_ids, *surround_ids})
+
+    details: dict[str, dict] = {}
+    if all_ids:
+        rows = await pg_client.fetch(
+            """
+            SELECT app_id, name, short_description, status
+            FROM northstar.ref_application
+            WHERE app_id = ANY($1::text[])
+            """,
+            all_ids,
+        )
+        details = {r["app_id"]: dict(r) for r in rows}
+
+    out: list[dict] = []
+    for a in selected:
+        d = details.get(a["app_id"], {})
+        out.append({
+            "app_id": a["app_id"],
+            "name": d.get("name") or a["app_id"],
+            "short_description": d.get("short_description"),
+            # User-chosen apps default to change unless the architect said
+            # otherwise via a.planned_status. The generator renders Major
+            # regardless of status, but we preserve the flag for the edge /
+            # overflow-cell styling paths.
+            "planned_status": a.get("planned_status") or "change",
+            "role": "major",
+        })
+    for app_id in surround_ids:
+        d = details.get(app_id, {})
+        out.append({
+            "app_id": app_id,
+            "name": d.get("name") or app_id,
+            "short_description": d.get("short_description"),
+            "planned_status": "keep",
+            "role": "surround",
+        })
+    return out
+
+
 # ──────────────────────────────────────────────────────────────────
 # Request schemas
 # ──────────────────────────────────────────────────────────────────
@@ -97,15 +165,16 @@ class DesignUpdate(BaseModel):
 # ──────────────────────────────────────────────────────────────────
 @router.get("/standard-templates")
 async def list_standard_templates() -> ApiResponse:
-    """Standard templates — only those explicitly registered in Settings.
+    """Standard templates — only those explicitly registered in Settings
+    AND kept active by the architect.
 
     Returns drawio attachments whose page (or any descendant page) is
-    configured in ref_architecture_template_source. No fallback — if
-    Settings has no pages configured OR the configured pages have no
-    drawio attachments scanned yet, the list is empty.
+    configured in ref_architecture_template_source, filtered to rows with
+    `template_active=true`. NULL `template_active` defaults to visible so
+    freshly synced diagrams show up without an explicit toggle.
 
-    An architect registers template source pages via the Settings page
-    (/settings), then a sync picks up drawios there.
+    This mirrors the default "visible set" on /settings: what you see in
+    Settings is exactly what the Design wizard can pick as a template.
     """
     rows = await pg_client.fetch(
         """
@@ -134,6 +203,7 @@ async def list_standard_templates() -> ApiResponse:
         JOIN northstar.confluence_page cp ON cp.page_id = d.page_id
         JOIN northstar.confluence_attachment a ON a.page_id = cp.page_id
         WHERE a.file_kind IN ('drawio', 'drawio_xml')
+          AND COALESCE(a.template_active, true) = true
         ORDER BY d.layer, a.title
         LIMIT 200
         """
@@ -261,6 +331,7 @@ async def list_templates_legacy() -> ApiResponse:
             LEFT JOIN northstar.confluence_page cp
               ON cp.page_id = a.page_id
             WHERE a.file_kind IN ('drawio', 'drawio_xml')
+              AND COALESCE(a.template_active, true) = true
             ORDER BY t.updated_at DESC NULLS LAST, a.title
             """
         )
@@ -289,6 +360,7 @@ async def list_templates_legacy() -> ApiResponse:
                   ON cp.page_id = a.page_id
                 WHERE a.file_kind IN ('drawio', 'drawio_xml')
                   AND (a.title ILIKE '%template%' OR a.title ILIKE '%模板%')
+                  AND COALESCE(a.template_active, true) = true
                 ORDER BY a.title, cp.fiscal_year DESC NULLS LAST
                 LIMIT 200
                 """
@@ -555,32 +627,12 @@ async def create_design(payload: DesignCreate) -> ApiResponse:
             if resolved is not None:
                 template_xml = resolved.read_text(encoding="utf-8")
 
-    # 5. Fetch app display details for non-external apps
-    app_ids = [a.app_id for a in payload.apps if a.role != "external"]
-    app_details: dict[str, dict] = {}
-    if app_ids:
-        app_rows = await pg_client.fetch(
-            """
-            SELECT app_id, name, short_description, status
-            FROM northstar.ref_application
-            WHERE app_id = ANY($1::text[])
-            """,
-            app_ids,
-        )
-        app_details = {r["app_id"]: dict(r) for r in app_rows}
-
-    # Build app list for generator
-    gen_apps = []
-    for a in payload.apps:
-        d = app_details.get(a.app_id, {})
-        gen_apps.append({
-            "app_id": a.app_id,
-            "name": d.get("name") or a.app_id,
-            "short_description": d.get("short_description"),
-            "planned_status": a.planned_status,
-            "role": a.role,
-        })
-
+    # 5. Classify apps for the generator.
+    #    Major Applications = everything the architect chose in the Apps panel.
+    #    Surround Applications = apps referenced by interfaces but NOT in the
+    #    Apps panel. These are auto-derived so the architect doesn't have to
+    #    manually add upstream/downstream systems just to make interface edges
+    #    connect — we pick up their CMDB names and drop them on the canvas.
     gen_ifaces = [
         {
             "from_app": i.from_app,
@@ -591,6 +643,17 @@ async def create_design(payload: DesignCreate) -> ApiResponse:
         }
         for i in payload.interfaces
     ]
+    gen_apps = await _enrich_apps_with_surround(
+        [
+            {
+                "app_id": a.app_id,
+                "planned_status": a.planned_status,
+                "role": a.role,
+            }
+            for a in payload.apps
+        ],
+        gen_ifaces,
+    )
 
     # 6. Generate AS-IS XML
     xml_out = generate_as_is_xml(template_xml, gen_apps, gen_ifaces)
@@ -798,17 +861,18 @@ async def regenerate_as_is(design_id: int) -> ApiResponse:
             if resolved is not None:
                 template_xml = resolved.read_text(encoding="utf-8")
 
-    gen_apps = [
-        {
-            "app_id": a["app_id"],
-            "name": a.get("name") or a["app_id"],
-            "short_description": a.get("short_description"),
-            "planned_status": a.get("planned_status", "keep"),
-            "role": a.get("role", "primary"),
-        }
-        for a in apps
-    ]
     gen_ifaces = [dict(i) for i in ifaces]
+    gen_apps = await _enrich_apps_with_surround(
+        [
+            {
+                "app_id": a["app_id"],
+                "planned_status": a.get("planned_status", "change"),
+                "role": a.get("role", "primary"),
+            }
+            for a in apps
+        ],
+        gen_ifaces,
+    )
 
     xml_out = generate_as_is_xml(template_xml, gen_apps, gen_ifaces)
 
