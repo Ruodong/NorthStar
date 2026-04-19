@@ -82,14 +82,14 @@ export default function CapabilitiesPage() {
     })();
   }, []);
 
-  const toggleL1 = useCallback((id: string) => {
+  const toggleL1 = (id: string) => {
     setExpandedL1((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  }, []);
+  };
 
 
   if (loading) return <div style={{ padding: 40, color: "var(--text-dim)" }}>Loading...</div>;
