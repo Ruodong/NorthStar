@@ -64,6 +64,9 @@
     },
     "backend/app/services/business_capabilities.py": {
       "api": ["api-tests/test_business_capabilities.py"]
+    },
+    "backend/app/services/design_generator.py": {
+      "api": ["api-tests/test_design_generator.py"]
     }
   },
   "frontend": {
