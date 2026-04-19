@@ -59,13 +59,17 @@ async def _enrich_apps_with_surround(
 ) -> list[dict]:
     """Return generator-ready app records.
 
-    - `selected` is the Apps panel picks; each is tagged role="major" so the
-      generator puts them into the template's central slots with the
-      Major Application color.
-    - Surround Applications are auto-derived: any app_id that appears on
-      either side of an interface but is NOT already in `selected`. They
-      get role="surround" and planned_status="keep" so the generator
-      styles them as muted / dashed context boxes.
+    Role mapping: the wizard tags apps as `primary` (architect's focus —
+    the design is about THESE) or `related` (context). We forward those
+    roles to the generator as:
+
+        primary / major        → "major"   (center, yellow / Modify)
+        related / external / * → "surround" (side columns, blue / Existing)
+
+    Plus: any app_id that appears on either side of an interface but is
+    NOT already in `selected` gets auto-added as a surround, so the
+    architect doesn't have to manually add every integration partner to
+    the Apps panel just to make a connection end up on the canvas.
 
     CMDB names are fetched for both sets in one round trip; if an app_id
     has no CMDB match (non-CMDB entity, e.g. LI-prefixed project ids)
@@ -99,16 +103,14 @@ async def _enrich_apps_with_surround(
     out: list[dict] = []
     for a in selected:
         d = details.get(a["app_id"], {})
+        wizard_role = (a.get("role") or "primary").lower()
+        gen_role = "major" if wizard_role in ("major", "primary") else "surround"
         out.append({
             "app_id": a["app_id"],
             "name": d.get("name") or a["app_id"],
             "short_description": d.get("short_description"),
-            # User-chosen apps default to change unless the architect said
-            # otherwise via a.planned_status. The generator renders Major
-            # regardless of status, but we preserve the flag for the edge /
-            # overflow-cell styling paths.
             "planned_status": a.get("planned_status") or "change",
-            "role": "major",
+            "role": gen_role,
         })
     for app_id in surround_ids:
         d = details.get(app_id, {})

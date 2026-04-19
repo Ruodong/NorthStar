@@ -72,6 +72,12 @@ _LEGEND_LABEL_RE = re.compile(
     r"legend|illustrative|图例|示例|说明|图示",
     re.IGNORECASE,
 )
+# Stricter Legend marker — we prefer a cell whose text is *just* "Legend"
+# (or the Chinese equivalent) over broader hits like "Illustrative" or
+# "System description". When both exist in the same template, the
+# narrower one identifies the actual Legend box's interior, while
+# "Illustrative" is usually a separate sticky outside it.
+_LEGEND_STRICT_RE = re.compile(r"\b(legend|图例)\b", re.IGNORECASE)
 _LEGEND_TOP_FRACTION = 0.40   # top 40% of graph bbox
 _LEGEND_CLUSTER_GAP = 60.0    # cluster split threshold
 _LEGEND_PADDING = 20.0
@@ -418,15 +424,29 @@ def _detect_legend_region(
     if not vertex_bboxes:
         return None
 
-    # Strategy 1 — explicit marker
+    # Strategy 1 — explicit marker. Prefer the strict "Legend" / "图例"
+    # marker first; that text usually lives inside the Legend's inner
+    # box. Fall back to the broader regex (which also matches
+    # "Illustrative" / "说明") only if no strict hit exists. This means
+    # a template with both an "Illustrative" sticky and a "Legend" box
+    # will correctly collapse onto the Legend box, and the Illustrative
+    # sticky gets cleared with the rest of the template body.
     marker_cell: Optional[ET.Element] = None
     marker_bbox: Optional[tuple[float, float, float, float]] = None
-    for cell, text in _collect_marker_texts(graph_root):
-        if _LEGEND_LABEL_RE.search(text):
+    marker_texts = list(_collect_marker_texts(graph_root))
+    for cell, text in marker_texts:
+        if _LEGEND_STRICT_RE.search(text):
             marker_cell = cell
             marker_bbox = _cell_bbox(cell)
             if marker_bbox is not None:
                 break
+    if marker_cell is None:
+        for cell, text in marker_texts:
+            if _LEGEND_LABEL_RE.search(text):
+                marker_cell = cell
+                marker_bbox = _cell_bbox(cell)
+                if marker_bbox is not None:
+                    break
     if marker_cell is not None and marker_bbox is not None:
         # (a) Explicit drawio parent — use the parent cell's own bbox.
         # drawio groups carry their own geometry (union of children +
