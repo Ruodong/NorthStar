@@ -109,23 +109,46 @@ export default function GraphPage() {
       if (!data.root) throw new Error(`${appId} has no integration data in the graph yet. It may exist in CMDB but has not appeared in any architecture diagram.`);
 
       const elements: ElementDefinition[] = [];
+      const root = data.root;
+      const rootId = root.app_id;
+
+      // Build adjacency for BFS depth computation
+      const adj: Record<string, Set<string>> = {};
+      for (const e of data.edges || []) {
+        if (!adj[e.source]) adj[e.source] = new Set();
+        if (!adj[e.target]) adj[e.target] = new Set();
+        adj[e.source].add(e.target);
+        adj[e.target].add(e.source);
+      }
+
+      // BFS from root to assign depth
+      const depthMap: Record<string, number> = { [rootId]: 0 };
+      const queue = [rootId];
+      while (queue.length > 0) {
+        const cur = queue.shift()!;
+        for (const nb of adj[cur] || []) {
+          if (depthMap[nb] === undefined) {
+            depthMap[nb] = depthMap[cur] + 1;
+            queue.push(nb);
+          }
+        }
+      }
 
       // Root node
-      const root = data.root;
       elements.push({
         data: {
-          id: root.app_id,
-          label: root.name || root.app_id,
+          id: rootId,
+          label: root.name || rootId,
           status: root.status || "",
           isRoot: true,
+          depth: 0,
           raw: root,
         },
       });
 
       // Neighbor nodes
       for (const n of data.nodes || []) {
-        if (n.app_id === root.app_id) continue;
-        // Skip non-CMDB X-prefix nodes
+        if (n.app_id === rootId) continue;
         if (n.app_id?.startsWith("X")) continue;
         elements.push({
           data: {
@@ -133,6 +156,7 @@ export default function GraphPage() {
             label: n.name || n.app_id,
             status: n.status || "",
             isRoot: false,
+            depth: depthMap[n.app_id] ?? 2,
             raw: n,
           },
         });
@@ -170,32 +194,41 @@ export default function GraphPage() {
           {
             selector: "node",
             style: {
-              "background-color": (ele: cytoscape.NodeSingular) =>
-                STATUS_COLORS[ele.data("status")] || "#6ba6e8",
-              "border-width": 2,
-              "border-color": "#07090d",
+              "background-color": (ele: cytoscape.NodeSingular) => {
+                const depth = ele.data("depth") ?? 1;
+                if (depth === 0) return "#f6a623"; // root: amber
+                if (depth === 1) return "#5fc58a"; // layer 1: green
+                return "#6ba6e8"; // layer 2+: blue
+              },
+              "background-opacity": (ele: cytoscape.NodeSingular) => {
+                const depth = ele.data("depth") ?? 1;
+                return depth === 0 ? 1 : depth === 1 ? 0.85 : 0.6;
+              },
+              "border-width": 1,
+              "border-color": "#1a1f2e",
               label: "data(label)",
-              color: "#e7eaf0",
+              color: "#c0c6d4",
               "font-family": "Geist, -apple-system, sans-serif",
-              "font-size": 11,
-              "font-weight": 500,
+              "font-size": 9,
+              "font-weight": 400,
               "text-outline-color": "#07090d",
-              "text-outline-width": 3,
+              "text-outline-width": 2,
               "text-valign": "bottom",
-              "text-margin-y": 6,
-              width: 28,
-              height: 28,
+              "text-margin-y": 4,
+              width: 18,
+              height: 18,
             },
           },
           {
             selector: "node[?isRoot]",
             style: {
-              width: 40,
-              height: 40,
-              "border-width": 3,
+              width: 30,
+              height: 30,
+              "border-width": 2,
               "border-color": "#f6a623",
-              "font-size": 13,
+              "font-size": 12,
               "font-weight": 600,
+              color: "#f6a623",
             },
           },
           {
@@ -203,30 +236,34 @@ export default function GraphPage() {
             style: {
               "curve-style": "bezier",
               "target-arrow-shape": "triangle",
-              "line-color": "#2a3142",
-              "target-arrow-color": "#2a3142",
-              width: 1.2,
+              "target-arrow-color": "#1e2536",
+              "line-color": "#1e2536",
+              width: 0.7,
+              "arrow-scale": 0.6,
               label: "data(label)",
               "font-family": "Geist, -apple-system, sans-serif",
-              "font-size": 9,
-              color: "#5f6a80",
+              "font-size": 7,
+              color: "#3a4560",
               "text-rotation": "autorotate",
+              "text-opacity": 0.7,
             },
           },
           {
             selector: "node:selected",
             style: {
-              "border-width": 3,
+              "border-width": 2,
               "border-color": "#f6a623",
+              width: 24,
+              height: 24,
             },
           },
         ],
         layout: {
           name: "cose",
           animate: false,
-          nodeRepulsion: 12000,
-          idealEdgeLength: 140,
-          gravity: 0.3,
+          nodeRepulsion: 16000,
+          idealEdgeLength: 160,
+          gravity: 0.25,
         },
       });
 
