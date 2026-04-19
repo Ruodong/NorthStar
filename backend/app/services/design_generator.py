@@ -677,6 +677,46 @@ def _strip_non_legend_cells(
             graph_root.remove(wrapper)
 
 
+def _remove_illustrative_label(graph_root: ET.Element) -> None:
+    """Remove cells whose value/label is 'Illustrative' or template
+    placeholder boxes (e.g., boxes containing only 'ID: A000001' patterns
+    or 'System description and purpose'). These are template artifacts."""
+    _STRIP_PATTERNS = re.compile(
+        r"^(illustrative|示例)$",
+        re.IGNORECASE,
+    )
+    _TEMPLATE_BOX_PATTERNS = re.compile(
+        r"ID:\s*A000001|System description and purpose|"
+        r"Exist System|Changed Application|New Application|"
+        r"Sunset Application|3rd-parties App",
+        re.IGNORECASE,
+    )
+    to_remove: list[ET.Element] = []
+    for child in list(graph_root):
+        cell = child.find("mxCell") if child.tag != "mxCell" else child
+        if cell is None:
+            continue
+        cid = cell.get("id", "")
+        if cid in ("0", "1"):
+            continue
+        # Get text value from either the cell's value attr or the wrapper's label
+        val = child.get("label", "") or child.get("value", "") or cell.get("value", "") or ""
+        # Strip HTML tags for matching
+        plain = re.sub(r"<[^>]+>", "", val).strip()
+        if _STRIP_PATTERNS.match(plain):
+            to_remove.append(child)
+        elif _TEMPLATE_BOX_PATTERNS.search(plain) and cell.get("vertex") == "1":
+            # Only strip vertex cells (boxes), not edges
+            to_remove.append(child)
+    for el in to_remove:
+        try:
+            graph_root.remove(el)
+        except ValueError:
+            pass
+    if to_remove:
+        logger.info("design_generator: removed %d template artifact cells", len(to_remove))
+
+
 # ── hub-and-spoke layout ─────────────────────────────────────────
 
 
@@ -1115,6 +1155,11 @@ def generate_as_is_xml(
             *legend_region,
         )
     _strip_non_legend_cells(graph_root, legend_region)
+
+    # Step 1b: remove "Illustrative" label and empty template boxes from
+    # the preserved Legend region. These are template artifacts that
+    # shouldn't appear in the final generated diagram.
+    _remove_illustrative_label(graph_root)
 
     # Step 2: nothing to draw? return the stripped template as-is
     apps = _dedupe_apps(apps or [])

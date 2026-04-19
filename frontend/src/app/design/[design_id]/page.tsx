@@ -290,6 +290,11 @@ export default function DesignEditorPage() {
                   apps={majors}
                   emptyHint="none"
                 />
+                {majors.length > 0 && (
+                  <div style={{ marginTop: 10, padding: "0 0 6px" }}>
+                    <MajorAppBcList appIds={majors.map(a => a.app_id)} appNames={Object.fromEntries(majors.map(a => [a.app_id, a.name || a.app_id]))} />
+                  </div>
+                )}
                 {surrounds.length > 0 && (
                   <div style={{ marginTop: 14 }}>
                     <AppGroup
@@ -372,5 +377,57 @@ function AppGroup({
         </div>
       )}
     </>
+  );
+}
+
+// ── Business Capabilities for Major Apps (sidebar) ──────────────
+
+function MajorAppBcList({ appIds, appNames }: { appIds: string[]; appNames: Record<string, string> }) {
+  const [bcMap, setBcMap] = useState<Record<string, Array<{ bc_id: string; bc_name: string; l1: string }>>>({});
+
+  useEffect(() => {
+    for (const appId of appIds) {
+      fetch(`/api/apps/${encodeURIComponent(appId)}/business-capabilities`)
+        .then(r => r.json())
+        .then(j => {
+          if (!j.success) return;
+          const caps: Array<{ bc_id: string; bc_name: string; l1: string }> = [];
+          for (const l1 of j.data.l1_groups || [])
+            for (const l2 of l1.l2_groups)
+              for (const leaf of l2.leaves)
+                caps.push({ bc_id: leaf.bc_id, bc_name: leaf.bc_name, l1: l1.l1_domain });
+          setBcMap(prev => ({ ...prev, [appId]: caps }));
+        })
+        .catch(() => {});
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appIds.join(",")]);
+
+  const hasAny = Object.values(bcMap).some(caps => caps.length > 0);
+  if (!hasAny) return null;
+
+  return (
+    <div style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+      <h3 style={{ margin: "0 0 6px", fontSize: 9, color: "var(--text-dim)", textTransform: "uppercase", letterSpacing: 0.6, fontFamily: "var(--font-mono)" }}>
+        Business Capabilities
+      </h3>
+      {appIds.map(appId => {
+        const caps = bcMap[appId];
+        if (!caps || caps.length === 0) return null;
+        return (
+          <div key={appId} style={{ marginBottom: 8 }}>
+            <div style={{ fontSize: 10, color: "var(--accent)", fontFamily: "var(--font-mono)", marginBottom: 2 }}>
+              {appId} {appNames[appId]}
+            </div>
+            {caps.map(c => (
+              <div key={c.bc_id} style={{ fontSize: 10, color: "var(--text-muted)", marginLeft: 8, display: "flex", gap: 4 }}>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 8, color: "var(--text-dim)", flexShrink: 0 }}>{c.bc_id}</span>
+                <span>{c.bc_name}</span>
+              </div>
+            ))}
+          </div>
+        );
+      })}
+    </div>
   );
 }
