@@ -50,6 +50,18 @@
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --t-hover: 120ms;
   --t-state: 180ms;
+
+  /* spacing — 4px base scale per DESIGN.md */
+  --space-2xs: 2px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 20px;
+  --space-2xl: 28px;
+  --space-3xl: 40px;
+  --space-4xl: 56px;
+  --space-5xl: 80px;
 }
 
 * { box-sizing: border-box; }
