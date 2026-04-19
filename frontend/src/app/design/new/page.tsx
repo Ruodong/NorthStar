@@ -639,10 +639,13 @@ export default function DesignNewPage() {
             )}
           </div>
 
-          {/* Selected scope */}
+          {/* Selected scope — these are the Major Applications that will
+              drive the generated AS-IS diagram. Surround Applications
+              (auto-derived from interfaces) are rendered separately at
+              generate time; they aren't shown here. */}
           <div className="panel" style={{ padding: 14, gridColumn: "span 2" }}>
             <h3 style={{ marginTop: 0, fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>
-              In scope ({scopeApps.length})
+              Major Applications ({scopeApps.length})
             </h3>
             {scopeApps.length === 0 ? (
               <div style={{ color: "var(--text-dim)", fontSize: 12 }}>None yet — add apps from either panel above.</div>
@@ -691,7 +694,7 @@ export default function DesignNewPage() {
             {projectId && <><dt style={{ color: "var(--text-dim)" }}>Project</dt><dd><code style={{ color: "var(--accent)" }}>{projectId}</code></dd></>}
             <dt style={{ color: "var(--text-dim)" }}>Template</dt>
             <dd>{templateId ? (templates.find(t => t.attachment_id === templateId)?.title || `#${templateId}`) : "Blank canvas"}</dd>
-            <dt style={{ color: "var(--text-dim)" }}>Apps in scope</dt>
+            <dt style={{ color: "var(--text-dim)" }}>Major Applications</dt>
             <dd>{scopeApps.length}</dd>
             <dt style={{ color: "var(--text-dim)" }}>Interfaces kept</dt>
             <dd>{keepIfaceIds.size} of {scopedRows.length}</dd>
@@ -831,7 +834,7 @@ function SummaryBar({
         )}
       </SummaryCell>
 
-      <SummaryCell label="Apps" onJump={() => onJumpTab(2)} filled={scopeApps.length > 0}>
+      <SummaryCell label="Major Apps" onJump={() => onJumpTab(2)} filled={scopeApps.length > 0}>
         {scopeApps.length === 0 ? (
           <span style={{ color: "var(--text-dim)" }}>none</span>
         ) : (

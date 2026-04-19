@@ -368,25 +368,36 @@ function LayerCard({
             : "No drawio diagrams found under this URL."}
         </div>
       ) : (() => {
-        const visible = showInactive ? diagrams : diagrams.filter((d) => d.active);
-        const inactiveCount = diagrams.filter((d) => !d.active).length;
+        // "Standard" = active=true = shown in the Design wizard.
+        // We show ALL templates (standard + hidden) together so the
+        // architect can clearly see both sets and flip any card with
+        // a single click. "Show hidden" toggle is kept as a compact
+        // filter in case the hidden set gets large.
+        const standardCount = diagrams.filter((d) => d.active).length;
+        const hiddenCount = diagrams.filter((d) => !d.active).length;
+        const visible = showInactive ? diagrams : diagrams.filter((d) => d.active || hiddenCount === 0);
         const toggleActive = async (attId: string, active: boolean) => {
           await fetch(`/api/settings/architecture-templates/diagrams/${attId}/active?active=${active}`, { method: "PATCH" });
           setDiagrams((prev) => prev ? prev.map((d) => d.attachment_id === attId ? { ...d, active } : d) : prev);
         };
         return (
           <>
-            {inactiveCount > 0 && (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-muted)", cursor: "pointer" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)", letterSpacing: "0.05em" }}>
+                <span style={{ color: "var(--accent)", fontWeight: 600 }}>{standardCount}</span>
+                <span style={{ color: "var(--text-dim)" }}> STANDARD</span>
+                <span style={{ color: "var(--text-dim)", margin: "0 6px" }}>·</span>
+                <span style={{ color: "var(--text-muted)" }}>{hiddenCount} hidden</span>
+                <span style={{ color: "var(--text-dim)", margin: "0 6px" }}>·</span>
+                <span style={{ color: "var(--text-dim)" }}>{diagrams.length} total</span>
+              </span>
+              {hiddenCount > 0 && (
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--text-muted)", cursor: "pointer" }}>
                   <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
-                  Show inactive ({inactiveCount} hidden)
+                  Show hidden
                 </label>
-                <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
-                  {visible.length} / {diagrams.length} templates
-                </span>
-              </div>
-            )}
+              )}
+            </div>
             <div
               style={{
                 display: "grid",
@@ -413,15 +424,37 @@ function DiagramCard({ d, onToggle }: { d: ArchitectureTemplateDiagram; onToggle
     <div
       style={{
         background: "var(--bg-elevated)",
-        border: `1px solid ${d.active ? "var(--border)" : "var(--border)"}`,
+        border: `1px solid ${d.active ? "rgba(246,166,35,0.4)" : "var(--border)"}`,
         borderRadius: "var(--radius-md)",
         overflow: "hidden",
         display: "flex",
         flexDirection: "column",
-        opacity: d.active ? 1 : 0.45,
-        transition: "opacity 0.2s",
+        opacity: d.active ? 1 : 0.55,
+        transition: "opacity 0.2s, border-color 0.2s",
+        position: "relative",
       }}
     >
+      {d.active && (
+        <span
+          style={{
+            position: "absolute",
+            top: 6,
+            left: 6,
+            zIndex: 1,
+            padding: "2px 6px",
+            fontSize: 9,
+            fontFamily: "var(--font-mono)",
+            fontWeight: 600,
+            letterSpacing: "0.08em",
+            color: "var(--accent)",
+            background: "rgba(246,166,35,0.15)",
+            border: "1px solid rgba(246,166,35,0.4)",
+            borderRadius: "var(--radius-sm)",
+          }}
+        >
+          STANDARD
+        </span>
+      )}
       <a
         href={d.preview_url}
         target="_blank"
@@ -508,17 +541,19 @@ function DiagramCard({ d, onToggle }: { d: ArchitectureTemplateDiagram; onToggle
           onClick={() => onToggle(d.attachment_id, !d.active)}
           style={{
             marginTop: 4,
-            padding: "3px 8px",
+            padding: "4px 10px",
             fontSize: 10,
+            fontFamily: "var(--font-body)",
+            fontWeight: 600,
+            letterSpacing: "0.03em",
             border: `1px solid ${d.active ? "var(--border-strong)" : "var(--accent)"}`,
             borderRadius: "var(--radius-sm)",
             background: d.active ? "transparent" : "var(--accent)",
             color: d.active ? "var(--text-dim)" : "#000",
             cursor: "pointer",
-            fontWeight: 500,
           }}
         >
-          {d.active ? "Exclude" : "Include"}
+          {d.active ? "Unmark Standard" : "Mark as Standard"}
         </button>
       </div>
     </div>
