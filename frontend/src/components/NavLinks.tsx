@@ -9,6 +9,7 @@ const NAV_GROUPS = [
   [
     { href: "/applications", label: "Applications" },
     { href: "/projects", label: "Projects" },
+    { href: "/capabilities", label: "Business" },
     { href: "/standards", label: "Standards" },
   ],
   /* Analysis — graph + change tracking + design */
