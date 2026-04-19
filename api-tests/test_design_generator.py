@@ -631,6 +631,71 @@ def test_edge_labels_lifted_above_the_line():
     assert offset.get("y") == "-12"
 
 
+def test_cross_column_edge_uses_left_right_anchors():
+    """Edge between a center Major and a left-column Surround must exit
+    from Major's LEFT side (exitX=0) and enter Surround's RIGHT side
+    (entryX=1). Without this, drawio can route the edge through Major's
+    bottom and cross any Surround sitting in the same row."""
+    tpl = _ea_style_template()
+    apps = [
+        _app("M1", "Major", role="major"),
+        _app("S1", "Left", role="surround"),      # left column (idx 0)
+        _app("S2", "Right", role="surround"),     # right column (idx 1)
+        _app("S3", "LeftLower", role="surround"), # left column (idx 2)
+    ]
+    # Three edges: Major→LeftLower (should exit LEFT, enter RIGHT),
+    # Major→Right (exit RIGHT, enter LEFT), LeftLower→Right (exit LEFT
+    # on LeftLower — wait, Left-column exits to target-on-the-right
+    # means it EXITS RIGHT).
+    ifaces = [
+        {"from_app": "M1", "to_app": "S3", "platform": "",
+         "interface_name": "m-to-lower-left", "planned_status": "change"},
+        {"from_app": "M1", "to_app": "S2", "platform": "",
+         "interface_name": "m-to-right", "planned_status": "change"},
+    ]
+    out = generate_as_is_xml(tpl, apps, ifaces)
+    graph_root = _parse_graph_root(out)
+
+    def _style_of_edge_to(target_label: str) -> str:
+        for c in graph_root.iter("mxCell"):
+            if c.get("edge") == "1" and target_label in (c.get("value") or ""):
+                return c.get("style") or ""
+        raise AssertionError(f"no edge labeled {target_label!r}")
+
+    # M1 → S3 (left column): exit LEFT, enter RIGHT
+    s = _style_of_edge_to("m-to-lower-left")
+    assert "exitX=0;" in s, f"expected exitX=0 (left), got {s}"
+    assert "entryX=1;" in s, f"expected entryX=1 (right), got {s}"
+
+    # M1 → S2 (right column): exit RIGHT, enter LEFT
+    s = _style_of_edge_to("m-to-right")
+    assert "exitX=1;" in s, f"expected exitX=1 (right), got {s}"
+    assert "entryX=0;" in s, f"expected entryX=0 (left), got {s}"
+
+
+def test_same_column_edge_uses_top_bottom_anchors():
+    """Two Majors stacked vertically connect via TOP/BOTTOM anchors."""
+    tpl = _ea_style_template()
+    apps = [
+        _app("M1", "MajorTop", role="major"),
+        _app("M2", "MajorBottom", role="major"),
+    ]
+    ifaces = [{
+        "from_app": "M1", "to_app": "M2", "platform": "",
+        "interface_name": "m-to-m", "planned_status": "change",
+    }]
+    out = generate_as_is_xml(tpl, apps, ifaces)
+    graph_root = _parse_graph_root(out)
+    edge = next(
+        c for c in graph_root.iter("mxCell")
+        if c.get("edge") == "1" and "m-to-m" in (c.get("value") or "")
+    )
+    s = edge.get("style") or ""
+    # M1 is above M2 → exit from M1's BOTTOM (exitY=1), enter M2's TOP (entryY=0)
+    assert "exitY=1;" in s, f"expected exitY=1 (bottom), got {s}"
+    assert "entryY=0;" in s, f"expected entryY=0 (top), got {s}"
+
+
 def test_edge_has_rounded_orthogonal_style():
     """Soft folds: orthogonal routing with rounded=1 + arcSize."""
     tpl = _ea_style_template()

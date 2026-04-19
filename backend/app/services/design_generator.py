@@ -761,20 +761,15 @@ def _place_major_cluster(
     hub_cx: float,
     cluster_top_y: float,
     block_h: float,
-) -> tuple[dict[str, str], tuple[float, float]]:
+) -> tuple[dict[str, str], dict[str, dict], tuple[float, float]]:
     """Stack Major app boxes vertically, centered horizontally on `hub_cx`.
 
-    The cluster's TOP edge is at `cluster_top_y` — this pins the Majors
-    near the top of the usable canvas (just below the Legend / Users
-    entry) rather than floating at canvas middle.
-
-    Multiple Majors stack with _MAJOR_STACK_GAP between boxes. All
-    majors share the block_h so the cluster reads as a unit.
-
-    Returns (app_id_to_cell_id, (hub_cx, cluster_center_y)) — the center
-    of the ENTIRE major stack, so surround columns can line up.
+    Returns (app_to_cell_id, app_to_info, cluster_center). The
+    app_to_info dict carries {col, cx, cy} for each placed app so the
+    edge emitter can pick the right left/right/top/bottom anchor.
     """
     app_to_cell_id: dict[str, str] = {}
+    app_to_info: dict[str, dict] = {}
     x = hub_cx - _MAJOR_BOX_W / 2
 
     for i, app in enumerate(majors):
@@ -783,12 +778,18 @@ def _place_major_cluster(
             graph_root, app, x, y,
             _MAJOR_BOX_W, block_h, role="major",
         )
-        if app.get("app_id"):
-            app_to_cell_id[app["app_id"]] = cell_id
+        aid = app.get("app_id")
+        if aid:
+            app_to_cell_id[aid] = cell_id
+            app_to_info[aid] = {
+                "col": "center",
+                "cx": hub_cx,
+                "cy": y + block_h / 2,
+            }
 
     cluster_h = len(majors) * block_h + max(0, len(majors) - 1) * _MAJOR_STACK_GAP
     cluster_cy = cluster_top_y + cluster_h / 2
-    return app_to_cell_id, (hub_cx, cluster_cy)
+    return app_to_cell_id, app_to_info, (hub_cx, cluster_cy)
 
 
 def _place_surround_columns(
@@ -798,7 +799,7 @@ def _place_surround_columns(
     cluster_top_y: float,
     major_count: int,
     block_h: float,
-) -> dict[str, str]:
+) -> tuple[dict[str, str], dict[str, dict]]:
     """Arrange Surround apps in two vertical columns flanking the Major.
 
     - Left column: even-indexed surrounds (0, 2, 4, …)
@@ -814,7 +815,7 @@ def _place_surround_columns(
       column; mirror for left.
     """
     if not surrounds:
-        return {}
+        return {}, {}
 
     left: list[dict] = []
     right: list[dict] = []
@@ -835,7 +836,8 @@ def _place_surround_columns(
         return cluster_top_y
 
     app_to_cell_id: dict[str, str] = {}
-    for col_apps, col_x in ((left, left_x), (right, right_x)):
+    app_to_info: dict[str, dict] = {}
+    for col_apps, col_x, col_name in ((left, left_x, "left"), (right, right_x, "right")):
         top_y = _col_top_y(len(col_apps))
         for idx, app in enumerate(col_apps):
             y = top_y + idx * (block_h + _ROW_GAP_Y)
@@ -843,9 +845,15 @@ def _place_surround_columns(
                 graph_root, app, col_x, y,
                 _SURROUND_BOX_W, block_h, role="surround",
             )
-            if app.get("app_id"):
-                app_to_cell_id[app["app_id"]] = cell_id
-    return app_to_cell_id
+            aid = app.get("app_id")
+            if aid:
+                app_to_cell_id[aid] = cell_id
+                app_to_info[aid] = {
+                    "col": col_name,
+                    "cx": col_x + _SURROUND_BOX_W / 2,
+                    "cy": y + block_h / 2,
+                }
+    return app_to_cell_id, app_to_info
 
 
 def _emit_app_cell(
@@ -876,14 +884,61 @@ def _emit_app_cell(
     return cell_id
 
 
+_COL_ORDER = {"left": 0, "center": 1, "right": 2}
+
+
+def _anchor_style(src_info: dict, tgt_info: dict) -> str:
+    """Return the exit*/entry* style fragment that forces the edge to
+    connect on the LEFT/RIGHT side when the two apps live in different
+    columns, or TOP/BOTTOM when they share a column.
+
+    This prevents drawio's default routing from taking a shortcut
+    through a neighbouring app box (e.g. routing SOC-ROW → KPAAS via
+    SOC-ROW's bottom edge, which would cross LSC 2.0).
+    """
+    src_col = src_info.get("col")
+    tgt_col = tgt_info.get("col")
+    src_cy = src_info.get("cy", 0.0)
+    tgt_cy = tgt_info.get("cy", 0.0)
+
+    if src_col == tgt_col:
+        # Same column → vertical connection. Exit from BOTTOM of the
+        # upper cell, enter at TOP of the lower cell (or mirror).
+        if tgt_cy > src_cy:
+            return (
+                "exitX=0.5;exitY=1;exitDx=0;exitDy=0;"
+                "entryX=0.5;entryY=0;entryDx=0;entryDy=0;"
+            )
+        return (
+            "exitX=0.5;exitY=0;exitDx=0;exitDy=0;"
+            "entryX=0.5;entryY=1;entryDx=0;entryDy=0;"
+        )
+
+    # Different columns → horizontal connection. Exit from the SIDE of
+    # the source that faces the target, enter on the opposite side.
+    if _COL_ORDER.get(tgt_col, 1) > _COL_ORDER.get(src_col, 1):
+        # target is to the RIGHT of source
+        return (
+            "exitX=1;exitY=0.5;exitDx=0;exitDy=0;"
+            "entryX=0;entryY=0.5;entryDx=0;entryDy=0;"
+        )
+    # target is to the LEFT of source
+    return (
+        "exitX=0;exitY=0.5;exitDx=0;exitDy=0;"
+        "entryX=1;entryY=0.5;entryDx=0;entryDy=0;"
+    )
+
+
 def _emit_edges(
     graph_root: ET.Element,
     interfaces: list[dict],
     app_to_cell_id: dict[str, str],
+    app_to_info: Optional[dict[str, dict]] = None,
 ) -> int:
     """Create one edge cell per interface where both endpoints landed on
     the canvas. Returns the number of edges emitted.
     """
+    app_to_info = app_to_info or {}
     emitted = 0
     for iface in interfaces:
         src_id = app_to_cell_id.get(iface.get("from_app"))
@@ -897,9 +952,17 @@ def _emit_edges(
         iface_name = iface.get("interface_name") or ""
         planned = iface.get("planned_status", "change")
 
+        # Anchor hint: force left/right-side connection for cross-column
+        # edges, top/bottom for same-column edges.
+        anchor = ""
+        src_info = app_to_info.get(iface.get("from_app"))
+        tgt_info = app_to_info.get(iface.get("to_app"))
+        if src_info and tgt_info:
+            anchor = _anchor_style(src_info, tgt_info)
+
         edge = ET.SubElement(graph_root, "mxCell")
         edge.set("id", _new_cell_id())
-        edge.set("style", _edge_style(platform, planned))
+        edge.set("style", _edge_style(platform, planned) + anchor)
         edge.set("edge", "1")
         edge.set("parent", "1")
         edge.set("source", src_id)
@@ -1030,10 +1093,10 @@ def generate_as_is_xml(
     # Legend. Surround columns start at the same top.
     cluster_top_y = canvas[1]
 
-    major_map, _hub_center = _place_major_cluster(
+    major_map, major_info, _hub_center = _place_major_cluster(
         graph_root, majors, hub_cx, cluster_top_y, block_h,
     )
-    surround_map = _place_surround_columns(
+    surround_map, surround_info = _place_surround_columns(
         graph_root, surrounds, hub_cx, cluster_top_y,
         major_count=len(majors), block_h=block_h,
     )
@@ -1041,9 +1104,12 @@ def generate_as_is_xml(
     app_to_cell_id: dict[str, str] = {}
     app_to_cell_id.update(major_map)
     app_to_cell_id.update(surround_map)
+    app_to_info: dict[str, dict] = {}
+    app_to_info.update(major_info)
+    app_to_info.update(surround_info)
 
     # Step 4: edges
-    _emit_edges(graph_root, interfaces or [], app_to_cell_id)
+    _emit_edges(graph_root, interfaces or [], app_to_cell_id, app_to_info)
 
     # Step 5: repack
     _set_graph_model(diagram, was_compressed, graph_model)
