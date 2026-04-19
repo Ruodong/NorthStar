@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import { DeploymentMap } from "@/components/DeploymentMap";
+import { Pill } from "@/components/Pill";
 import { CapabilitiesTab } from "./CapabilitiesTab";
 
 // -----------------------------------------------------------------------------
@@ -307,57 +308,9 @@ export default function AppDetailPage() {
             {app.name || "(unnamed)"}
           </h1>
           <StatusPill status={app.status} />
-          {app.cmdb_linked && (
-            <span
-              style={{
-                fontSize: 10,
-                padding: "2px 8px",
-                background: "rgba(246,166,35,0.12)",
-                color: "var(--accent)",
-                border: "1px solid var(--accent)",
-                borderRadius: "var(--radius-sm)",
-                textTransform: "uppercase",
-                letterSpacing: 0.6,
-                fontWeight: 600,
-              }}
-            >
-              CMDB
-            </span>
-          )}
-          {app.app_ownership && (
-            <span
-              style={{
-                fontSize: 11,
-                padding: "3px 10px",
-                background: "rgba(107,166,232,0.12)",
-                color: "#6ba6e8",
-                border: "1px solid rgba(107,166,232,0.4)",
-                borderRadius: "var(--radius-sm)",
-                textTransform: "uppercase",
-                letterSpacing: 0.6,
-                fontWeight: 600,
-              }}
-            >
-              {app.app_ownership}
-            </span>
-          )}
-          {app.portfolio_mgt && (
-            <span
-              style={{
-                fontSize: 11,
-                padding: "3px 10px",
-                background: "rgba(168,176,192,0.12)",
-                color: "#a8b0c0",
-                border: "1px solid rgba(168,176,192,0.4)",
-                borderRadius: "var(--radius-sm)",
-                textTransform: "uppercase",
-                letterSpacing: 0.6,
-                fontWeight: 600,
-              }}
-            >
-              {app.portfolio_mgt}
-            </span>
-          )}
+          {app.cmdb_linked && <Pill label="CMDB" tone="accent" size="sm" />}
+          {app.app_ownership && <Pill label={app.app_ownership} tone="info" />}
+          {app.portfolio_mgt && <Pill label={app.portfolio_mgt} tone="neutral" />}
         </div>
         {app.description && (
           <p
@@ -811,23 +764,7 @@ function TabButton({
 
 function StatusPill({ status }: { status: string }) {
   const color = STATUS_COLORS[status] || "var(--text-dim)";
-  return (
-    <span
-      style={{
-        fontSize: 11,
-        padding: "3px 10px",
-        background: `color-mix(in srgb, ${color} 15%, transparent)`,
-        color,
-        border: `1px solid ${color}`,
-        borderRadius: "var(--radius-sm)",
-        textTransform: "uppercase",
-        letterSpacing: 0.6,
-        fontWeight: 600,
-      }}
-    >
-      {status || "Unknown"}
-    </span>
-  );
+  return <Pill label={status || "Unknown"} tone={color} />;
 }
 
 function CmdbField({
