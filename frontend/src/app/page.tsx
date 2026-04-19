@@ -449,16 +449,20 @@ function MetricCard({
   linkLabel?: string;
   accent?: boolean;
 }) {
-  return (
-    <div
-      style={{
-        padding: 16,
-        background: "var(--surface)",
-        border: "1px solid var(--border)",
-        borderLeft: accent ? "2px solid var(--accent)" : "1px solid var(--border)",
-        borderRadius: "var(--radius-lg)",
-      }}
-    >
+  const cardStyle: React.CSSProperties = {
+    display: "block",
+    padding: 16,
+    background: "var(--surface)",
+    border: "1px solid var(--border)",
+    borderLeft: accent ? "2px solid var(--accent)" : "1px solid var(--border)",
+    borderRadius: "var(--radius-lg)",
+    textDecoration: "none",
+    color: "inherit",
+    transition: "border-color var(--t-hover) var(--ease), background var(--t-hover) var(--ease)",
+  };
+
+  const content = (
+    <>
       <div
         style={{
           fontSize: 10,
@@ -483,23 +487,41 @@ function MetricCard({
         {value}
       </div>
       {link && (
-        <Link
-          href={link}
+        <div
           style={{
             marginTop: 8,
-            display: "inline-block",
             fontSize: 10,
             color: "var(--text-dim)",
             textTransform: "uppercase",
             letterSpacing: 0.6,
-            textDecoration: "none",
           }}
         >
           {linkLabel || "view"} →
-        </Link>
+        </div>
       )}
-    </div>
+    </>
   );
+
+  if (link) {
+    return (
+      <Link
+        href={link}
+        style={cardStyle}
+        onMouseOver={(e) => {
+          e.currentTarget.style.borderColor = "var(--border-strong)";
+          e.currentTarget.style.background = "var(--surface-hover)";
+        }}
+        onMouseOut={(e) => {
+          e.currentTarget.style.borderColor = "var(--border)";
+          e.currentTarget.style.background = "var(--surface)";
+        }}
+      >
+        {content}
+      </Link>
+    );
+  }
+
+  return <div style={cardStyle}>{content}</div>;
 }
 
 function Panel({
