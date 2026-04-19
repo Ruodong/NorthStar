@@ -305,14 +305,14 @@ def test_hub_and_spoke_one_major_three_surrounds():
         w = float(g.get("width") or "0"); h = float(g.get("height") or "0")
         return (x + w / 2, y + h / 2)
 
-    mcx, mcy = _center(major)
-    for i, surround in enumerate([s1, s2, s3]):
-        sx, sy = _center(surround)
-        # Surround must be at angle -90 + 120*i degrees from hub
-        expected_theta = -math.pi / 2 + 2 * math.pi * i / 3
-        actual_theta = math.atan2(sy - mcy, sx - mcx)
-        diff = abs(actual_theta - expected_theta)
-        assert diff < 0.02, f"surround {i} angle {math.degrees(actual_theta):.1f} != expected {math.degrees(expected_theta):.1f}"
+    mcx, _mcy = _center(major)
+    # Surrounds are split into left (even indexes: S1, S3) and right (odd: S2).
+    # All left surrounds must be LEFT of the major center; all right on the RIGHT.
+    assert _center(s1)[0] < mcx, "S1 (index 0, even) should be in the left column"
+    assert _center(s3)[0] < mcx, "S3 (index 2, even) should be in the left column"
+    assert _center(s2)[0] > mcx, "S2 (index 1, odd) should be in the right column"
+    # All surrounds in the same column share the same x (same column left-edge)
+    assert abs(_center(s1)[0] - _center(s3)[0]) < 0.1, "left-column surrounds share x"
 
 
 def test_single_major_no_surrounds_no_edges():
@@ -540,8 +540,10 @@ def test_multiple_primaries_demoted_to_single_major():
     assert "fillColor=#dae8fc" in _style("R1"), "related stays Surround"
 
 
-def test_edge_style_is_neutral_not_platform_colored():
-    """Edges are neutral gray; platform (APIH blue / KPaaS green / etc.) is ignored."""
+def test_edge_style_is_modify_yellow_orthogonal():
+    """Edges default to the Legend's 'Modify / Changed Interface' color
+    (#d6b656, yellow) with orthogonal routing. Platform (APIH / KPaaS /
+    WSO2) is ignored."""
     tpl = _ea_style_template()
     apps = [_app("M1", "Major", role="major"), _app("S1", "S", role="surround")]
     for platform in ("APIH", "KPaaS", "WSO2", "SomethingUnknown"):
@@ -554,11 +556,92 @@ def test_edge_style_is_neutral_not_platform_colored():
         graph_root = _parse_graph_root(out)
         edge = next(c for c in graph_root.iter("mxCell") if c.get("edge") == "1")
         style = edge.get("style") or ""
-        assert "strokeColor=#666666" in style, f"{platform}: expected neutral, got {style}"
+        assert "strokeColor=#d6b656" in style, f"{platform}: expected Modify yellow, got {style}"
+        assert "edgeStyle=orthogonalEdgeStyle" in style, f"{platform}: orthogonal routing missing"
         # No platform-specific colors bleed through
         assert "#6ba6e8" not in style  # APIH blue
         assert "#5fc58a" not in style  # KPaaS green
-        assert "#f6a623" not in style  # WSO2 amber
+
+
+def test_edge_new_is_green_dashed():
+    tpl = _ea_style_template()
+    apps = [_app("M1", "Major", role="major"), _app("S1", "S", role="surround")]
+    iface = {"from_app": "M1", "to_app": "S1", "platform": "APIH",
+             "interface_name": "x", "planned_status": "new"}
+    out = generate_as_is_xml(tpl, apps, [iface])
+    edge = next(c for c in _parse_graph_root(out).iter("mxCell") if c.get("edge") == "1")
+    style = edge.get("style") or ""
+    assert "strokeColor=#82b366" in style, f"new iface should be green, got {style}"
+    assert "dashPattern=" in style
+
+
+def test_edge_sunset_is_red_dotted():
+    tpl = _ea_style_template()
+    apps = [_app("M1", "Major", role="major"), _app("S1", "S", role="surround")]
+    iface = {"from_app": "M1", "to_app": "S1", "platform": "APIH",
+             "interface_name": "x", "planned_status": "sunset"}
+    out = generate_as_is_xml(tpl, apps, [iface])
+    edge = next(c for c in _parse_graph_root(out).iter("mxCell") if c.get("edge") == "1")
+    style = edge.get("style") or ""
+    assert "strokeColor=#b85450" in style, f"sunset iface should be red, got {style}"
+    assert "dashPattern=" in style
+
+
+def test_surrounds_split_into_left_and_right_columns():
+    """6 surrounds = 3 left + 3 right, each column at a fixed x."""
+    tpl = _ea_style_template()
+    apps = [_app("M1", "Hub", role="major")]
+    for i in range(6):
+        apps.append(_app(f"S{i}", f"Surround{i}", role="surround"))
+    out = generate_as_is_xml(tpl, apps, [])
+    graph_root = _parse_graph_root(out)
+
+    new = [
+        c for c in graph_root.iter("mxCell")
+        if c.get("vertex") == "1" and c.get("id") not in ("L1", "L2", "L3", "L4")
+    ]
+
+    def _cx(c):
+        g = c.find("mxGeometry")
+        return float(g.get("x")) + float(g.get("width")) / 2
+
+    major_cx = _cx(next(c for c in new if "ID: M1" in (c.get("value") or "")))
+
+    left_xs = []
+    right_xs = []
+    for i in range(6):
+        c = next(cc for cc in new if f"ID: S{i}" in (cc.get("value") or ""))
+        cx = _cx(c)
+        (left_xs if cx < major_cx else right_xs).append(cx)
+
+    assert len(left_xs) == 3 and len(right_xs) == 3
+    # All cells in one column share an x
+    assert max(left_xs) - min(left_xs) < 0.1
+    assert max(right_xs) - min(right_xs) < 0.1
+
+
+def test_box_height_scales_down_as_surround_count_grows():
+    """With many surrounds, boxes get shorter so the column fits."""
+    tpl = _ea_style_template()
+
+    def _heights(n_surround: int) -> list[float]:
+        apps = [_app("M1", "Hub", role="major")]
+        for i in range(n_surround):
+            apps.append(_app(f"S{i}", f"X", role="surround"))
+        out = generate_as_is_xml(tpl, apps, [])
+        gr = _parse_graph_root(out)
+        return [
+            float(c.find("mxGeometry").get("height"))
+            for c in gr.iter("mxCell")
+            if c.get("vertex") == "1" and c.get("id") not in ("L1", "L2", "L3", "L4")
+        ]
+
+    h_small = _heights(2)[0]    # 1 per side → clamped to MAX
+    h_big = _heights(20)[0]     # 10 per side → shrinks below MAX
+    assert h_big < h_small, f"expected shorter blocks when many surrounds, got {h_small} vs {h_big}"
+    # All blocks in one run share the same height (Major matches Surround)
+    hs = _heights(4)
+    assert max(hs) - min(hs) < 0.1, f"all blocks should share height: {hs}"
 
 
 def test_dedupes_apps():

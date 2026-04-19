@@ -82,10 +82,13 @@ _CANVAS_MIN_HEIGHT = 900
 _CANVAS_LEFT_MARGIN = 40
 _CANVAS_TOP_GAP = 80         # gap below the Legend band
 
-_MAJOR_BOX_W, _MAJOR_BOX_H = 260, 120
-_SURROUND_BOX_W, _SURROUND_BOX_H = 180, 80
+_MAJOR_BOX_W = 260
+_SURROUND_BOX_W = 200
 _MAJOR_STACK_GAP = 20         # gap between stacked major boxes
-_SURROUND_RING_MIN_R = 320
+_COLUMN_GAP_X = 120           # horizontal gap from Major center-edge to Surround column
+_ROW_GAP_Y = 18               # vertical gap between stacked Surround boxes
+_BLOCK_H_MIN = 55             # minimum renderable box height
+_BLOCK_H_MAX = 120            # cap — even with 1 surround, boxes shouldn't be huge
 
 _BLANK_DRAWIO_XML = """<mxfile host="northstar" type="design" version="24.0.0">
   <diagram name="Page-1" id="page1">
@@ -159,28 +162,35 @@ def _app_style(planned_status: str, role: str = "major") -> str:
 
 
 def _edge_style(platform: str, planned_status: str) -> str:
-    """Edge style: neutral gray classic arrow, status drives pattern.
+    """Edge style: orthogonal routing, Modify-yellow by default.
 
-    The architect's Legend defines interface-category styles (Command /
-    Event / Service / Content / Query / Embed). Our data model doesn't
-    carry the category, so we use a single neutral style for all edges
-    and let drawio inherit the Legend's visual conventions rather than
-    inventing competing platform colors (APIH blue, KPaaS green …).
+    Interfaces that make it into a design are by definition part of the
+    change — they've been explicitly picked from the catalog and carried
+    into this architecture. So every edge renders with the Legend's
+    'Modify / Changed Interface' color (#d6b656) unless planned_status
+    is explicitly `new` (green dashed) or `sunset` (red dotted).
 
-    The `platform` parameter is preserved in the signature for backward
-    compat but no longer affects color.
+    Routing is always `orthogonalEdgeStyle` (90° turns). drawio routes
+    straight through when source and target align, so horizontally-
+    aligned Major ↔ Surround pairs render as a single straight line with
+    no bends.
+
+    The `platform` parameter is preserved in the signature for
+    back-compat but no longer affects color.
     """
     _ = platform  # intentionally unused
     base = (
-        "endArrow=classic;html=1;strokeColor=#666666;"
-        "strokeWidth=1.5;fontSize=10;fontColor=#333;"
+        "edgeStyle=orthogonalEdgeStyle;"
+        "rounded=0;orthogonalLoop=1;jettySize=auto;"
+        "endArrow=classic;html=1;"
+        "strokeColor=#d6b656;strokeWidth=2;"
+        "fontSize=10;fontColor=#333;"
     )
     if planned_status == "new":
-        base += "dashPattern=8 4;strokeWidth=2;"
+        base += "strokeColor=#82b366;dashPattern=8 4;"  # Green, dashed = New
     elif planned_status == "sunset":
-        base += "dashPattern=2 2;strokeColor=#b85450;"
-    elif planned_status == "change":
-        base += "strokeWidth=2.5;"
+        base += "strokeColor=#b85450;dashPattern=2 2;"  # Red, dotted = Sunset
+    # planned_status in ("keep", "change", or unset) keeps the Modify yellow
     return base
 
 
@@ -459,28 +469,39 @@ def _detect_legend_region(
     if total_h <= 0:
         return None
 
-    # Sort cells by y (top edge), cluster by gap > _LEGEND_CLUSTER_GAP
+    # Sort cells by y-TOP edge. Cluster by gap between consecutive tops.
+    # IMPORTANT: we intentionally do NOT use the max-bottom seen so far to
+    # define "last y" — in real EA templates a tall background container
+    # spanning both Legend and body regions would collapse the whole graph
+    # into a single cluster. Top-to-top gap is a property of *where cells
+    # start*, not how big they are, so an oversized container doesn't
+    # contaminate the clustering.
     sorted_cells = sorted(vertex_bboxes, key=lambda cb: cb[1][1])
     clusters: list[list[tuple[ET.Element, tuple[float, float, float, float]]]] = [[]]
-    last_y: Optional[float] = None
+    last_top: Optional[float] = None
     for c, bb in sorted_cells:
-        y = bb[1]
-        if last_y is None:
+        y_top = bb[1]
+        if last_top is None or (y_top - last_top) <= _LEGEND_CLUSTER_GAP:
             clusters[-1].append((c, bb))
-        elif y - last_y > _LEGEND_CLUSTER_GAP:
-            clusters.append([(c, bb)])
         else:
-            clusters[-1].append((c, bb))
-        # "last_y" tracks the bottom edge of the cluster so tall cells
-        # don't split into their own cluster
-        last_y = max(bb[3], last_y if last_y is not None else bb[3])
+            clusters.append([(c, bb)])
+        last_top = y_top
 
     if not clusters or not clusters[0]:
         return None
     top_cluster = clusters[0]
     if len(top_cluster) < 3:
         return None
+
+    # Cap the Legend region's bottom at the NEXT cluster's top-edge minus
+    # a small margin. Without this, a tall container in the top cluster
+    # (bbox extending into body territory) would pull the region down and
+    # wrongly protect body cells.
     top_cluster_ymax = max(bb[3] for _, bb in top_cluster)
+    if len(clusters) >= 2 and clusters[1]:
+        next_cluster_ymin = min(bb[1] for _, bb in clusters[1])
+        top_cluster_ymax = min(top_cluster_ymax, next_cluster_ymin - 5)
+
     # Top cluster must sit within the top _LEGEND_TOP_FRACTION of the bbox
     if (top_cluster_ymax - gmin_y) / total_h > _LEGEND_TOP_FRACTION:
         return None
@@ -679,42 +700,56 @@ def _compute_canvas_bounds(
     return (xmin, ymin, xmax, ymax)
 
 
+def _compute_block_height(
+    n_surrounds: int,
+    canvas_height: float,
+) -> float:
+    """Pick a common block height for Major + Surround so everything reads
+    at roughly the same vertical size on the page.
+
+    Height is driven by the LARGER of the two surround columns (left/right)
+    so that column fits within the canvas height. Clamped to
+    [_BLOCK_H_MIN, _BLOCK_H_MAX].
+    """
+    if n_surrounds <= 0:
+        return _BLOCK_H_MAX
+    per_side = max(1, math.ceil(n_surrounds / 2))
+    usable = canvas_height - _ROW_GAP_Y * (per_side - 1)
+    h = usable / per_side
+    return max(_BLOCK_H_MIN, min(_BLOCK_H_MAX, h))
+
+
 def _place_major_cluster(
     graph_root: ET.Element,
     majors: list[dict],
     canvas: tuple[float, float, float, float],
+    block_h: float,
 ) -> tuple[dict[str, str], tuple[float, float]]:
-    """Draw the major app boxes vertically stacked around canvas center.
-
-    First major (index 0) is the CENTRAL major — placed exactly at canvas
-    center. Additional majors stack above it in reading order.
-
-    Returns (app_id_to_cell_id, center_of_central_major).
+    """Draw the major app boxes (single Major after splitting, but we keep
+    the loop for safety — callers always pass [major]). Central major at
+    canvas center; `block_h` matches the surround column so visual heights
+    line up.
     """
     cxmin, cymin, cxmax, cymax = canvas
     ccx = (cxmin + cxmax) / 2
     ccy = (cymin + cymax) / 2
 
     app_to_cell_id: dict[str, str] = {}
-    # Central major at index 0; extras stack ABOVE it
     n_extras = len(majors) - 1
-    total_extras_h = n_extras * (_MAJOR_BOX_H + _MAJOR_STACK_GAP)
-    # Top of extras block — so central major stays at ccy
-    top_y = ccy - _MAJOR_BOX_H / 2 - total_extras_h
+    total_extras_h = n_extras * (block_h + _MAJOR_STACK_GAP)
+    top_y = ccy - block_h / 2 - total_extras_h
 
     for i, app in enumerate(majors):
         if i == 0:
             x = ccx - _MAJOR_BOX_W / 2
-            y = ccy - _MAJOR_BOX_H / 2
+            y = ccy - block_h / 2
         else:
             x = ccx - _MAJOR_BOX_W / 2
-            # Extras go ABOVE the central — index 1 is topmost, index n-1
-            # just above the central.
-            y = top_y + (i - 1) * (_MAJOR_BOX_H + _MAJOR_STACK_GAP)
+            y = top_y + (i - 1) * (block_h + _MAJOR_STACK_GAP)
 
         cell_id = _emit_app_cell(
             graph_root, app, x, y,
-            _MAJOR_BOX_W, _MAJOR_BOX_H, role="major",
+            _MAJOR_BOX_W, block_h, role="major",
         )
         if app.get("app_id"):
             app_to_cell_id[app["app_id"]] = cell_id
@@ -722,38 +757,54 @@ def _place_major_cluster(
     return app_to_cell_id, (ccx, ccy)
 
 
-def _place_surround_ring(
+def _place_surround_columns(
     graph_root: ET.Element,
     surrounds: list[dict],
     hub_center: tuple[float, float],
+    block_h: float,
 ) -> dict[str, str]:
-    """Arrange surround apps on a circle around the hub center."""
+    """Arrange Surround apps in two vertical columns flanking the Major.
+
+    - Left column: even-indexed surrounds (0, 2, 4, …)
+    - Right column: odd-indexed surrounds (1, 3, 5, …)
+    - Each column is vertically centered on the hub center, so with
+      balanced counts the Major sits between two equal stacks. Odd total
+      → left column has one more, still visually centered.
+    - Box height = block_h (matches the Major) so all blocks read at
+      roughly the same visual size.
+    - Column x is offset from the Major center by
+      (_MAJOR_BOX_W/2 + _COLUMN_GAP_X) so there's breathing room for
+      orthogonal edge routing.
+    """
     if not surrounds:
         return {}
-    n = len(surrounds)
+
     hub_cx, hub_cy = hub_center
-
-    # Radius sized so boxes don't collide. Box diagonal ≈ 200; require
-    # arc-length between box centers ≥ diag + margin.
-    box_diag = math.hypot(_SURROUND_BOX_W, _SURROUND_BOX_H)
-    arc_needed = (box_diag + 40) * n
-    radius_from_circumference = max(arc_needed / (2 * math.pi), 0)
-    radius = max(_SURROUND_RING_MIN_R, int(radius_from_circumference))
-
-    # First surround at 12 o'clock, going clockwise
-    app_to_cell_id: dict[str, str] = {}
+    left: list[dict] = []
+    right: list[dict] = []
     for i, app in enumerate(surrounds):
-        theta = -math.pi / 2 + 2 * math.pi * i / n
-        cx = hub_cx + radius * math.cos(theta)
-        cy = hub_cy + radius * math.sin(theta)
-        x = cx - _SURROUND_BOX_W / 2
-        y = cy - _SURROUND_BOX_H / 2
-        cell_id = _emit_app_cell(
-            graph_root, app, x, y,
-            _SURROUND_BOX_W, _SURROUND_BOX_H, role="surround",
-        )
-        if app.get("app_id"):
-            app_to_cell_id[app["app_id"]] = cell_id
+        (left if i % 2 == 0 else right).append(app)
+
+    # Column x-positions (left edge of each surround box)
+    left_x = hub_cx - _MAJOR_BOX_W / 2 - _COLUMN_GAP_X - _SURROUND_BOX_W
+    right_x = hub_cx + _MAJOR_BOX_W / 2 + _COLUMN_GAP_X
+
+    def _stack_y(n_in_col: int, idx: int) -> float:
+        """Center an n-tall stack on hub_cy; return top-y of idx in that stack."""
+        col_h = n_in_col * block_h + (n_in_col - 1) * _ROW_GAP_Y
+        start_y = hub_cy - col_h / 2
+        return start_y + idx * (block_h + _ROW_GAP_Y)
+
+    app_to_cell_id: dict[str, str] = {}
+    for col_apps, col_x in ((left, left_x), (right, right_x)):
+        for idx, app in enumerate(col_apps):
+            y = _stack_y(len(col_apps), idx)
+            cell_id = _emit_app_cell(
+                graph_root, app, col_x, y,
+                _SURROUND_BOX_W, block_h, role="surround",
+            )
+            if app.get("app_id"):
+                app_to_cell_id[app["app_id"]] = cell_id
     return app_to_cell_id
 
 
@@ -914,8 +965,11 @@ def generate_as_is_xml(
     canvas = _compute_canvas_bounds(legend_region)
     majors, surrounds = _split_apps_by_role(apps)
 
-    major_map, hub_center = _place_major_cluster(graph_root, majors, canvas)
-    surround_map = _place_surround_ring(graph_root, surrounds, hub_center)
+    canvas_h = canvas[3] - canvas[1]
+    block_h = _compute_block_height(len(surrounds), canvas_h)
+
+    major_map, hub_center = _place_major_cluster(graph_root, majors, canvas, block_h)
+    surround_map = _place_surround_columns(graph_root, surrounds, hub_center, block_h)
 
     app_to_cell_id: dict[str, str] = {}
     app_to_cell_id.update(major_map)
