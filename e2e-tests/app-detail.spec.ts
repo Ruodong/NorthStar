@@ -34,6 +34,11 @@ test.describe("Application Detail Page", () => {
     const depTab = page.locator("button, [role=tab]", { hasText: /Deployment/ }).first();
     await depTab.click();
     await page.waitForTimeout(3000);
+    // Default Deployment view is Map (commit 17925f5). Switch to Table view
+    // to see the by-city/env table that contains the Environment column.
+    const tableToggle = page.locator("button", { hasText: /Table View/ }).first();
+    await tableToggle.click();
+    await page.waitForTimeout(500);
     await expect(page.locator("th:has-text('Environment')").first()).toBeVisible({ timeout: 10000 });
   });
 
