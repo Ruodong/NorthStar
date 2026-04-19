@@ -1,11 +1,20 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 
 // ---------------------------------------------------------------------------
-// Types — match /api/business-capabilities response
+// Types
 // ---------------------------------------------------------------------------
+interface BCApp {
+  app_id: string;
+  name: string;
+  status: string | null;
+  app_ownership: string | null;
+  u_service_area: string | null;
+  portfolio_mgt: string | null;
+}
+
 interface BCNode {
   bc_id: string;
   bc_name: string;
@@ -44,6 +53,8 @@ export default function CapabilitiesPage() {
   const [err, setErr] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [expandedL1, setExpandedL1] = useState<Set<string>>(new Set());
+  const [expandedL3, setExpandedL3] = useState<string | null>(null);
+  const [l3Apps, setL3Apps] = useState<Record<string, BCApp[]>>({});
 
   useEffect(() => {
     (async () => {
@@ -100,6 +111,24 @@ export default function CapabilitiesPage() {
       return next;
     });
   };
+
+  const toggleL3 = useCallback(async (bcId: string, appCount: number) => {
+    if (appCount === 0) return;
+    if (expandedL3 === bcId) {
+      setExpandedL3(null);
+      return;
+    }
+    setExpandedL3(bcId);
+    if (!l3Apps[bcId]) {
+      try {
+        const r = await fetch(`/api/business-capabilities/${encodeURIComponent(bcId)}/apps`);
+        const j = await r.json();
+        if (j.success) {
+          setL3Apps((prev) => ({ ...prev, [bcId]: j.data.apps || [] }));
+        }
+      } catch { /* ignore */ }
+    }
+  }, [expandedL3, l3Apps]);
 
   return (
     <div>
@@ -224,58 +253,93 @@ export default function CapabilitiesPage() {
                         gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
                         gap: 8,
                       }}>
-                        {l2.children.map((l3) => (
-                          <Link
-                            key={l3.bc_id}
-                            href={`/capabilities/${l3.bc_id}`}
-                            style={{ textDecoration: "none", color: "inherit" }}
-                          >
-                            <div
-                              style={{
-                                padding: "8px 12px",
-                                borderRadius: "var(--radius-sm)",
-                                border: `1px solid ${l3.app_count > 0 ? `${domainColor}55` : "var(--border)"}`,
-                                background: l3.app_count > 0 ? `${domainColor}0d` : "transparent",
-                                transition: "border-color 0.15s",
-                                cursor: "pointer",
-                              }}
-                              title={l3.bc_description || l3.bc_name}
-                              onMouseOver={(e) => { e.currentTarget.style.borderColor = domainColor; }}
-                              onMouseOut={(e) => { e.currentTarget.style.borderColor = l3.app_count > 0 ? `${domainColor}55` : "var(--border)"; }}
-                            >
-                              <div style={{ fontSize: 12, color: "var(--text)", lineHeight: 1.4 }}>
-                                {l3.bc_name}
+                        {l2.children.map((l3) => {
+                          const isL3Open = expandedL3 === l3.bc_id;
+                          const apps = l3Apps[l3.bc_id];
+                          return (
+                            <div key={l3.bc_id}>
+                              <div
+                                onClick={() => toggleL3(l3.bc_id, l3.app_count)}
+                                style={{
+                                  padding: "8px 12px",
+                                  borderRadius: "var(--radius-sm)",
+                                  border: `1px solid ${isL3Open ? domainColor : l3.app_count > 0 ? `${domainColor}55` : "var(--border)"}`,
+                                  background: isL3Open ? `${domainColor}18` : l3.app_count > 0 ? `${domainColor}0d` : "transparent",
+                                  transition: "border-color 0.15s",
+                                  cursor: l3.app_count > 0 ? "pointer" : "default",
+                                }}
+                                title={l3.bc_description || l3.bc_name}
+                                onMouseOver={(e) => { if (l3.app_count > 0) e.currentTarget.style.borderColor = domainColor; }}
+                                onMouseOut={(e) => { if (!isL3Open) e.currentTarget.style.borderColor = l3.app_count > 0 ? `${domainColor}55` : "var(--border)"; }}
+                              >
+                                <div style={{ fontSize: 12, color: "var(--text)", lineHeight: 1.4 }}>
+                                  {l3.bc_name}
+                                </div>
+                                {l3.bc_name_cn && (
+                                  <div style={{ fontSize: 10, color: "var(--text-dim)", fontStyle: "italic" }}>
+                                    {l3.bc_name_cn}
+                                  </div>
+                                )}
+                                <div style={{
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  alignItems: "center",
+                                  marginTop: 4,
+                                }}>
+                                  <span style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: "var(--text-dim)" }}>
+                                    {l3.bc_id}
+                                  </span>
+                                  {l3.app_count > 0 && (
+                                    <span style={{
+                                      fontSize: 10,
+                                      fontWeight: 600,
+                                      color: domainColor,
+                                      background: `${domainColor}22`,
+                                      padding: "1px 6px",
+                                      borderRadius: "var(--radius-sm)",
+                                    }}>
+                                      {l3.app_count} app{l3.app_count !== 1 ? "s" : ""}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
-                              {l3.bc_name_cn && (
-                                <div style={{ fontSize: 10, color: "var(--text-dim)", fontStyle: "italic" }}>
-                                  {l3.bc_name_cn}
+                              {/* Inline app list */}
+                              {isL3Open && (
+                                <div style={{
+                                  marginTop: 4,
+                                  padding: "6px 10px",
+                                  borderRadius: "var(--radius-sm)",
+                                  background: "var(--bg-elevated)",
+                                  border: `1px solid ${domainColor}33`,
+                                  fontSize: 11,
+                                }}>
+                                  {!apps ? (
+                                    <span style={{ color: "var(--text-dim)" }}>Loading...</span>
+                                  ) : apps.length === 0 ? (
+                                    <span style={{ color: "var(--text-dim)" }}>No apps</span>
+                                  ) : (
+                                    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                                      {apps.map((app) => (
+                                        <div key={app.app_id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                                          <Link
+                                            href={`/apps/${app.app_id}`}
+                                            style={{ color: "var(--accent)", fontFamily: "var(--font-mono)", fontSize: 10, textDecoration: "none" }}
+                                          >
+                                            {app.app_id}
+                                          </Link>
+                                          <span style={{ color: "var(--text)", flex: 1 }}>{app.name}</span>
+                                          {app.status && (
+                                            <span style={{ fontSize: 9, color: "var(--text-dim)" }}>{app.status}</span>
+                                          )}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
                               )}
-                              <div style={{
-                                display: "flex",
-                                justifyContent: "space-between",
-                                alignItems: "center",
-                                marginTop: 4,
-                              }}>
-                                <span style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: "var(--text-dim)" }}>
-                                  {l3.bc_id}
-                                </span>
-                                {l3.app_count > 0 && (
-                                  <span style={{
-                                    fontSize: 10,
-                                    fontWeight: 600,
-                                    color: domainColor,
-                                    background: `${domainColor}22`,
-                                    padding: "1px 6px",
-                                    borderRadius: "var(--radius-sm)",
-                                  }}>
-                                    {l3.app_count} app{l3.app_count !== 1 ? "s" : ""}
-                                  </span>
-                                )}
-                              </div>
                             </div>
-                          </Link>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   ))}

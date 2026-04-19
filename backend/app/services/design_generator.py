@@ -21,10 +21,13 @@ from typing import Any, Optional
 from xml.etree import ElementTree as ET
 
 
-# Placeholder detector: match cells whose value contains `ID: A000001` or
-# `ID: A123456`-style marker. Some templates use plain A-id without "ID:"
-# prefix; we match both.
-_PLACEHOLDER_APP_ID_RE = re.compile(r"ID:\s*(A\d{6})", re.IGNORECASE)
+# Placeholder detector: match cells whose value contains an `A\d{5,6}`
+# CMDB id, with or without an `ID:` prefix. Older EA templates use the
+# prefixed form ("ID: A000001"), newer ones drop the prefix. \b anchors
+# the id so we don't pick up random trailing digits inside words.
+_PLACEHOLDER_APP_ID_RE = re.compile(
+    r"(?:ID:\s*)?\b(A\d{5,6})\b", re.IGNORECASE
+)
 
 
 # Colors by planned_status (CMDB app lifecycle)
@@ -68,15 +71,12 @@ def _new_cell_id() -> str:
     return "ns-" + uuid.uuid4().hex[:10]
 
 
-def _escape_text(s: str) -> str:
-    """Escape text for use inside an mxCell `value` attribute (XML-safe)."""
-    return (
-        (s or "")
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-    )
+# NOTE: we used to have an _escape_text() that pre-escaped cell values to
+# HTML entities. That was a bug — ElementTree escapes XML-special chars
+# when serializing attributes, so the double-pass produced literal
+# `&amp;lt;b&amp;gt;` in the output and drawio rendered the tag text.
+# Just pass raw HTML (e.g. "<b>x</b><br>y") to .set("value", ...) and let
+# ET handle XML-level escaping.
 
 
 def _find_placeholder_cells(root: ET.Element) -> list[ET.Element]:
@@ -99,7 +99,10 @@ def _find_placeholder_cells(root: ET.Element) -> list[ET.Element]:
 
 def _app_label(app: dict) -> str:
     """Build the cell label for an app. Matches the template's format:
-    `ID: <app_id><br/><b><app_name></b>` when available.
+    `ID: <app_id><br><b><app_name></b>` when available.
+
+    Returns raw HTML; ElementTree.set("value", ...) escapes it correctly
+    when the drawio file is serialized.
     """
     app_id = app.get("app_id") or ""
     name = app.get("name") or app.get("app_name") or ""
@@ -110,12 +113,12 @@ def _app_label(app: dict) -> str:
         "new": "NEW: ",
         "sunset": "SUNSET: ",
     }.get(app.get("planned_status", "keep"), "")
-    lines = [f"ID: {_escape_text(app_id)}"]
+    lines = [f"ID: {app_id}"]
     if name:
-        lines.append(f"&lt;b&gt;{role_note}{_escape_text(name)}&lt;/b&gt;")
+        lines.append(f"<b>{role_note}{name}</b>")
     if desc:
-        lines.append(_escape_text(desc[:120]))
-    return "&lt;br&gt;".join(lines)
+        lines.append(desc[:120])
+    return "<br>".join(lines)
 
 
 def _app_style(planned_status: str, is_external: bool = False) -> str:
@@ -262,7 +265,8 @@ def generate_as_is_xml(
         edge.set("target", tgt_id)
         if iface_name or platform:
             label = f"{platform}: {iface_name}" if platform else iface_name
-            edge.set("value", _escape_text(label[:60]))
+            # Raw string — ET handles XML escaping on serialize.
+            edge.set("value", label[:60])
 
         geom = ET.SubElement(edge, "mxGeometry")
         geom.set("relative", "1")

@@ -17,6 +17,8 @@ Endpoints:
 """
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Response
@@ -27,6 +29,28 @@ from app.services import pg_client
 from app.services.design_generator import generate_as_is_xml
 
 router = APIRouter(prefix="/api/design", tags=["design"])
+
+# Attachment volume mount. Inside the backend container this is /app_data
+# (see docker-compose.yml); the DB stores repo-relative or absolute paths
+# written by the host-side sync scripts. Match admin.py's resolver: take
+# the basename of the stored path and join with ATTACHMENT_ROOT. This
+# fixes "design create/regenerate falls back to blank canvas" because the
+# old code opened the stored path as-is, which fails in the container.
+_ATTACHMENT_ROOT = Path(os.environ.get("ATTACHMENT_ROOT", "/app_data"))
+
+
+def _resolve_attachment_file(local_path: Optional[str]) -> Optional[Path]:
+    """Return the on-disk path for an attachment, or None if not cached.
+
+    `download_path` is intentionally NOT a fallback — it is a Confluence
+    relative URL, not a local file, so opening it always fails. If the
+    attachment hasn't been synced yet, callers should return 404 / None
+    and tell the user to click Sync Now.
+    """
+    if not local_path:
+        return None
+    p = _ATTACHMENT_ROOT / Path(local_path).name
+    return p if p.is_file() else None
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -322,19 +346,14 @@ async def get_template_xml(attachment_id: int) -> Response:
     if row is None:
         raise HTTPException(status_code=404, detail="template not found")
 
-    # We already have a /api/admin/confluence/attachments/{id}/raw endpoint
-    # that reads the file. For the generator we need to read the XML content
-    # directly from the filesystem.
-    path = row.get("local_path") or row.get("download_path")
-    if not path:
-        raise HTTPException(status_code=404, detail="template file not available")
-
-    try:
-        with open(path, "rb") as f:
-            content = f.read()
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="template file missing on disk")
-
+    # Resolve via the mounted attachment dir (see _resolve_attachment_file).
+    resolved = _resolve_attachment_file(row.get("local_path"))
+    if resolved is None:
+        raise HTTPException(
+            status_code=404,
+            detail="template file not cached — click Sync Now on /settings first",
+        )
+    content = resolved.read_bytes()
     return Response(content=content, media_type="application/xml")
 
 
@@ -532,13 +551,9 @@ async def create_design(payload: DesignCreate) -> ApiResponse:
             str(payload.template_attachment_id),
         )
         if tpl_row:
-            path = tpl_row.get("local_path") or tpl_row.get("download_path")
-            if path:
-                try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        template_xml = f.read()
-                except Exception:
-                    template_xml = None
+            resolved = _resolve_attachment_file(tpl_row.get("local_path"))
+            if resolved is not None:
+                template_xml = resolved.read_text(encoding="utf-8")
 
     # 5. Fetch app display details for non-external apps
     app_ids = [a.app_id for a in payload.apps if a.role != "external"]
@@ -779,13 +794,9 @@ async def regenerate_as_is(design_id: int) -> ApiResponse:
             str(tpl_id),
         )
         if tpl_row:
-            path = tpl_row.get("local_path") or tpl_row.get("download_path")
-            if path:
-                try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        template_xml = f.read()
-                except Exception:
-                    template_xml = None
+            resolved = _resolve_attachment_file(tpl_row.get("local_path"))
+            if resolved is not None:
+                template_xml = resolved.read_text(encoding="utf-8")
 
     gen_apps = [
         {

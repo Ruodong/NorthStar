@@ -615,7 +615,7 @@ async def get_application_lifecycle(app_id: str) -> ApiResponse:
     rows = await pg_client.fetch(
         """
         SELECT
-            cp.project_id,
+            COALESCE(cp.root_project_id, cp.project_id)      AS project_id,
             rp.project_name,
             NULLIF(rp.go_live_date, '')                      AS go_live_date,
             MAX(cp.fiscal_year)                              AS fiscal_year,
@@ -630,14 +630,21 @@ async def get_application_lifecycle(app_id: str) -> ApiResponse:
         FROM northstar.confluence_diagram_app cda
         JOIN northstar.confluence_attachment  ca ON ca.attachment_id = cda.attachment_id
         JOIN northstar.confluence_page        cp ON cp.page_id       = ca.page_id
-        LEFT JOIN northstar.ref_project       rp ON rp.project_id    = cp.project_id
+        -- Child Confluence pages carry the owning project on root_project_id,
+        -- not project_id, so aggregate and join via COALESCE the same way
+        -- admin.py and design.py do. Previously this filtered on cp.project_id
+        -- only, dropping every lifecycle event recorded on a sub-page
+        -- (codex review finding P2, 2026-04-18).
+        LEFT JOIN northstar.ref_project       rp
+               ON rp.project_id = COALESCE(cp.root_project_id, cp.project_id)
         WHERE COALESCE(cda.resolved_app_id, cda.standard_id) = $1
           AND cda.application_status IN ('Change', 'New', 'Sunset')
-          AND cp.project_id IS NOT NULL
-        GROUP BY cp.project_id, rp.project_name, rp.go_live_date, cda.application_status
+          AND COALESCE(cp.root_project_id, cp.project_id) IS NOT NULL
+        GROUP BY COALESCE(cp.root_project_id, cp.project_id),
+                 rp.project_name, rp.go_live_date, cda.application_status
         ORDER BY (NULLIF(rp.go_live_date, '') IS NULL),
                  NULLIF(rp.go_live_date, '') DESC,
-                 cp.project_id
+                 COALESCE(cp.root_project_id, cp.project_id)
         """,
         app_id,
     )

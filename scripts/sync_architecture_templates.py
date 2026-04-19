@@ -217,13 +217,14 @@ def build_page_url(base_url: str, page_data: dict) -> str:
 
 UPSERT_PAGE_SQL = """\
 INSERT INTO northstar.confluence_page
-    (page_id, fiscal_year, title, page_url, page_type,
+    (page_id, fiscal_year, title, page_url, page_type, parent_id,
      template_source_layer, last_seen, synced_at)
-VALUES (%s, NULL, %s, %s, 'ea_template', %s, NOW(), NOW())
+VALUES (%s, NULL, %s, %s, 'ea_template', %s, %s, NOW(), NOW())
 ON CONFLICT (page_id) DO UPDATE SET
     title                  = EXCLUDED.title,
     page_url               = EXCLUDED.page_url,
     page_type              = EXCLUDED.page_type,
+    parent_id              = EXCLUDED.parent_id,
     template_source_layer  = EXCLUDED.template_source_layer,
     last_seen              = NOW()
 """
@@ -305,12 +306,16 @@ def sync_layer(
 
     base_url = os.environ["CONFLUENCE_BASE_URL"].rstrip("/")
 
-    # BFS walk
-    queue: list[str] = [root_page_id]
+    # BFS walk — queue holds (page_id, parent_id) so we can persist the
+    # parent relationship. /api/design/standard-templates discovers
+    # templates via a recursive CTE on confluence_page.parent_id; without
+    # this the design wizard only sees drawios attached directly to the
+    # root page and misses everything on child pages.
+    queue: list[tuple[str, Optional[str]]] = [(root_page_id, None)]
     visited: set[str] = set()
 
     while queue:
-        pid = queue.pop(0)
+        pid, parent_id = queue.pop(0)
         if pid in visited:
             continue
         visited.add(pid)
@@ -325,7 +330,10 @@ def sync_layer(
 
         if not dry_run:
             with pg.cursor() as cur:
-                cur.execute(UPSERT_PAGE_SQL, (pid, page_title, page_url, layer))
+                cur.execute(
+                    UPSERT_PAGE_SQL,
+                    (pid, page_title, page_url, parent_id, layer),
+                )
             pg.commit()
         stats["pages"] += 1
         logger.info("  page %s — %s", pid, page_title[:80])
@@ -399,11 +407,11 @@ def sync_layer(
             if kind == "drawio":
                 stats["drawios"] += 1
 
-        # Enqueue children
+        # Enqueue children with this page as their parent_id.
         try:
             for child in list_children(client, pid):
                 if child["id"] not in visited:
-                    queue.append(child["id"])
+                    queue.append((child["id"], pid))
         except Exception as exc:
             logger.warning("  children list failed %s: %s", pid, exc)
             stats["errors"] += 1

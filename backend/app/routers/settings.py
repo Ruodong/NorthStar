@@ -9,10 +9,9 @@ status. See .specify/features/architecture-template-settings/spec.md.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
-import shlex
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -98,21 +97,31 @@ async def _run_sync_script(layer: str) -> None:
         )
         return
 
-    cmd = ["python3", str(_SYNC_SCRIPT), "--layer", layer]
+    # Use asyncio subprocess so this async BackgroundTask does not block
+    # the event loop while the sync runs (may take 60-120s over VPN).
+    # Previously used subprocess.run which pegged one Starlette worker
+    # for the full sync duration (codex review finding P2, 2026-04-18).
     try:
-        result = subprocess.run(
-            cmd,
+        proc = await asyncio.create_subprocess_exec(
+            "python3", str(_SYNC_SCRIPT), "--layer", layer,
             cwd=str(_REPO_ROOT),
-            capture_output=True,
-            text=True,
             env={**os.environ},
-            timeout=600,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=600)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise
+        stdout = stdout_b.decode("utf-8", errors="replace")
+        stderr = stderr_b.decode("utf-8", errors="replace")
         logger.info(
             "sync_architecture_templates --layer %s exited %d\n--- stdout ---\n%s\n--- stderr ---\n%s",
-            layer, result.returncode, result.stdout[-2000:], result.stderr[-2000:],
+            layer, proc.returncode, stdout[-2000:], stderr[-2000:],
         )
-    except subprocess.TimeoutExpired:
+    except asyncio.TimeoutError:
         logger.error("sync script timeout for layer %s", layer)
         await pg_client.execute_script(
             "UPDATE northstar.ref_architecture_template_source "
