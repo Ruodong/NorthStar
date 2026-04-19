@@ -1146,13 +1146,19 @@ function IntegrationLandscape({
           viewBox={`0 0 ${svgWidth} ${svgHeight}`}
           style={{ display: "inline-block", margin: "0 auto" }}
         >
-          {/* Column labels */}
-          <g fontFamily="var(--font-mono)" fontSize="9" fill="var(--text-dim)" style={{ letterSpacing: 0.6 }}>
-            <text x={cols.upstream_apps.x} y={16}>UPSTREAM</text>
-            <text x={cols.upstream_platforms.x} y={16}>via</text>
-            <text x={cols.me.x + 20} y={16}>ME</text>
-            <text x={cols.downstream_platforms.x} y={16}>via</text>
-            <text x={cols.downstream_apps.x} y={16}>DOWNSTREAM</text>
+          {/* Column labels — centered over each column's visible geometry */}
+          <g
+            fontFamily="var(--font-mono)"
+            fontSize="9"
+            fill="var(--text-dim)"
+            textAnchor="middle"
+            style={{ letterSpacing: 0.6 }}
+          >
+            <text x={cols.upstream_apps.x + APP_BOX_W / 2} y={16}>UPSTREAM</text>
+            <text x={cols.upstream_platforms.x + PLATFORM_BOX_W / 2} y={16}>via</text>
+            <text x={cols.me.x + ME_BOX_W / 2} y={16}>ME</text>
+            <text x={cols.downstream_platforms.x + PLATFORM_BOX_W / 2} y={16}>via</text>
+            <text x={cols.downstream_apps.x + APP_BOX_W / 2} y={16}>DOWNSTREAM</text>
           </g>
 
           {/* Curves (drawn first, under nodes) */}

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Pill } from "@/components/Pill";
+import { Pill, statusToPillTone } from "@/components/Pill";
 import { MetadataList, type MetadataRow } from "@/components/MetadataList";
 
 /**
@@ -243,7 +243,7 @@ export function AnswerBlock({
         )}
         <Pill
           label={effectiveStatus}
-          tone={isSunset ? "red" : pillToneForStatus(status)}
+          tone={isSunset ? "red" : statusToPillTone(status)}
         />
         {pills.map((p, i) => (
           <Pill key={`${p.label}-${i}`} label={p.label} tone={p.tone} />
@@ -350,17 +350,5 @@ function KpiCell({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-/**
- * Map an upstream status string to a Pill tone. Defaults to gray when the
- * string is unknown (no judgment on new statuses that haven't been mapped).
- */
-function pillToneForStatus(
-  status: string | null | undefined,
-): "green" | "amber" | "red" | "blue" | "gray" {
-  const s = (status || "").toLowerCase();
-  if (s === "active" || s === "keep") return "green";
-  if (s === "change" || s === "new") return "amber";
-  if (s === "sunset" || s === "decommissioned") return "red";
-  if (s === "3rd party") return "blue";
-  return "gray";
-}
+// pillToneForStatus moved to @/components/Pill as `statusToPillTone`
+// (shared with OverviewTab + future entity detail pages).

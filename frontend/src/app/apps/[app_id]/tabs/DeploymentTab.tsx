@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { DeploymentMap } from "@/components/DeploymentMap";
 import { Panel } from "../_shared/Panel";
 import { Kpi } from "../_shared/Kpi";
 import { CITY_LABELS, cityLabel } from "../_shared/cities";
+import { useTabFetch } from "../_shared/useTabFetch";
 
 // ---------------------------------------------------------------------------
 // Deployment Tab — servers, containers, databases from infraops
@@ -22,28 +23,11 @@ interface DeploymentData {
 }
 
 export function DeploymentTab({ appId }: { appId: string }) {
-  const [data, setData] = useState<DeploymentData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
+  const { data, loading, err } = useTabFetch<DeploymentData>(
+    appId ? `/api/masters/applications/${appId}/deployment` : null,
+    [appId],
+  );
   const [deployView, setDeployView] = useState<"table" | "map">("map");
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      try {
-        const r = await fetch(`/api/masters/applications/${appId}/deployment`);
-        const j = await r.json();
-        if (!j.success) throw new Error(j.error || "API error");
-        if (!cancelled) setData(j.data);
-      } catch (e) {
-        if (!cancelled) setErr(String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [appId]);
 
   if (loading) return <div className="empty" style={{ padding: 40 }}>Loading deployment data…</div>;
   if (err) return <div className="panel" style={{ borderColor: "#5b1f1f" }}>Error: {err}</div>;

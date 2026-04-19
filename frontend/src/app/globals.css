@@ -321,7 +321,7 @@ button:disabled {
 
 /* ===== inputs ===== */
 
-input, select {
+input, select, textarea {
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   color: var(--text);
@@ -331,12 +331,16 @@ input, select {
   font-size: 13px;
   transition: border-color var(--t-hover) var(--ease), box-shadow var(--t-hover) var(--ease);
 }
-input:focus, select:focus {
+textarea {
+  resize: vertical;
+  line-height: 1.5;
+}
+input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 2px var(--accent-ring);
 }
-input::placeholder { color: var(--text-dim); }
+input::placeholder, textarea::placeholder { color: var(--text-dim); }
 
 /* ===== tables ===== */
 

@@ -53,6 +53,25 @@ export interface PillProps {
   style?: CSSProperties;
 }
 
+/**
+ * Map an upstream status string to the shorthand Pill tone the design
+ * system uses for status-colored pills. Extracted from duplicated
+ * copies in AnswerBlock + OverviewTab so new detail pages don't keep
+ * inventing their own mapping.
+ *
+ * Unknown / missing status → "gray" (no color judgment).
+ */
+export function statusToPillTone(
+  status: string | null | undefined,
+): "green" | "amber" | "red" | "blue" | "gray" {
+  const s = (status || "").toLowerCase();
+  if (s === "active" || s === "keep") return "green";
+  if (s === "change" || s === "new") return "amber";
+  if (s === "sunset" || s === "decommissioned") return "red";
+  if (s === "3rd party") return "blue";
+  return "gray";
+}
+
 export function Pill({ label, tone = "neutral", size = "md", style }: PillProps) {
   const color = (TONE_COLORS as Record<string, string>)[tone] ?? tone;
   const sizeStyle: CSSProperties =

@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
+import { useTabFetch } from "../_shared/useTabFetch";
 import Link from "next/link";
 import type {
   AppNode,
@@ -15,7 +16,7 @@ import { Kpi } from "../_shared/Kpi";
 import { CmdbField } from "../_shared/CmdbField";
 import { CITY_LABELS } from "../_shared/cities";
 import { MetadataList, type MetadataRow } from "@/components/MetadataList";
-import { Pill } from "@/components/Pill";
+import { Pill, statusToPillTone } from "@/components/Pill";
 
 export function OverviewTab({
   app,
@@ -30,26 +31,24 @@ export function OverviewTab({
 }) {
   const fyList = [...new Set(investments.map((i) => i.fiscal_year).filter(Boolean))].sort();
 
-  // Fetch deployment summary for the overview panel
-  const [deploySummary, setDeploySummary] = useState<{
-    servers: number; containers: number; databases: number;
-    top_cities: { city: string; total: number }[];
-  } | null>(null);
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await fetch(`/api/masters/applications/${app.app_id}/deployment`);
-        const j = await r.json();
-        if (j.success && j.data) {
-          const s = j.data.summary;
-          const cities = (j.data.by_city || []).slice(0, 3).map((c: { city: string; total: number }) => ({
-            city: c.city, total: c.total,
-          }));
-          setDeploySummary({ ...s, top_cities: cities });
-        }
-      } catch { /* non-blocking */ }
-    })();
-  }, [app.app_id]);
+  // Fetch deployment summary for the overview panel (non-blocking).
+  interface DeployApiShape {
+    summary: { servers: number; containers: number; databases: number; object_storage?: number; nas?: number };
+    by_city: { city: string; total: number }[];
+  }
+  const { data: deployRaw } = useTabFetch<DeployApiShape>(
+    `/api/masters/applications/${app.app_id}/deployment`,
+    [app.app_id],
+  );
+  const deploySummary = useMemo(() => {
+    if (!deployRaw) return null;
+    return {
+      ...deployRaw.summary,
+      top_cities: (deployRaw.by_city || [])
+        .slice(0, 3)
+        .map((c) => ({ city: c.city, total: c.total })),
+    };
+  }, [deployRaw]);
 
   // ---- MetadataList rows, per DESIGN.md §App Detail Redesign →
   //      MetadataList primitive. No card chrome. Flat 2-col grid, rows
@@ -59,7 +58,7 @@ export function OverviewTab({
     { label: "Full Name", value: app.app_full_name },
     {
       label: "Status",
-      value: app.status ? <Pill label={app.status} tone={pillToneForStatus(app.status)} /> : null,
+      value: app.status ? <Pill label={app.status} tone={statusToPillTone(app.status)} /> : null,
     },
     { label: "Service Area", value: app.u_service_area },
     { label: "Classification", value: app.app_classification?.replace(/^"|"$/g, "") },
@@ -277,14 +276,7 @@ function formatMoney(v: number | null | undefined): string | null {
   return v != null ? v.toFixed(1) : null;
 }
 
-function pillToneForStatus(s: string | null | undefined): "green" | "amber" | "red" | "blue" | "gray" {
-  const x = (s || "").toLowerCase();
-  if (x === "active" || x === "keep") return "green";
-  if (x === "change" || x === "new") return "amber";
-  if (x === "sunset" || x === "decommissioned") return "red";
-  if (x === "3rd party") return "blue";
-  return "gray";
-}
+// pillToneForStatus moved to @/components/Pill as `statusToPillTone`.
 
 /* ── EA Standards & Guidelines panel (contextual) ────────────── */
 interface EaDocRef {
@@ -305,25 +297,11 @@ const EA_TYPE_LABELS: Record<string, string> = {
 };
 
 function EaStandardsPanel({ appId }: { appId: string }) {
-  const [docs, setDocs] = useState<EaDocRef[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch(`/api/ea-documents/for-app/${encodeURIComponent(appId)}`);
-        const j = await r.json();
-        if (!cancelled && j.success) setDocs(j.data || []);
-      } catch {
-        /* non-critical — hide panel */
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [appId]);
-
+  const { data, loading } = useTabFetch<EaDocRef[]>(
+    appId ? `/api/ea-documents/for-app/${encodeURIComponent(appId)}` : null,
+    [appId],
+  );
+  const docs = data || [];
   if (loading || docs.length === 0) return null;
 
   const groups: { label: string; items: EaDocRef[] }[] = [];
@@ -388,32 +366,14 @@ const LIFECYCLE_INITIAL_LIMIT = 6;
 const LIFECYCLE_COLLAPSE_THRESHOLD = 10;
 
 function LifeCycleChangePanel({ appId }: { appId: string }) {
-  const [entries, setEntries] = useState<LifecycleEntry[] | null>(null);
-  const [err, setErr] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setEntries(null);
-      setErr(null);
-      try {
-        const r = await fetch(
-          `/api/masters/applications/${encodeURIComponent(appId)}/lifecycle`,
-        );
-        const j = await r.json();
-        if (cancelled) return;
-        if (!j.success) {
-          setErr(j.error || "API error");
-          return;
-        }
-        setEntries(j.data?.entries || []);
-      } catch (e) {
-        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [appId]);
+  const { data, err } = useTabFetch<{ entries: LifecycleEntry[] }>(
+    appId
+      ? `/api/masters/applications/${encodeURIComponent(appId)}/lifecycle`
+      : null,
+    [appId],
+  );
+  const entries: LifecycleEntry[] | null = data ? data.entries || [] : null;
 
   if (err) {
     return (

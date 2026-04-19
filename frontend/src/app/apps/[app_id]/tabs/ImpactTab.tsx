@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
 import type {
   ImpactApp,
@@ -12,41 +12,16 @@ import { STATUS_COLORS } from "../_shared/types";
 import { Panel } from "../_shared/Panel";
 import { EmptyState } from "../_shared/EmptyState";
 import { Kpi } from "../_shared/Kpi";
+import { useTabFetch } from "../_shared/useTabFetch";
 
 export function ImpactTab({ appId }: { appId: string }) {
   const [depth, setDepth] = useState<number>(2);
-  const [data, setData] = useState<ImpactResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      setErr(null);
-      try {
-        const res = await fetch(
-          `/api/graph/nodes/${encodeURIComponent(appId)}/impact?depth=${depth}`,
-          { cache: "no-store" }
-        );
-        if (!res.ok) throw new Error(`${res.status}`);
-        const j = await res.json();
-        if (cancelled) return;
-        if (!j.success) {
-          setErr(j.error || "Impact analysis failed");
-          return;
-        }
-        setData(j.data as ImpactResponse);
-      } catch (e) {
-        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [appId, depth]);
+  const { data, loading, err } = useTabFetch<ImpactResponse>(
+    appId
+      ? `/api/graph/nodes/${encodeURIComponent(appId)}/impact?depth=${depth}`
+      : null,
+    [appId, depth],
+  );
 
   return (
     <div style={{ display: "grid", gap: 20 }}>
