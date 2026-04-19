@@ -44,7 +44,11 @@ test.describe("Application Detail Page", () => {
 
   test("investments tab loads", async ({ page }) => {
     await page.goto(`/apps/${TEST_APP}`);
-    const invTab = page.locator("button, a, [role=tab]", { hasText: /Investments/ });
+    // Scope to the tablist — CTA bar added "See Investments →" which
+    // otherwise matches as a second candidate.
+    const invTab = page
+      .locator("[role=tab]", { hasText: /^Investments/ })
+      .first();
     if (await invTab.isVisible()) {
       await invTab.click();
       await page.waitForTimeout(1000);
@@ -53,7 +57,9 @@ test.describe("Application Detail Page", () => {
 
   test("confluence tab loads", async ({ page }) => {
     await page.goto(`/apps/${TEST_APP}`);
-    const tab = page.locator("button, a, [role=tab]", { hasText: /Confluence/ });
+    const tab = page
+      .locator("[role=tab]", { hasText: /^Confluence/ })
+      .first();
     if (await tab.isVisible()) {
       await tab.click();
       await page.waitForTimeout(1000);
