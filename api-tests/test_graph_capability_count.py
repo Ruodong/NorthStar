@@ -72,9 +72,11 @@ async def test_capability_count_zero_for_unmapped_app(api):
     If this test starts failing, the picked id became mapped — switch to
     another.
     """
-    # A000394 (LBP) — verified unmapped to capabilities as of 2026-04-19.
-    # If that changes, swap to another confirmed-unmapped id.
-    APP_UNMAPPED = "A000394"
+    # A000004 — confirmed unmapped via `SELECT app_id FROM ref_application
+    # WHERE app_id NOT IN (SELECT app_id FROM ref_app_business_capability)
+    # AND status = 'Active'` as of 2026-04-19. If the BC mapping ever
+    # grows to cover this app, pick another from that query.
+    APP_UNMAPPED = "A000004"
     r = await api.get(f"/api/graph/nodes/{APP_UNMAPPED}")
     if r.status_code == 404:
         pytest.skip(f"App {APP_UNMAPPED} not in graph; pick another anchor")
