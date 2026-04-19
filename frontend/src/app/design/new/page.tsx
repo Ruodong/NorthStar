@@ -1111,7 +1111,7 @@ function SummaryBar({
               >Apps tab</button>)
             </div>
           ) : (
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "flex-start" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 8, alignItems: "start" }}>
               {majorApps.map(a => (
                 <MajorAppChip key={a.app_id} app={a} onRemove={() => onRemoveApp(a.app_id)} />
               ))}
@@ -1237,7 +1237,7 @@ function MajorAppChip({ app, onRemove }: { app: ScopeApp; onRemove: () => void }
           border: `1px solid ${expanded ? "var(--accent)" : "var(--border-strong)"}`,
           borderRadius: expanded ? "3px 3px 0 0" : 3,
           padding: "4px 8px", fontSize: 12,
-          maxWidth: 320, minWidth: 0, cursor: "pointer",
+          minWidth: 0, cursor: "pointer",
         }}
         onClick={toggleExpand}
       >
@@ -1275,8 +1275,7 @@ function MajorAppChip({ app, onRemove }: { app: ScopeApp; onRemove: () => void }
           padding: "6px 10px",
           background: "var(--surface)",
           fontSize: 10,
-          maxWidth: 320,
-          maxHeight: 200,
+          maxHeight: 240,
           overflowY: "auto",
         }}>
           {bcLoading ? (
