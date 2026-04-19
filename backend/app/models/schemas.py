@@ -239,6 +239,7 @@ class ArchitectureTemplateDiagram(BaseModel):
     thumbnail_url: str
     raw_url: str
     preview_url: str
+    active: bool = True
 
 
 class ArchitectureTemplateDiagramList(BaseModel):

@@ -199,6 +199,7 @@ function LayerCard({
   const [diagrams, setDiagrams] = useState<ArchitectureTemplateDiagram[] | null>(null);
   const [diagramsLoading, setDiagramsLoading] = useState(false);
   const [localErr, setLocalErr] = useState<string | null>(null);
+  const [showInactive, setShowInactive] = useState(false);
 
   // Keep form in sync with server values when they change under us (e.g. after sync)
   useEffect(() => { setTitle(row.title); }, [row.title]);
@@ -366,36 +367,59 @@ function LayerCard({
             ? "No diagrams yet — click Sync Now."
             : "No drawio diagrams found under this URL."}
         </div>
-      ) : (
-        <div
-          style={{
-            display: "grid",
-            gap: 12,
-            gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
-          }}
-        >
-          {diagrams.map((d) => (
-            <DiagramCard key={d.attachment_id} d={d} />
-          ))}
-        </div>
-      )}
+      ) : (() => {
+        const visible = showInactive ? diagrams : diagrams.filter((d) => d.active);
+        const inactiveCount = diagrams.filter((d) => !d.active).length;
+        const toggleActive = async (attId: string, active: boolean) => {
+          await fetch(`/api/settings/architecture-templates/diagrams/${attId}/active?active=${active}`, { method: "PATCH" });
+          setDiagrams((prev) => prev ? prev.map((d) => d.attachment_id === attId ? { ...d, active } : d) : prev);
+        };
+        return (
+          <>
+            {inactiveCount > 0 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-muted)", cursor: "pointer" }}>
+                  <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
+                  Show inactive ({inactiveCount} hidden)
+                </label>
+                <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+                  {visible.length} / {diagrams.length} templates
+                </span>
+              </div>
+            )}
+            <div
+              style={{
+                display: "grid",
+                gap: 12,
+                gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
+              }}
+            >
+              {visible.map((d) => (
+                <DiagramCard key={d.attachment_id} d={d} onToggle={toggleActive} />
+              ))}
+            </div>
+          </>
+        );
+      })()}
     </section>
   );
 }
 
 // ── Diagram card ────────────────────────────────────────────────
 
-function DiagramCard({ d }: { d: ArchitectureTemplateDiagram }) {
+function DiagramCard({ d, onToggle }: { d: ArchitectureTemplateDiagram; onToggle: (id: string, active: boolean) => void }) {
   const [imgFailed, setImgFailed] = useState(false);
   return (
     <div
       style={{
         background: "var(--bg-elevated)",
-        border: "1px solid var(--border)",
+        border: `1px solid ${d.active ? "var(--border)" : "var(--border)"}`,
         borderRadius: "var(--radius-md)",
         overflow: "hidden",
         display: "flex",
         flexDirection: "column",
+        opacity: d.active ? 1 : 0.45,
+        transition: "opacity 0.2s",
       }}
     >
       <a
@@ -480,6 +504,22 @@ function DiagramCard({ d }: { d: ArchitectureTemplateDiagram }) {
             Open in Confluence ↗
           </a>
         )}
+        <button
+          onClick={() => onToggle(d.attachment_id, !d.active)}
+          style={{
+            marginTop: 4,
+            padding: "3px 8px",
+            fontSize: 10,
+            border: `1px solid ${d.active ? "var(--border-strong)" : "var(--accent)"}`,
+            borderRadius: "var(--radius-sm)",
+            background: d.active ? "transparent" : "var(--accent)",
+            color: d.active ? "var(--text-dim)" : "#000",
+            cursor: "pointer",
+            fontWeight: 500,
+          }}
+        >
+          {d.active ? "Exclude" : "Include"}
+        </button>
       </div>
     </div>
   );

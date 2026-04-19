@@ -306,6 +306,7 @@ async def list_architecture_template_diagrams(
            a.media_type,
            a.file_size,
            a.synced_at,
+           COALESCE(a.template_active, true) AS active,
            p.page_id,
            p.title       AS page_title,
            p.page_url    AS page_url
@@ -313,7 +314,7 @@ async def list_architecture_template_diagrams(
     LEFT JOIN northstar.confluence_page p ON p.page_id = a.page_id
     WHERE a.template_source_layer = $1
       AND a.file_kind = 'drawio'
-    ORDER BY p.title NULLS LAST, a.title
+    ORDER BY COALESCE(a.template_active, true) DESC, p.title NULLS LAST, a.title
     LIMIT $2 OFFSET $3
     """
     rows = await pg_client.fetch(items_sql, layer, limit, offset)
@@ -328,9 +329,25 @@ async def list_architecture_template_diagrams(
             page_title=r["page_title"] or "",
             page_url=r["page_url"] or "",
             synced_at=r["synced_at"],
+            active=r["active"],
             **_attachment_urls(r["attachment_id"]),
         )
         for r in rows
     ]
     payload = ArchitectureTemplateDiagramList(total=total, items=items)
     return ApiResponse(data=payload)
+
+
+@router.patch("/architecture-templates/diagrams/{attachment_id}/active")
+async def toggle_template_active(attachment_id: str, active: bool = Query(...)) -> ApiResponse:
+    """Toggle template_active for a specific diagram attachment."""
+    await pg_client.execute(
+        """
+        UPDATE northstar.confluence_attachment
+        SET template_active = $2
+        WHERE attachment_id = $1 AND template_source_layer IS NOT NULL
+        """,
+        attachment_id,
+        active,
+    )
+    return ApiResponse(data={"attachment_id": attachment_id, "active": active})

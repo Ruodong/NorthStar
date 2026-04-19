@@ -147,6 +147,7 @@ export interface ArchitectureTemplateDiagram {
   thumbnail_url: string;
   raw_url: string;
   preview_url: string;
+  active: boolean;
 }
 
 export interface ArchitectureTemplateDiagramList {
