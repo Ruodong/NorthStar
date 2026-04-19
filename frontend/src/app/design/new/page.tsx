@@ -606,11 +606,32 @@ export default function DesignNewPage() {
                   {bcApps.map(a => {
                     const inScope = scopeApps.some(s => s.app_id === a.app_id);
                     return (
-                      <div key={a.app_id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "4px 0", fontSize: 12 }}>
-                        <input type="checkbox" checked={inScope} onChange={() => toggleAppFromBc(a)} />
+                      <button
+                        key={a.app_id}
+                        type="button"
+                        onClick={() => toggleAppFromBc(a)}
+                        aria-pressed={inScope}
+                        title={inScope ? "Click to remove from scope" : "Click to add to scope"}
+                        style={{
+                          display: "flex", alignItems: "center", gap: 8,
+                          width: "100%",
+                          padding: "5px 8px",
+                          fontSize: 12,
+                          background: inScope ? "rgba(246, 166, 35, 0.10)" : "transparent",
+                          borderLeft: inScope ? "2px solid var(--accent)" : "2px solid transparent",
+                          borderTop: "none",
+                          borderRight: "none",
+                          borderBottom: "1px dotted var(--border)",
+                          color: "var(--text)",
+                          cursor: "pointer",
+                          textAlign: "left",
+                          fontFamily: "var(--font-body)",
+                          transition: "background var(--t-hover) var(--ease), border-color var(--t-hover) var(--ease)",
+                        }}
+                      >
                         <code style={{ color: "var(--accent)", fontFamily: "var(--font-mono)", minWidth: 80 }}>{a.app_id}</code>
                         <span style={{ flex: 1 }}>{a.name}</span>
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -1448,23 +1469,30 @@ function IfaceRoleTree({
                     const counterInScope = row.counter_app_id ? scopeSet.has(row.counter_app_id) : false;
                     const counterUnlinked = !row.counter_app_id || row.counter_app_id === "__UNLINKED__";
                     return (
-                      <div
+                      <button
                         key={`${row.interface_id}-${row.counter_app_id || "u"}`}
+                        type="button"
+                        onClick={() => !counterUnlinked && onToggleRow(row)}
+                        disabled={counterUnlinked}
+                        aria-pressed={rowKept}
+                        title={counterUnlinked ? "Counterparty is unlinked; can't add to scope" : (rowKept ? "Click to remove from scope" : "Click to add to scope")}
                         style={{
                           display: "flex", alignItems: "center", gap: 8,
-                          padding: "5px 14px 5px 62px",
+                          width: "100%",
+                          padding: "5px 14px 5px 60px",
                           borderTop: "1px dotted var(--border)",
-                          background: rowKept ? `${color}12` : "transparent",
-                          opacity: rowKept ? 1 : 0.88,
+                          borderLeft: rowKept ? `2px solid ${color}` : "2px solid transparent",
+                          borderRight: "none",
+                          borderBottom: "none",
+                          background: rowKept ? `${color}14` : "transparent",
+                          opacity: rowKept ? 1 : (counterUnlinked ? 0.55 : 0.88),
+                          cursor: counterUnlinked ? "not-allowed" : "pointer",
+                          textAlign: "left",
+                          color: "var(--text)",
+                          fontFamily: "var(--font-body)",
+                          transition: "background var(--t-hover) var(--ease), border-color var(--t-hover) var(--ease), opacity var(--t-hover) var(--ease)",
                         }}
                       >
-                        <input
-                          type="checkbox"
-                          checked={rowKept}
-                          disabled={counterUnlinked}
-                          onChange={() => onToggleRow(row)}
-                          title={counterUnlinked ? "Counterparty is unlinked; can't add to scope" : undefined}
-                        />
                         <span style={{ color: "var(--text-dim)", fontSize: 12 }}>
                           {row.role === "provider" ? "→" : "←"}
                         </span>
@@ -1499,7 +1527,7 @@ function IfaceRoleTree({
                             )}
                           </>
                         )}
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
