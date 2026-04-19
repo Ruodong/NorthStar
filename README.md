@@ -1,5 +1,7 @@
 # NorthStar — IT Architect Workbench
 
+[![CI](https://github.com/Ruodong/NorthStar/actions/workflows/ci.yml/badge.svg?branch=dev)](https://github.com/Ruodong/NorthStar/actions/workflows/ci.yml)
+
 NorthStar is Lenovo's internal IT architecture reference tool. It builds a queryable knowledge graph of applications, projects, and integrations by extracting data from Confluence draw.io diagrams and mirroring EGM/EAM master data into Postgres.
 
 **Core user loop:** search an app name or ID &rarr; view its detail page &rarr; understand integrations, impact, and applicable standards &mdash; in seconds, not minutes.
@@ -8,58 +10,61 @@ NorthStar is Lenovo's internal IT architecture reference tool. It builds a query
 
 | Search (Cmd+K) | App Detail | Deployment Map |
 |:-:|:-:|:-:|
-| Unified search across apps, projects, EA standards | 8-tab detail page: Overview, Integrations, Deployment, Impact, Investments, Diagrams, Confluence, Knowledge Base | Geographic visualization with Prod/Non-Prod breakdown |
+| Unified search across apps, projects, EA standards | 9-tab detail page: Overview, Capabilities, Integrations, Deployment, Impact Analysis, Investments, Diagrams, Confluence, Knowledge Base | Geographic visualization with Prod/Non-Prod breakdown |
 
 ## Architecture
 
 ```
                     ┌──────────────────────┐
-                    │   Next.js 15 + React 19  │  :3003
-                    │   (Orbital Ops dark UI)   │
-                    └───────────┬──────────┘
+                    │ Next.js 14 + React 18 │  :3003
+                    │ (Orbital Ops dark UI) │
+                    │ RSC app detail page   │
+                    └───────────┬───────────┘
                                 │
-                    ┌───────────▼──────────┐
-                    │   FastAPI (Python)     │  :8001
-                    │   async PG + Neo4j     │
-                    └──┬────────────────┬──┘
-                       │                │
-            ┌──────────▼──┐   ┌────────▼────────┐
-            │  PostgreSQL  │   │   Neo4j CE       │
-            │  (system of  │   │   (derived       │
-            │   record)    │   │    projection)   │
-            │  :5434       │   │   :7687          │
-            └──────────────┘   └─────────────────┘
-                   ▲                    ▲
-                   │                    │
-        ┌──────────┴──────────┐        │
-        │  Host-side scripts   │────────┘
-        │  (VPN required)      │
-        │  sync_from_egm.py    │  EGM/EAM master data
-        │  scan_confluence.py  │  Confluence pages & attachments
-        │  sync_ea_documents.py│  EA Standards & Guidelines
-        │  load_neo4j_from_pg  │  PG → Neo4j rebuild
-        └─────────────────────┘
+                    ┌───────────▼───────────┐
+                    │   FastAPI (Python)    │  :8001
+                    │   async PG + AGE      │
+                    └───────────┬───────────┘
+                                │
+                    ┌───────────▼───────────┐
+                    │   PostgreSQL 16       │  :5434
+                    │   + Apache AGE        │
+                    │   (system of record   │
+                    │    AND graph —        │
+                    │    single container)  │
+                    └───────────┬───────────┘
+                                ▲
+                                │
+                    ┌───────────┴────────────┐
+                    │  Host-side scripts     │
+                    │  (VPN required)        │
+                    │  sync_from_egm.py      │  EGM/EAM master data
+                    │  scan_confluence.py    │  Confluence pages & attachments
+                    │  sync_ea_documents.py  │  EA Standards & Guidelines
+                    │  load_age_from_pg.py   │  PG → AGE graph rebuild
+                    └────────────────────────┘
 ```
 
-### Two-Layer Data Model
+### Two-Layer Data Model (single Postgres)
 
-| Layer | Store | Role | Data |
-|-------|-------|------|------|
-| **Layer 1** | PostgreSQL | System of Record | CMDB apps (3,169), MSPO projects (2,325), employees (79K), Confluence pages, EA documents (131), deployment infra, TCO |
-| **Layer 2** | Neo4j CE | Derived Projection | Application &rarr; Integration graph, Project &rarr; App investment edges, Diagram references |
+| Layer | Schema | Role | Data |
+|-------|--------|------|------|
+| **Layer 1 — Relational** | `northstar.*` | System of Record | CMDB apps (3,169), MSPO projects (2,325), employees (79K), Confluence pages, EA documents (131), deployment infra, TCO |
+| **Layer 2 — Graph** | `ns_graph` (Apache AGE) | Derived Projection | Application &rarr; Integration graph, Project &rarr; App investment edges, Diagram references. Queried via `ag_catalog.cypher('ns_graph', $$ ... $$)`. |
 
-**Invariant:** Data flows PG &rarr; loader &rarr; Neo4j, never the reverse. Backend routers never write to Neo4j.
+**Invariant:** Data flows PG relational &rarr; loader (`scripts/load_age_from_pg.py`) &rarr; AGE graph, never the reverse. Backend routers never write the graph. Neo4j was migrated out on 2026-04-17 — the `neo4j_client.py` module name is a legacy alias for the AGE-backed client.
 
 ## Features
 
 ### For Architects
 
 - **Unified Search** &mdash; `Cmd+K` / `/` searches apps, projects, and EA standards simultaneously. PG `tsvector` + `pg_trgm` for typo-tolerant fuzzy matching.
-- **App Detail Page** (`/apps/[app_id]`) &mdash; 8 tabs covering everything about an application:
-  - **Overview** &mdash; CMDB metadata, owners, deployment summary, TCO, applicable EA standards
-  - **Integrations** &mdash; upstream/downstream connections with business objects
+- **App Detail Page** (`/apps/[app_id]`) &mdash; 9 tabs covering everything about an application. Rendered server-side for instant first paint (Next 14 RSC), with full WCAG AA accessibility (ARIA tablist with roving tabindex, ARIA tree for Capabilities, skip link, axe-core-enforced contrast):
+  - **Overview** &mdash; CMDB metadata (flat MetadataList, no card chrome), owners, deployment summary, TCO, applicable EA standards, life-cycle change history
+  - **Capabilities** &mdash; EAM business capability tree (L1 Domain &rarr; L2 Sub-domain &rarr; L3 leaf) with keyboard navigation
+  - **Integrations** &mdash; upstream/downstream connections with business objects, platform landscape SVG
   - **Deployment** &mdash; servers, containers, databases with geographic map visualization
-  - **Impact Analysis** &mdash; 1/2/3-hop reverse dependency traversal via Neo4j
+  - **Impact Analysis** &mdash; 1/2/3-hop reverse dependency traversal via the AGE graph
   - **Investments** &mdash; which projects invest in this app, across fiscal years
   - **Diagrams** &mdash; draw.io thumbnails grouped by project, with grid/list toggle
   - **Confluence** &mdash; EA review pages with parsed questionnaire sections

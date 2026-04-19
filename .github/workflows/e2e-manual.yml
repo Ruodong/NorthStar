@@ -1,0 +1,76 @@
+name: E2E — Manual (Playwright + axe-core)
+
+# T8 continued — full e2e suite against the live NorthStar stack.
+# Must be triggered manually by a developer on a runner with reachability
+# to the stack (server 71 or a local baseURL). The default Lenovo
+# internal GitHub Actions runners on the corporate network can reach 71;
+# public github.com runners cannot.
+#
+# Triggers only via workflow_dispatch with a baseURL input, so we don't
+# burn minutes on every push.
+
+on:
+  workflow_dispatch:
+    inputs:
+      baseURL:
+        description: "NorthStar base URL (must include scheme + port)"
+        required: true
+        default: "http://192.168.68.71:3003"
+      grep:
+        description: "Filter tests by name (optional; playwright --grep)"
+        required: false
+        default: ""
+
+jobs:
+  playwright:
+    name: Playwright + axe-core full suite
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install e2e dependencies (root)
+        run: npm ci
+
+      - name: Install Playwright browsers (chromium only)
+        run: node_modules/.bin/playwright install --with-deps chromium
+
+      - name: Reachability check
+        run: |
+          set -e
+          echo "Pinging ${{ inputs.baseURL }} ..."
+          curl -sf -o /dev/null -w "HTTP %{http_code} in %{time_total}s\n" "${{ inputs.baseURL }}" || {
+            echo "::error::Cannot reach ${{ inputs.baseURL }} from this runner. Pick a network-reachable baseURL or use a self-hosted runner on the Lenovo corp network."
+            exit 1
+          }
+
+      - name: Playwright full suite + axe
+        run: |
+          if [ -n "${{ inputs.grep }}" ]; then
+            node_modules/.bin/playwright test --grep "${{ inputs.grep }}"
+          else
+            node_modules/.bin/playwright test
+          fi
+        env:
+          E2E_BASE_URL: ${{ inputs.baseURL }}
+
+      - name: Upload Playwright HTML report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+      - name: Upload test-results (screenshots, traces) on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results/
+          retention-days: 7
