@@ -653,6 +653,54 @@ def test_major_aligned_with_legend_horizontal_center():
     )
 
 
+def test_tall_container_spanning_legend_and_body_is_not_kept():
+    """A cell that starts inside the Legend band but extends far below
+    it is a body container, not a Legend member. It must be stripped
+    and its children must NOT transitively survive via parent chain."""
+    # Legend band at top + an "Illustrative" sticky outside the Legend
+    # + a tall body container whose TOP is inside the Legend band and
+    # whose BOTTOM extends deep into the body + a child of that
+    # container.
+    cells = (
+        # Illustrative sticky — well ABOVE the Legend frame so it falls
+        # OUTSIDE the region after detection + padding (mirroring the
+        # real EA template where Illustrative is y=-250 and Legend frame
+        # starts at y=-190, separated by a 60px gap).
+        _mk_cell("illus", x=10, y=0, w=120, h=30, value="Illustrative")
+        # Legend box marker (inside the Legend)
+        + _mk_cell("legend_label", x=600, y=120, w=80, h=20, value="Legend")
+        # Example cards inside the Legend
+        + _mk_cell("L1", x=100, y=160, w=100, h=60, value="Ex1")
+        + _mk_cell("L2", x=260, y=160, w=100, h=60, value="Ex2")
+        + _mk_cell("L3", x=420, y=160, w=100, h=60, value="Ex3")
+        + _mk_cell("L4", x=580, y=160, w=100, h=60, value="Ex4")
+        + _mk_cell("L5", x=740, y=160, w=100, h=60, value="Ex5")
+        # A big Legend frame ENCLOSING the 5 cards + the label
+        + _mk_cell("legend_frame", x=80, y=110, w=800, h=130, value="", style="rounded=0;")
+        # Tall body container: top sits in the Legend band (y=180) but
+        # extends to y=600 (body area). Must be stripped by body-overhang.
+        + _mk_cell("body_container", x=100, y=180, w=800, h=420, value="", style="rounded=0;")
+        # Child of the body container — must NOT be transitively kept
+        + '<mxCell id="body_child" value="Users" style="text;" vertex="1" parent="body_container">'
+        + '<mxGeometry x="10" y="250" width="80" height="30" as="geometry"/>'
+        + '</mxCell>'
+    )
+    tpl = _wrap_template(cells)
+    out = generate_as_is_xml(tpl, [_app("M1", "Hub", role="major")], [])
+    graph_root = _parse_graph_root(out)
+    ids = {c.get("id") for c in graph_root.iter("mxCell")}
+    # Legend-proper cells survive
+    assert "legend_frame" in ids
+    assert "legend_label" in ids
+    for c in ("L1", "L2", "L3", "L4", "L5"):
+        assert c in ids, f"Legend example card {c} must survive"
+    # Illustrative (outside the Legend frame AND outside the Legend region)
+    # and the body container + its child must all be stripped.
+    assert "illus" not in ids, "Illustrative sticky above Legend must be stripped"
+    assert "body_container" not in ids, "tall body container must be stripped"
+    assert "body_child" not in ids, "children of stripped body container must NOT survive"
+
+
 def test_major_top_pinned_near_canvas_top():
     """Major's top edge should sit near canvas.ymin (= Legend.ymax + gap),
     not float at canvas center."""

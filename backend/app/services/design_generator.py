@@ -537,18 +537,33 @@ def _detect_legend_region(
     return (xmin, ymin, xmax, ymax)
 
 
+_BODY_OVERHANG_TOLERANCE = 40.0
+
+
 def _inside_region(
     bbox: Optional[tuple[float, float, float, float]],
     region: tuple[float, float, float, float],
 ) -> bool:
-    """Return True if cell bbox is fully OR partially inside the region.
+    """Return True if cell bbox is inside (or minor-straddle of) the region.
 
-    Straddling cells count as inside (safer than chopping).
+    Strict rule: a cell's bottom edge must not extend more than
+    _BODY_OVERHANG_TOLERANCE px BELOW the region's bottom. This excludes
+    tall 'body container' cells that happen to start inside the Legend
+    band but extend through the whole canvas — without this rule, the
+    transitive parent-chain propagation would drag every descendant of
+    that container back into the kept set.
+
+    Minor top overhang is allowed so cells touching the Legend's top
+    padding (like a Legend-box title sitting slightly above) still count.
     """
     if bbox is None:
         return False
     cx0, cy0, cx1, cy1 = bbox
     rx0, ry0, rx1, ry1 = region
+    # Reject cells extending significantly below the region — typical of
+    # body containers that accidentally straddle the Legend.
+    if (cy1 - ry1) > _BODY_OVERHANG_TOLERANCE:
+        return False
     # overlap if NOT completely disjoint
     return not (cx1 < rx0 or cx0 > rx1 or cy1 < ry0 or cy0 > ry1)
 
@@ -599,13 +614,21 @@ def _strip_non_legend_cells(
             graph_root.remove(wrapper)
         return
 
-    # Seed: vertex cells whose bbox overlaps the Legend region.
+    # Seed: ONLY root-level vertex cells whose bbox overlaps the region.
+    # Nested cells (parent != "1" / "0") use drawio-relative coords, so
+    # their bbox is in parent-local space and can't be compared to the
+    # absolute Legend region. They inherit kept-ness via the parent chain
+    # in the propagation step below.
     kept: set[str] = set()
     for cid, cell in id_to_cell.items():
-        if cell.get("vertex") == "1":
-            bb = _cell_bbox(cell)
-            if _inside_region(bb, legend_region):
-                kept.add(cid)
+        if cell.get("vertex") != "1":
+            continue
+        parent = cell.get("parent") or ""
+        if parent not in ("", "1", "0"):
+            continue
+        bb = _cell_bbox(cell)
+        if _inside_region(bb, legend_region):
+            kept.add(cid)
 
     # Propagate kept via parent-chain + edge-endpoint rules until stable.
     while True:
