@@ -3,24 +3,23 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-/* ── Grouped navigation: Reference │ Analysis │ Admin ── */
+/* ── Grouped navigation: Main │ Analysis │ Reference ── */
 const NAV_GROUPS = [
-  /* Reference — primary data entry points */
+  /* Main — primary data entry points */
   [
     { href: "/applications", label: "Applications" },
     { href: "/projects", label: "Projects" },
     { href: "/capabilities", label: "Business" },
     { href: "/standards", label: "Standards" },
   ],
-  /* Analysis — graph + change tracking + design */
+  /* Analysis — graph + design */
   [
     { href: "/graph", label: "Graph" },
-    { href: "/whats-new", label: "What\u2019s New" },
     { href: "/design", label: "Design" },
   ],
-  /* Admin — ingestion + raw data */
+  /* Reference — raw data + settings */
   [
-    { href: "/admin", label: "Admin" },
+    { href: "/admin", label: "Reference" },
     { href: "/settings", label: "Settings" },
   ],
 ];
