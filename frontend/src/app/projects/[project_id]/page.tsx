@@ -92,7 +92,7 @@ export default function ProjectDetailPage() {
       <div style={{ marginBottom: 24 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
           <Link href="/projects" style={{ color: "var(--text-dim)", fontSize: 12, textDecoration: "none" }}>
-            \u2190 Projects
+{"\u2190"} Projects
           </Link>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
