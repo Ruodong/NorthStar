@@ -51,18 +51,23 @@ export function DeploymentTab({ appId }: { appId: string }) {
       {/* Summary KPIs with Prod/Non-Prod breakdown */}
       <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
         <DeployKpi label="Servers (VM/PM)" value={summary.servers}
+          targetId="deploy-servers"
           prod={servers.filter(s => s.env === "Production").length}
           nonProd={servers.filter(s => s.env === "Non-Production").length} />
         <DeployKpi label="Containers" value={summary.containers}
+          targetId="deploy-containers"
           prod={containers.filter(c => c.env === "Production").length}
           nonProd={containers.filter(c => c.env === "Non-Production").length} />
         <DeployKpi label="Databases" value={summary.databases}
+          targetId="deploy-databases"
           prod={databases.filter(d => d.env === "Production").length}
           nonProd={databases.filter(d => d.env === "Non-Production").length} />
         <DeployKpi label="Object Storage" value={summary.object_storage || 0}
+          targetId="deploy-object-storage"
           prod={oss.filter(o => o.env === "Production").length}
           nonProd={oss.filter(o => o.env === "Non-Production").length} />
         <DeployKpi label="NAS" value={summary.nas || 0}
+          targetId="deploy-nas"
           prod={nas.filter(n => n.env === "Production").length}
           nonProd={nas.filter(n => n.env === "Non-Production").length} />
         <DeployKpi label="Total" value={total} accent />
@@ -171,6 +176,7 @@ export function DeploymentTab({ appId }: { appId: string }) {
 
       {/* Servers table */}
       {servers.length > 0 && (
+        <div id="deploy-servers" style={{ scrollMarginTop: 72, borderRadius: "var(--radius-lg)" }}>
         <Panel title={`Servers · VM/PM (${servers.length})`}>
           <div style={{ overflowX: "auto" }}>
             <table>
@@ -214,10 +220,12 @@ export function DeploymentTab({ appId }: { appId: string }) {
             )}
           </div>
         </Panel>
+        </div>
       )}
 
       {/* Containers table */}
       {containers.length > 0 && (
+        <div id="deploy-containers" style={{ scrollMarginTop: 72, borderRadius: "var(--radius-lg)" }}>
         <Panel title={`Containers (${containers.length})`}>
           <table>
             <thead>
@@ -246,10 +254,12 @@ export function DeploymentTab({ appId }: { appId: string }) {
             </tbody>
           </table>
         </Panel>
+        </div>
       )}
 
       {/* Databases table */}
       {databases.length > 0 && (
+        <div id="deploy-databases" style={{ scrollMarginTop: 72, borderRadius: "var(--radius-lg)" }}>
         <Panel title={`Databases (${databases.length})`}>
           <table>
             <thead>
@@ -278,10 +288,12 @@ export function DeploymentTab({ appId }: { appId: string }) {
             </tbody>
           </table>
         </Panel>
+        </div>
       )}
 
       {/* Object Storage table */}
       {oss.length > 0 && (
+        <div id="deploy-object-storage" style={{ scrollMarginTop: 72, borderRadius: "var(--radius-lg)" }}>
         <Panel title={`Object Storage (${oss.length})`}>
           <table>
             <thead>
@@ -310,10 +322,12 @@ export function DeploymentTab({ appId }: { appId: string }) {
             </tbody>
           </table>
         </Panel>
+        </div>
       )}
 
       {/* NAS Storage table */}
       {nas.length > 0 && (
+        <div id="deploy-nas" style={{ scrollMarginTop: 72, borderRadius: "var(--radius-lg)" }}>
         <Panel title={`NAS Storage (${nas.length})`}>
           <table>
             <thead>
@@ -342,24 +356,22 @@ export function DeploymentTab({ appId }: { appId: string }) {
             </tbody>
           </table>
         </Panel>
+        </div>
       )}
     </div>
   );
 }
 
-function DeployKpi({ label, value, accent, prod, nonProd }: {
+function DeployKpi({ label, value, accent, prod, nonProd, targetId }: {
   label: string; value: number; accent?: boolean; prod?: number; nonProd?: number;
+  /** When set + value > 0, the card becomes a clickable button that
+   *  scrolls the matching list panel into view. Rendered as a real
+   *  <button> so keyboard + a11y work. */
+  targetId?: string;
 }) {
-  return (
-    <div
-      style={{
-        padding: "12px 20px",
-        background: "var(--bg-elevated)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-md)",
-        minWidth: 120,
-      }}
-    >
+  const clickable = !!targetId && value > 0;
+  const body = (
+    <>
       <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--text-dim)", marginBottom: 4 }}>
         {label}
       </div>
@@ -376,7 +388,58 @@ function DeployKpi({ label, value, accent, prod, nonProd }: {
           <span style={{ color: "#6ba6e8" }}>{nonProd || 0}NP</span>
         </div>
       )}
-    </div>
+    </>
+  );
+  const baseStyle: React.CSSProperties = {
+    padding: "12px 20px",
+    background: "var(--bg-elevated)",
+    border: "1px solid var(--border)",
+    borderRadius: "var(--radius-md)",
+    minWidth: 120,
+    textAlign: "left",
+    fontFamily: "var(--font-body)",
+    color: "var(--text)",
+  };
+  if (!clickable) {
+    return <div style={baseStyle}>{body}</div>;
+  }
+  return (
+    <button
+      type="button"
+      aria-label={`Jump to ${label} list`}
+      onClick={() => {
+        const el = document.getElementById(targetId!);
+        if (!el) return;
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+        // Briefly highlight the destination so the user sees where it landed.
+        el.style.transition = "outline-color 600ms ease";
+        el.style.outline = "2px solid var(--accent)";
+        el.style.outlineOffset = "2px";
+        setTimeout(() => {
+          el.style.outlineColor = "transparent";
+          setTimeout(() => {
+            el.style.outline = "";
+            el.style.outlineOffset = "";
+            el.style.transition = "";
+          }, 700);
+        }, 400);
+      }}
+      style={{
+        ...baseStyle,
+        cursor: "pointer",
+        transition: "border-color 120ms ease, background 120ms ease, transform 120ms ease",
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = "var(--accent)";
+        e.currentTarget.style.background = "var(--surface-hover)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = "var(--border)";
+        e.currentTarget.style.background = "var(--bg-elevated)";
+      }}
+    >
+      {body}
+    </button>
   );
 }
 
