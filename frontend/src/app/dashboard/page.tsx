@@ -18,6 +18,7 @@ import {
   YAxis,
 } from "recharts";
 import { api, HubApp, KpiSummary, StatusBucket, TrendPoint } from "@/lib/api";
+import { Kpi } from "@/components/Kpi";
 
 const STATUS_COLORS: Record<string, string> = {
   Keep: "#6ba6e8",
@@ -94,24 +95,28 @@ export default function DashboardPage() {
       <SectionLabel source="Architecture Graph · Neo4j · parsed from Confluence drawio" />
       <div className="kpi-grid">
         <Kpi
+          size="lg"
           label="Apps in graph"
           value={summary?.total_apps ?? 0}
           href="/graph"
           hint="Unique Application nodes"
         />
         <Kpi
+          size="lg"
           label="Integrations"
           value={summary?.total_integrations ?? 0}
           href="/graph"
           hint="INTEGRATES_WITH edges"
         />
         <Kpi
+          size="lg"
           label="New apps (current FY)"
           value={summary?.new_apps_current_fy ?? 0}
           href="/graph?status=New"
           hint="from drawio fillColor"
         />
         <Kpi
+          size="lg"
           label="Sunset apps"
           value={summary?.sunset_apps ?? 0}
           href="/graph?status=Sunset"
@@ -123,24 +128,28 @@ export default function DashboardPage() {
       <SectionLabel source="Master Data · Postgres · synced from EGM" />
       <div className="kpi-grid">
         <Kpi
+          size="lg"
           label="Applications (CMDB)"
           value={masters?.applications ?? 0}
           href="/admin/applications"
           hint="ref_application"
         />
         <Kpi
+          size="lg"
           label="MSPO projects"
           value={masters?.projects ?? 0}
           href="/admin/projects"
           hint="ref_project"
         />
         <Kpi
+          size="lg"
           label="Confluence pages"
           value={cfl?.totals?.total_pages ?? 0}
           href="/admin/confluence"
           hint="scanned from ARD space"
         />
         <Kpi
+          size="lg"
           label="Attachments downloaded"
           value={cfl?.totals?.downloaded ?? 0}
           href="/admin/confluence"
@@ -231,48 +240,7 @@ export default function DashboardPage() {
   );
 }
 
-function Kpi({
-  label,
-  value,
-  href,
-  hint,
-}: {
-  label: string;
-  value: number;
-  href?: string;
-  hint?: string;
-}) {
-  const body = (
-    <>
-      <div className="kpi-label">{label}</div>
-      <div className="kpi-value">{value.toLocaleString()}</div>
-      {hint && (
-        <div
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: 10,
-            color: "var(--text-dim)",
-            marginTop: 6,
-          }}
-        >
-          {hint}
-        </div>
-      )}
-    </>
-  );
-  if (href) {
-    return (
-      <Link
-        href={href}
-        className="kpi-card"
-        style={{ textDecoration: "none", cursor: "pointer" }}
-      >
-        {body}
-      </Link>
-    );
-  }
-  return <div className="kpi-card">{body}</div>;
-}
+// Kpi moved to @/components/Kpi (T13). Dashboard uses size="lg".
 
 function SectionLabel({ source }: { source: string }) {
   return (

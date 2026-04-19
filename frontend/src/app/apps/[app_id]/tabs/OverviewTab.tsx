@@ -110,119 +110,134 @@ export function OverviewTab({
     (deploySummary && (deploySummary.servers + deploySummary.containers + deploySummary.databases) > 0);
 
   return (
-    <div style={{ display: "grid", gap: 36, maxWidth: 980 }}>
-      {/* Basic — flat MetadataList, no card chrome */}
-      <section aria-labelledby="overview-basic">
-        <SectionHeader id="overview-basic">Basic</SectionHeader>
-        <MetadataList rows={basicRows} />
-      </section>
+    <div style={{ display: "flex", flexDirection: "column", gap: 36 }}>
+      {/* Top: multi-column responsive grid — auto-fit into 2+ columns on
+          wide screens, 1 column on narrow. Lifecycle is excluded because
+          its length is unpredictable and it reads better full-width. */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))",
+          columnGap: 48,
+          rowGap: 36,
+          alignItems: "start",
+        }}
+      >
+        {/* Basic — flat MetadataList, no card chrome */}
+        <section aria-labelledby="overview-basic">
+          <SectionHeader id="overview-basic">Basic</SectionHeader>
+          <MetadataList rows={basicRows} />
+        </section>
 
-      {/* Owners */}
-      <section aria-labelledby="overview-owners">
-        <SectionHeader id="overview-owners">Owners</SectionHeader>
-        <MetadataList rows={ownersRows} />
-      </section>
+        {/* Owners */}
+        <section aria-labelledby="overview-owners">
+          <SectionHeader id="overview-owners">Owners</SectionHeader>
+          <MetadataList rows={ownersRows} />
+        </section>
 
-      {/* Deployment */}
-      <section aria-labelledby="overview-deployment">
-        <SectionHeader id="overview-deployment">Deployment</SectionHeader>
-        {!hasDeploymentData ? (
-          <div style={{ color: "var(--text-muted)", fontSize: 13, lineHeight: 1.6 }}>
-            No deployment data recorded for this application.
-          </div>
-        ) : (
-          <>
-            <MetadataList rows={deploymentRows} />
-            {deploySummary && (deploySummary.servers + deploySummary.containers + deploySummary.databases) > 0 && (
-              <div style={{ marginTop: 16 }}>
-                <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--text-dim)", marginBottom: 8, fontFamily: "var(--font-mono)" }}>
-                  Infrastructure (InfraOps)
-                </div>
-                <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
-                  {deploySummary.servers > 0 && (
-                    <DeployStat label="servers" value={deploySummary.servers} />
-                  )}
-                  {deploySummary.containers > 0 && (
-                    <DeployStat label="containers" value={deploySummary.containers} />
-                  )}
-                  {deploySummary.databases > 0 && (
-                    <DeployStat label="databases" value={deploySummary.databases} />
-                  )}
-                </div>
-                {deploySummary.top_cities.length > 0 && (
-                  <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-muted)" }}>
-                    {deploySummary.top_cities.map((c, i) => (
-                      <span key={c.city}>
-                        {i > 0 && " · "}
-                        {CITY_LABELS[c.city] || c.city} ({c.total})
-                      </span>
-                    ))}
+        {/* Deployment */}
+        <section aria-labelledby="overview-deployment">
+          <SectionHeader id="overview-deployment">Deployment</SectionHeader>
+          {!hasDeploymentData ? (
+            <div style={{ color: "var(--text-muted)", fontSize: 13, lineHeight: 1.6 }}>
+              No deployment data recorded for this application.
+            </div>
+          ) : (
+            <>
+              <MetadataList rows={deploymentRows} />
+              {deploySummary && (deploySummary.servers + deploySummary.containers + deploySummary.databases) > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--text-dim)", marginBottom: 8, fontFamily: "var(--font-mono)" }}>
+                    Infrastructure (InfraOps)
                   </div>
-                )}
-              </div>
-            )}
-          </>
-        )}
-      </section>
-
-      {/* TCO — only when data present */}
-      {tco && (
-        <section aria-labelledby="overview-tco">
-          <SectionHeader id="overview-tco">TCO / Financials</SectionHeader>
-          <MetadataList rows={tcoRows} />
+                  <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+                    {deploySummary.servers > 0 && (
+                      <DeployStat label="servers" value={deploySummary.servers} />
+                    )}
+                    {deploySummary.containers > 0 && (
+                      <DeployStat label="containers" value={deploySummary.containers} />
+                    )}
+                    {deploySummary.databases > 0 && (
+                      <DeployStat label="databases" value={deploySummary.databases} />
+                    )}
+                  </div>
+                  {deploySummary.top_cities.length > 0 && (
+                    <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-muted)" }}>
+                      {deploySummary.top_cities.map((c, i) => (
+                        <span key={c.city}>
+                          {i > 0 && " · "}
+                          {CITY_LABELS[c.city] || c.city} ({c.total})
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
         </section>
-      )}
 
-      {/* Fiscal year presence */}
-      <section aria-labelledby="overview-fiscal">
-        <SectionHeader id="overview-fiscal">Fiscal year presence</SectionHeader>
-        {fyList.length === 0 ? (
-          <EmptyState>No project investments recorded.</EmptyState>
-        ) : (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {fyList.map((fy) => (
-              <span
-                key={fy}
-                style={{
-                  fontSize: 11,
-                  fontFamily: "var(--font-mono)",
-                  padding: "3px 10px",
-                  background: "var(--bg-elevated)",
-                  border: "1px solid var(--border-strong)",
-                  borderRadius: "var(--radius-sm)",
-                  color: "var(--text)",
-                }}
-              >
-                {fy}
-              </span>
-            ))}
-          </div>
+        {/* TCO — only when data present */}
+        {tco && (
+          <section aria-labelledby="overview-tco">
+            <SectionHeader id="overview-tco">TCO / Financials</SectionHeader>
+            <MetadataList rows={tcoRows} />
+          </section>
         )}
-      </section>
 
-      <LifeCycleChangePanel appId={app.app_id} />
-
-      {confluencePages.length > 0 && (
-        <section aria-labelledby="overview-confluence">
-          <SectionHeader id="overview-confluence">Confluence pages</SectionHeader>
-          <ul style={{ margin: 0, padding: 0, listStyle: "none", fontSize: 13 }}>
-            {confluencePages.map((p) => (
-              <li key={p.page_id} style={{ marginBottom: 6 }}>
-                <a
-                  href={p.page_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ color: "var(--accent)", textDecoration: "none" }}
+        {/* Fiscal year presence */}
+        <section aria-labelledby="overview-fiscal">
+          <SectionHeader id="overview-fiscal">Fiscal year presence</SectionHeader>
+          {fyList.length === 0 ? (
+            <EmptyState>No project investments recorded.</EmptyState>
+          ) : (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {fyList.map((fy) => (
+                <span
+                  key={fy}
+                  style={{
+                    fontSize: 11,
+                    fontFamily: "var(--font-mono)",
+                    padding: "3px 10px",
+                    background: "var(--bg-elevated)",
+                    border: "1px solid var(--border-strong)",
+                    borderRadius: "var(--radius-sm)",
+                    color: "var(--text)",
+                  }}
                 >
-                  {p.title || p.page_id} ↗
-                </a>
-              </li>
-            ))}
-          </ul>
+                  {fy}
+                </span>
+              ))}
+            </div>
+          )}
         </section>
-      )}
 
-      <EaStandardsPanel appId={app.app_id} />
+        {confluencePages.length > 0 && (
+          <section aria-labelledby="overview-confluence">
+            <SectionHeader id="overview-confluence">Confluence pages</SectionHeader>
+            <ul style={{ margin: 0, padding: 0, listStyle: "none", fontSize: 13 }}>
+              {confluencePages.map((p) => (
+                <li key={p.page_id} style={{ marginBottom: 6 }}>
+                  <a
+                    href={p.page_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ color: "var(--accent)", textDecoration: "none" }}
+                  >
+                    {p.title || p.page_id} ↗
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        <EaStandardsPanel appId={app.app_id} />
+      </div>
+
+      {/* Lifecycle — length is hard to bound (project history can be long),
+          so it gets its own full-width row at the bottom. */}
+      <LifeCycleChangePanel appId={app.app_id} />
     </div>
   );
 }

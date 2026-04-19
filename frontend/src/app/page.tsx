@@ -10,6 +10,7 @@
  */
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { Panel } from "@/components/Panel";
 
 interface WhatsNewSummary {
   since: string;
@@ -524,49 +525,7 @@ function MetricCard({
   return <div style={cardStyle}>{content}</div>;
 }
 
-function Panel({
-  title,
-  action,
-  children,
-}: {
-  title: string;
-  action?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      style={{
-        background: "var(--surface)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-lg)",
-        padding: 20,
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 14,
-        }}
-      >
-        <div
-          style={{
-            fontSize: 11,
-            fontWeight: 600,
-            textTransform: "uppercase",
-            letterSpacing: 0.6,
-            color: "var(--text-muted)",
-          }}
-        >
-          {title}
-        </div>
-        {action}
-      </div>
-      {children}
-    </div>
-  );
-}
+// Panel moved to @/components/Panel (T12). This file no longer defines it.
 
 function EmptyHint({ children }: { children: React.ReactNode }) {
   return (

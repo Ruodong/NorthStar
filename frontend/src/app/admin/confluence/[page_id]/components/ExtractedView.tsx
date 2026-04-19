@@ -55,6 +55,10 @@ export function SummaryChip({
   );
 }
 
+// Admin-local StatusPill — 9px mono on rgba-03 background, for dense
+// admin-table rows where the full Pill would dominate. Intentionally
+// NOT the shared `apps/[app_id]/_shared/StatusPill.tsx` (which wraps
+// the DESIGN.md Pill primitive). Both forms coexist per T14 resolution.
 export function StatusPill({ status }: { status: string | null }) {
   if (!status) return null;
   const color = STATUS_COLOR[status] || "var(--text-dim)";
