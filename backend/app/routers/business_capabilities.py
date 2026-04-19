@@ -78,6 +78,25 @@ async def list_business_capabilities() -> ApiResponse:
     except Exception:
         bc_to_apps = {}
 
+    # Load app details (name + portfolio) for all mapped apps
+    all_app_ids = {a for apps in bc_to_apps.values() for a in apps}
+    app_details: dict[str, dict] = {}
+    if all_app_ids:
+        detail_rows = await pg_client.fetch(
+            """
+            SELECT app_id, name, portfolio_mgt
+            FROM northstar.ref_application
+            WHERE app_id = ANY($1::text[])
+            """,
+            list(all_app_ids),
+        )
+        for r in detail_rows:
+            app_details[r["app_id"]] = {
+                "app_id": r["app_id"],
+                "name": r["name"],
+                "portfolio": r["portfolio_mgt"],
+            }
+
     # Index BCs
     bc_by_id: dict[str, dict] = {}
     for r in bcs:
@@ -113,9 +132,16 @@ async def list_business_capabilities() -> ApiResponse:
     for root in roots:
         rollup(root)
 
-    # Strip internal _app_set; sort children by app_count DESC then bc_id
+    # Strip internal _app_set; sort children; attach app details to leaves
     def clean(node: dict) -> dict:
-        node.pop("_app_set", None)
+        app_set = node.pop("_app_set", set())
+        # Attach app details to L3 leaf nodes (or any node with no children)
+        if not node["children"] and app_set:
+            node["apps"] = sorted(
+                [app_details.get(aid, {"app_id": aid, "name": aid, "portfolio": None})
+                 for aid in app_set],
+                key=lambda a: (a.get("portfolio") or "zzz", a.get("name") or ""),
+            )
         node["children"] = sorted(
             [clean(c) for c in node["children"]],
             key=lambda n: (-n["app_count"], n["bc_id"]),

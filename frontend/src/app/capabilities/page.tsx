@@ -1,18 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-interface BCApp {
+interface BCLeafApp {
   app_id: string;
   name: string;
-  status: string | null;
-  app_ownership: string | null;
-  u_service_area: string | null;
-  portfolio_mgt: string | null;
+  portfolio: string | null;
 }
 
 interface BCNode {
@@ -24,7 +21,15 @@ interface BCNode {
   level: number;
   app_count: number;
   children: BCNode[];
+  apps?: BCLeafApp[];
 }
+
+const PORTFOLIO_COLORS: Record<string, string> = {
+  Invest: "#5fc58a",
+  Migrate: "#6ba6e8",
+  Tolerate: "#e8b458",
+  Eliminate: "#e8716b",
+};
 
 interface BCResponse {
   total_bcs: number;
@@ -54,8 +59,6 @@ export default function CapabilitiesPage() {
   const [err, setErr] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [expandedL1, setExpandedL1] = useState<Set<string>>(new Set());
-  const [expandedL3, setExpandedL3] = useState<string | null>(null);
-  const [l3Apps, setL3Apps] = useState<Record<string, BCApp[]>>({});
 
   useEffect(() => {
     (async () => {
@@ -88,23 +91,6 @@ export default function CapabilitiesPage() {
     });
   }, []);
 
-  const toggleL3 = useCallback(async (bcId: string, appCount: number) => {
-    if (appCount === 0) return;
-    setExpandedL3((prev) => prev === bcId ? null : bcId);
-    setL3Apps((prev) => {
-      if (prev[bcId]) return prev;
-      // Fetch in background
-      fetch(`/api/business-capabilities/${encodeURIComponent(bcId)}/apps`)
-        .then((r) => r.json())
-        .then((j) => {
-          if (j.success) {
-            setL3Apps((p) => ({ ...p, [bcId]: j.data.apps || [] }));
-          }
-        })
-        .catch(() => {});
-      return prev;
-    });
-  }, []);
 
   if (loading) return <div style={{ padding: 40, color: "var(--text-dim)" }}>Loading...</div>;
   if (err) return <div style={{ padding: 40, color: "var(--error)" }}>Error: {err}</div>;
@@ -149,6 +135,21 @@ export default function CapabilitiesPage() {
           label="Coverage"
           value={`${data.total_bcs > 0 ? Math.round((data.tree.filter((l1) => l1.app_count > 0).reduce((a, l1) => a + l1.children.reduce((b, l2) => b + l2.children.filter((l3) => l3.app_count > 0).length, 0), 0) / data.total_bcs) * 100) : 0}%`}
         />
+      </div>
+
+      {/* Portfolio Legend */}
+      <div style={{ display: "flex", alignItems: "center", gap: 20, marginBottom: 16, padding: "10px 16px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)" }}>
+        <span style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--text-dim)", marginRight: 4 }}>Portfolio</span>
+        {Object.entries(PORTFOLIO_COLORS).map(([label, color]) => (
+          <span key={label} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11 }}>
+            <span style={{ width: 12, height: 12, borderRadius: 2, background: color, border: `1px solid ${color}88`, opacity: 0.9 }} />
+            <span style={{ color: "var(--text-muted)" }}>{label}</span>
+          </span>
+        ))}
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11 }}>
+          <span style={{ width: 12, height: 12, borderRadius: 2, background: "#5f6a80", border: "1px solid #5f6a8088", opacity: 0.9 }} />
+          <span style={{ color: "var(--text-muted)" }}>N/A</span>
+        </span>
       </div>
 
       {/* Search */}
@@ -254,93 +255,58 @@ export default function CapabilitiesPage() {
                         gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
                         gap: 8,
                       }}>
-                        {l2.children.map((l3) => {
-                          const isL3Open = expandedL3 === l3.bc_id;
-                          const apps = l3Apps[l3.bc_id];
-                          return (
-                            <div key={l3.bc_id}>
-                              <div
-                                onClick={() => toggleL3(l3.bc_id, l3.app_count)}
-                                style={{
-                                  padding: "8px 12px",
-                                  borderRadius: "var(--radius-sm)",
-                                  border: `1px solid ${isL3Open ? domainColor : l3.app_count > 0 ? `${domainColor}55` : "var(--border)"}`,
-                                  background: isL3Open ? `${domainColor}18` : l3.app_count > 0 ? `${domainColor}0d` : "transparent",
-                                  transition: "border-color 0.15s",
-                                  cursor: l3.app_count > 0 ? "pointer" : "default",
-                                }}
-                                title={l3.bc_description || l3.description || l3.bc_name}
-                                onMouseOver={(e) => { if (l3.app_count > 0) e.currentTarget.style.borderColor = domainColor; }}
-                                onMouseOut={(e) => { if (!isL3Open) e.currentTarget.style.borderColor = l3.app_count > 0 ? `${domainColor}55` : "var(--border)"; }}
-                              >
-                                <div style={{ fontSize: 12, color: "var(--text)", lineHeight: 1.4 }}>
-                                  {l3.bc_name}
-                                </div>
+                        {l2.children.map((l3) => (
+                          <div
+                            key={l3.bc_id}
+                            style={{
+                              padding: "8px 12px",
+                              borderRadius: "var(--radius-sm)",
+                              border: `1px solid ${l3.app_count > 0 ? `${domainColor}55` : "var(--border)"}`,
+                              background: l3.app_count > 0 ? `${domainColor}0d` : "transparent",
+                            }}
+                            title={l3.bc_description || l3.description || l3.bc_name}
+                          >
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: l3.apps?.length ? 6 : 0 }}>
+                              <div>
+                                <div style={{ fontSize: 12, color: "var(--text)", lineHeight: 1.4 }}>{l3.bc_name}</div>
                                 {l3.bc_name_cn && (
-                                  <div style={{ fontSize: 10, color: "var(--text-dim)", fontStyle: "italic" }}>
-                                    {l3.bc_name_cn}
-                                  </div>
+                                  <div style={{ fontSize: 10, color: "var(--text-dim)", fontStyle: "italic" }}>{l3.bc_name_cn}</div>
                                 )}
-                                <div style={{
-                                  display: "flex",
-                                  justifyContent: "space-between",
-                                  alignItems: "center",
-                                  marginTop: 4,
-                                }}>
-                                  <span style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: "var(--text-dim)" }}>
-                                    {l3.bc_id}
-                                  </span>
-                                  {l3.app_count > 0 && (
-                                    <span style={{
-                                      fontSize: 10,
-                                      fontWeight: 600,
-                                      color: domainColor,
-                                      background: `${domainColor}22`,
-                                      padding: "1px 6px",
-                                      borderRadius: "var(--radius-sm)",
-                                    }}>
-                                      {l3.app_count} app{l3.app_count !== 1 ? "s" : ""}
-                                    </span>
-                                  )}
-                                </div>
                               </div>
-                              {/* Inline app list */}
-                              {isL3Open && (
-                                <div style={{
-                                  marginTop: 4,
-                                  padding: "6px 10px",
-                                  borderRadius: "var(--radius-sm)",
-                                  background: "var(--bg-elevated)",
-                                  border: `1px solid ${domainColor}33`,
-                                  fontSize: 11,
-                                }}>
-                                  {!apps ? (
-                                    <span style={{ color: "var(--text-dim)" }}>Loading...</span>
-                                  ) : apps.length === 0 ? (
-                                    <span style={{ color: "var(--text-dim)" }}>No apps</span>
-                                  ) : (
-                                    <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                                      {apps.map((app) => (
-                                        <div key={app.app_id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                          <Link
-                                            href={`/apps/${app.app_id}`}
-                                            style={{ color: "var(--accent)", fontFamily: "var(--font-mono)", fontSize: 10, textDecoration: "none" }}
-                                          >
-                                            {app.app_id}
-                                          </Link>
-                                          <span style={{ color: "var(--text)", flex: 1 }}>{app.name}</span>
-                                          {app.status && (
-                                            <span style={{ fontSize: 9, color: "var(--text-dim)" }}>{app.status}</span>
-                                          )}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                              )}
+                              <span style={{ fontSize: 9, fontFamily: "var(--font-mono)", color: "var(--text-dim)", flexShrink: 0, marginLeft: 8 }}>
+                                {l3.bc_id}
+                              </span>
                             </div>
-                          );
-                        })}
+                            {/* App tags inline */}
+                            {l3.apps && l3.apps.length > 0 && (
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                                {l3.apps.map((app) => {
+                                  const pColor = PORTFOLIO_COLORS[app.portfolio || ""] || "#5f6a80";
+                                  return (
+                                    <Link
+                                      key={app.app_id}
+                                      href={`/apps/${app.app_id}`}
+                                      style={{
+                                        display: "inline-block",
+                                        padding: "1px 7px",
+                                        borderRadius: "var(--radius-sm)",
+                                        border: `1px solid ${pColor}88`,
+                                        color: pColor,
+                                        background: `${pColor}15`,
+                                        fontSize: 10,
+                                        textDecoration: "none",
+                                        whiteSpace: "nowrap",
+                                      }}
+                                      title={`${app.app_id} — ${app.name}${app.portfolio ? ` (${app.portfolio})` : ""}`}
+                                    >
+                                      {app.name}
+                                    </Link>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        ))}
                       </div>
                     </div>
                   ))}
