@@ -150,8 +150,100 @@ Minimal functional. Motion that doesn't aid comprehension is cut.
 3. **Three-font stack with Space Grotesk display.** Inter-only is safe and boring. Space Grotesk gives KPIs and page titles genuine character without going unreadable. JetBrains Mono for data is non-negotiable because app IDs need tabular alignment.
 4. **No icons in KPI cards, no illustrations anywhere.** The temptation is always to add a little rocket or chart icon. Skipping all of it forces the typography to carry the weight — and it does.
 
+## App Detail Redesign Extensions
+
+> Added 2026-04-18 as part of the App Detail page redesign (`.specify/features/app-detail-redesign/`). Extends the foundations above with detail-page-specific patterns. Patterns documented here apply to **every entity detail page** going forward (`/apps/[id]`, future `/projects/[id]`, `/capabilities/[id]`).
+
+### Motion — Detail Page Specifics
+
+Extends the general Motion section above. The general principles still apply (180ms ceiling, single easing curve, no decorative motion); these are the specific cases the App Detail page covers.
+
+- **Tab switch:** instant, no fade. Switching tabs is a navigation action, not a state transition.
+- **Lazy-load content fade-in:** 120ms, content area only. This is the *one* exception to "no entrance animations on data" — it's a UX signal that the just-fetched payload has arrived. Already-on-screen data (KPIs, the AnswerBlock, the title row) still appears, never fades.
+- **Collapse / expand:** 100ms height transition. Used by `CapabilityTree` (L1 / L2 / L3 toggle), and any future tree primitive.
+- **No bounces, no springs, no decorative motion.**
+
+### Interaction States
+
+Every fetched data section renders one of five states. Style is consistent across the product so architects can scan quickly.
+
+| State | Style |
+|-------|-------|
+| `loading` | `Loading <noun>…` in `var(--text-dim)`, 13px Geist, 12px padding-block. No skeleton bones. |
+| `empty` | Centered card, 1px dashed `var(--border-strong)`, 48×24 padding, 15px title in `var(--text)` + 13px body in `var(--text-muted)`. No CTA unless the action is meaningful (linking to the data source counts as meaningful). |
+| `error` | Red banner inline at the affected section (NOT page-wide), 1px solid `rgba(232,113,107,0.3)`, 4px radius, 13px body in `var(--error)`. |
+| `partial` | Same surface as the success state, with a footer note in `var(--text-muted)` reading `(N rows filtered)` or `(showing N of M)`. Architects need to see *that* something was filtered, not just the filtered result. |
+| `degraded` | Used when an entity is in the graph but not in CMDB. Surface renders normally; affected sections show their `empty` state with copy `Requires CMDB linkage.`. The AnswerBlock surfaces a single `Limited info — found in graph data, not in CMDB.` strip. |
+
+### Responsive
+
+NorthStar is desktop-only. ≥1024px supported. Below 1024 shows a single "Use a desktop browser" placeholder.
+
+| Breakpoint | Behavior |
+|-----------|----------|
+| 1440 | Design baseline. 4 columns of metadata fit; full tab row visible without wrap. |
+| 1280 | Panels collapse from 4 cols → 3 cols. Tab nav inter-group gap 56→32. Tab nav intra-group gap 18→12. |
+| 1024 | Panels collapse from 3 cols → 2 cols. If the 3-group tab nav still overflows, fall back to horizontal scroll on the tab strip (no wrap, no hamburger). |
+| <1024 | Single placeholder page. No mobile design exists or is planned. |
+
+### Accessibility
+
+Detail pages must pass axe-core AA in the E2E suite. The patterns below are the minimum bar.
+
+- **Focus:** outline `1px solid var(--accent)`, outline-offset `2px`, on `:focus-visible` only. Mouse focus never shows the outline.
+- **Skip link:** lives in `frontend/src/app/layout.tsx` (NOT per-page), as the first child of `<body>`, before `<nav>`. Markup: `<a className="sr-only focus:not-sr-only" href="#main-content">Skip to main content</a>`. The existing `<main className="main">` adds `id="main-content"`. Pages MUST NOT add a second `<main>`.
+- **Landmarks:** `<nav aria-label="Primary">` on the global nav. Single `<main id="main-content">` per page.
+- **Tab pattern:** every tabbed UI uses `role="tablist"` / `role="tab"` / `role="tabpanel"`, with arrow-key navigation (←/→ within a list, Home/End to jump to first/last) and **roving tabindex** (active tab `tabindex={0}`, others `tabindex={-1}`). `aria-controls` on each tab points at the panel id. `aria-selected` reflects active state.
+- **Tree pattern:** hierarchical lists use `role="tree"` with `role="treeitem"` + `aria-level={1|2|3}` + `aria-expanded` on each item. Arrow keys: ↑/↓ moves focus, → expands or descends, ← collapses or ascends. **Roving tabindex** required (focus loss inside a long tree is the failure mode that makes a11y unusable).
+- **Contrast:** WCAG AA minimum, verified by `@axe-core/playwright` in the E2E suite. Status colors (green/blue/amber/red) at full opacity on dark surfaces all clear AA at 13px+; do not use them at <13px.
+- **Collapsibles:** `aria-expanded` reflects state. `aria-controls` points at the content region's `id`.
+
+### Component Primitives
+
+The detail page is built from a small set of shared primitives. Reuse, don't reinvent.
+
+**Existing — reuse as-is:**
+
+- **`Pill`** — `frontend/src/components/Pill.tsx`. Status / metadata pill. Add semantic shorthand variants (`tone="green"|"blue"|"amber"|"red"|"gray"`) if not already supported (~10 lines). Semantics:
+  - `green` — active / live
+  - `amber` — investment / under review
+  - `red` — sunset / decommissioned
+  - `blue` — classification / tag (no judgment, supports multi-meaning like CIO/CDTO)
+  - `gray` — neutral metadata (no judgment)
+- **`Panel`** — promoted to `frontend/src/components/Panel.tsx` if used by ≥2 places (per PR 2 inventory step). 1px solid `var(--border)`, 6px radius, 20px padding, no shadow.
+
+**New — created in PR 3:**
+
+- **`AnswerBlock`** — `frontend/src/components/AnswerBlock.tsx`. Above-the-fold answer surface on every entity detail page.
+  - Layout: title row (`app_id` mono dim + `name` h1 + status pills inline + activity timestamp right-aligned) → CMDB indicator (mono 11px green `✓ cmdb-linked` or red `✗ not in cmdb`) → purpose line (body, 1-2 lines, `short_description` truncated to first sentence with fallback to `(no description)`) → KPI anchor row (3 numbers in `kpi` type, `tabular-nums`, format: `**N** integrations · **N** capabilities · **N** investments`) → 3-row metadata (Last change · Owners · Geo).
+  - Receives ALL data via props (no internal fetch). Page.tsx (RSC) fetches + passes through.
+  - Handles both `cmdb_linked === false` and `cmdb_linked === undefined` (different copy: `false` → "not in CMDB", `undefined` → "CMDB status unknown"). Non-CMDB graph-only apps degrade gracefully across owners / geo / posture, not just deployment / TCO.
+  - Use on: `/apps/[id]`, future `/projects/[id]`, `/capabilities/[id]`.
+
+- **`MetadataList`** — `frontend/src/components/MetadataList.tsx`. Dense definition list, no card chrome.
+  - 2-column grid. Label = `caption` 11px Geist 500 uppercase letter-spacing 0.7px `var(--text-dim)`. Value = `body` 14px Geist `var(--text)`.
+  - Spacing: 8px row gap, 24px column gap. No borders, no panels, no per-row chrome.
+  - Replaces the old "4-panel mosaic" pattern on Overview.
+
+**Pattern, not a component:**
+
+- **`CapabilityTree`** — 3-level collapsible (L1 / L2 / L3 leaf). Reference impl: `frontend/src/app/apps/[app_id]/tabs/CapabilitiesTab.tsx` (post-PR-2 location). All three levels share font family (`display`) and color (`var(--text)`); size descends 13/12/13. Count badges (mono, `var(--text-dim)`) right-aligned on L1 + L2. L3 leaf folds owner + CN subtitle when collapsed. Full ARIA tree + keyboard navigation per the Accessibility section above.
+
+- **`CountBadge`** — accompanies tab labels and tree node labels. Lives inline in `TabButton`, no standalone component. Mono 11px `var(--text-dim)`, 4px left margin from the label text. **Hide rule: when `count == null || count === 0`** (both `null` and `undefined`).
+
+### CJK Font Fallback
+
+Update the body font stack to include CJK fallbacks (Lenovo internal users frequently view Chinese content). Apply in `frontend/src/app/globals.css`:
+
+```css
+font-family: 'Geist', 'PingFang SC', 'Noto Sans SC', system-ui, sans-serif;
+```
+
+Display font (Space Grotesk) does not get a CJK fallback — page titles and KPIs are English-only by product convention.
+
 ## Decisions Log
 
 | Date | Decision | Rationale |
 |------|----------|-----------|
 | 2026-04-10 | Initial design system created | Orbital Ops direction for IT command center aesthetic. Dark base + amber accent + Space Grotesk display. |
+| 2026-04-18 | App Detail Redesign Extensions section added (Motion, Interaction States, Responsive, Accessibility, Component Primitives, CJK Font Fallback) | First entity detail page (App Detail) needed shared patterns documented before redesign PRs land. Patterns apply forward to all entity detail pages. |
