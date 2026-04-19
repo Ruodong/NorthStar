@@ -4405,7 +4405,7 @@ function DeploymentTab({ appId }: { appId: string }) {
   const [data, setData] = useState<DeploymentData | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [deployView, setDeployView] = useState<"table" | "map">("table");
+  const [deployView, setDeployView] = useState<"table" | "map">("map");
 
   useEffect(() => {
     let cancelled = false;
