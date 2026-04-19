@@ -19,7 +19,8 @@ interface BCNode {
   bc_id: string;
   bc_name: string;
   bc_name_cn: string | null;
-  bc_description: string | null;
+  bc_description?: string | null;
+  description?: string | null;
   level: number;
   app_count: number;
   children: BCNode[];
@@ -126,7 +127,7 @@ export default function CapabilitiesPage() {
         if (j.success) {
           setL3Apps((prev) => ({ ...prev, [bcId]: j.data.apps || [] }));
         }
-      } catch { /* ignore */ }
+      } catch (_e) { /* ignore */ }
     }
   }, [expandedL3, l3Apps]);
 
@@ -268,7 +269,7 @@ export default function CapabilitiesPage() {
                                   transition: "border-color 0.15s",
                                   cursor: l3.app_count > 0 ? "pointer" : "default",
                                 }}
-                                title={l3.bc_description || l3.bc_name}
+                                title={l3.bc_description || l3.description || l3.bc_name}
                                 onMouseOver={(e) => { if (l3.app_count > 0) e.currentTarget.style.borderColor = domainColor; }}
                                 onMouseOut={(e) => { if (!isL3Open) e.currentTarget.style.borderColor = l3.app_count > 0 ? `${domainColor}55` : "var(--border)"; }}
                               >
