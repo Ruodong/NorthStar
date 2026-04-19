@@ -138,6 +138,9 @@ async def get_application(app_id: str) -> Optional[dict]:
     # --- Postgres: TCO / financial data ---
     tco = await _fetch_tco(app_id)
 
+    # --- Postgres: business-capability count (for AnswerBlock KPI) ---
+    capability_count = await _fetch_capability_count(app_id)
+
     # --- Postgres: Confluence pages with questionnaire ---
     conf_pages = await _fetch_confluence_pages(app_id)
 
@@ -154,6 +157,7 @@ async def get_application(app_id: str) -> Optional[dict]:
         "confluence_pages": [c for c in conf_pages_neo4j if c.get("page_id")],
         "tco": tco,
         "review_pages": conf_pages,
+        "capability_count": capability_count,
     }
 
 
@@ -230,6 +234,29 @@ async def _fetch_diagram_refs_from_pg(app_id: str) -> list[dict]:
     """
     rows = await pg_client.fetch(sql, app_id)
     return [dict(r) for r in rows]
+
+
+async def _fetch_capability_count(app_id: str) -> int:
+    """Return the count of linked business capabilities for an app.
+
+    Matches the semantic of ``business_capabilities.get_app_business_capabilities
+    ()['total_count']``: joined rows excluding orphans (mappings whose
+    bcpf_master_id no longer resolves in ref_business_capability).
+
+    Used by the App Detail AnswerBlock KPI row. Always returns an int; 0 when
+    the app has no capability links or isn't CMDB-linked.
+    """
+    val = await pg_client.fetchval(
+        """
+        SELECT COUNT(*)
+        FROM northstar.ref_app_business_capability m
+        JOIN northstar.ref_business_capability bc
+          ON bc.id = m.bcpf_master_id
+        WHERE m.app_id = $1
+        """,
+        app_id,
+    )
+    return int(val or 0)
 
 
 async def _fetch_tco(app_id: str) -> Optional[dict]:

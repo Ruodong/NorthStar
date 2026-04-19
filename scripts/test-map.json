@@ -42,7 +42,7 @@
       "api": ["api-tests/test_business_capabilities.py"]
     },
     "backend/app/services/graph_query.py": {
-      "api": ["api-tests/test_ontology.py", "api-tests/test_graph.py"]
+      "api": ["api-tests/test_ontology.py", "api-tests/test_graph.py", "api-tests/test_graph_capability_count.py"]
     },
     "backend/app/services/neo4j_client.py": {
       "api": ["api-tests/test_ontology.py"]
