@@ -11,11 +11,19 @@ from __future__ import annotations
 
 import math
 import re
+import sys
+from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import pytest
 
-from backend.app.services.design_generator import (  # type: ignore[import-not-found]
+# api-tests/ is pytest's rootdir, so `backend` isn't on sys.path. Inject
+# the repo root so we can import the generator as a normal module.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from backend.app.services.design_generator import (  # noqa: E402
     _detect_legend_region,
     _strip_non_legend_cells,
     generate_as_is_xml,
