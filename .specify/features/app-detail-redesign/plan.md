@@ -317,14 +317,76 @@ To be appended to `TODOS.md`:
 
 ## 9. Approved Mockups
 
-None generated this round. Review was done against live page screenshots:
+### Locked direction: **Variant A2 — Mission Control (refined)**
+
+Generated 2026-04-18 via `/design-shotgun` (hand-crafted HTML mockups, not AI-generated — no OpenAI key available; browse tool rendered real DESIGN.md tokens at 1440×900 and screenshotted).
+
+| Asset | Path |
+|-------|------|
+| Approved PNG | `~/.gstack/projects/Ruodong-NorthStar/designs/app-detail-redesign-20260418/variant-A2.png` |
+| Source HTML (build reference) | `~/.gstack/projects/Ruodong-NorthStar/designs/app-detail-redesign-20260418/variant-A2.html` |
+| Approval record | `~/.gstack/projects/Ruodong-NorthStar/designs/app-detail-redesign-20260418/approved.json` |
+
+### Visual specification (locked by A2)
+
+PR 3 implementation MUST match these token assignments:
+
+- **App title row:**
+  - `app_id` — JetBrains Mono 13px, `var(--text-dim)`
+  - `name` — Space Grotesk 600, 32px, `var(--text)`, letter-spacing `-0.01em`
+  - CMDB indicator — Mono 11px `var(--status-green)` `✓ cmdb-linked` immediately after name (for non-CMDB apps: red `✗ not in cmdb`)
+  - Status pills — 3 max: ACTIVE (green) / CIO/CDTO (blue) / INVEST (amber). Sharp 2px radius. Mono 10px with 0.6px tracking.
+  - Right-aligned timestamp: Mono 11px `var(--text-dim)`, format `Updated Nh ago` (no sync source)
+
+- **Purpose line** (second-tier signal):
+  - Geist 500, 16px, `var(--text)` (not dim)
+  - Max 2 lines, `max-width: 980px`, 24px margin below
+
+- **KPI anchor strip** (hero):
+  - `display: grid; grid-template-columns: 1fr 1px 1fr 1px 1fr`
+  - Container: 1px `var(--border)`, 4px radius, `var(--surface)` bg, 18px vertical padding
+  - Numbers: Space Grotesk 600, **60px**, `var(--text)` (NOT amber), tabular-nums, letter-spacing `-0.02em`, line-height 1
+  - Labels: Mono 11px `var(--text-dim)` uppercase, 1.4px tracking, 6px gap below number
+  - Separators: 1px `var(--border)` vertical lines between the 3 cells
+  - Fixed content: `24 integrations · 7 capabilities · 6 investments` (real numbers come from backend)
+
+- **MetadataList** (replaces the 4-panel mosaic):
+  - `display: grid; grid-template-columns: 120px 1fr; row-gap: 8px; column-gap: 24px`
+  - No borders, no card chrome
+  - Labels: Mono 10px `var(--text-dim)` uppercase, 0.8px tracking
+  - Values: Geist 13px `var(--text)`
+  - Fields in order (Pass 7 D5 A): Identity → Ownership → Posture → Geo → TCO → System metadata
+
+- **CTA bar** (1 primary, 3 ghost):
+  - Primary: `View Impact` — amber bg (`var(--accent)`), dark text (`#1a1306`), mono 12px weight 600
+  - Ghost (3): transparent bg, 1px `var(--border-strong)` border, mono 12px weight 500, `var(--text)` text
+  - Hover: ghost → border brightens to `var(--text-muted)`; primary → bg lightens 12%
+  - Spacing: 10px gap between buttons, 26px margin below
+
+- **Tab navigation (3 groups)**:
+  - Group labels: Mono 10px `var(--text-dim)` uppercase, 1.6px tracking, 8px below → tab row
+  - Tabs: Geist 14px, inactive `var(--text-muted)` / active `var(--text)` + 2px `var(--accent)` underline
+  - Count badges: Mono 11px `var(--text-dim)`, 6px left margin (hide when 0 or undefined)
+  - Inter-group gap: 56px
+  - Intra-group tab gap: 18px
+  - Group 1 "ABOUT": Overview · Capabilities
+  - Group 2 "CONNECTIONS": Integrations · Impact Analysis · Deployment
+  - Group 3 "WORK": Investments · Diagrams · Confluence · Knowledge Base
+
+### Live-review screenshots (before state)
+
 - `/tmp/ns-design-review/01-overview.png` (Overview tab, A002856)
 - `/tmp/ns-design-review/02-capabilities.png` (Capabilities tab, A002856)
 - `/tmp/ns-design-review/03-integrations.png` (Integrations tab, A002856)
 - `/tmp/ns-design-review/04-not-found.png` (A999999 404 state)
-- `/tmp/ns-design-review/05-non-cmdb.png` (X-prefixed non-CMDB id, today shows same 404)
+- `/tmp/ns-design-review/05-non-cmdb.png` (X-prefixed non-CMDB, today shows same 404)
 
-Recommend running `/design-shotgun` for a visual mockup of the new AnswerBlock + tab-grouping layout BEFORE PR 3 implementation, so the typography / spacing / hierarchy is locked visually before code.
+### Iteration trail (for the record)
+
+- Variant A (original Mission Control) → rejected: over-used amber (KPI numbers + CTA borders + active tab all amber burned the single-accent budget)
+- Variant B (Editorial Quiet) → rejected: too airy, loses the "triage tool" feel
+- Variant C (Bloomberg Terminal) → rejected: density too aggressive, all-mono CJK rendering brittle
+- **Variant A2 (refined Mission Control) → approved**: kept A's hierarchy, fixed the 4 overuse issues
 
 ---
 
