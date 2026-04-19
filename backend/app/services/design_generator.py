@@ -179,9 +179,13 @@ def _edge_style(platform: str, planned_status: str) -> str:
     back-compat but no longer affects color.
     """
     _ = platform  # intentionally unused
+    # Soft orthogonal routing: rounded corners, auto-avoid bends when
+    # source/target align (drawio handles this natively via
+    # orthogonalEdgeStyle). arcSize tunes the corner radius.
     base = (
         "edgeStyle=orthogonalEdgeStyle;"
-        "rounded=0;orthogonalLoop=1;jettySize=auto;"
+        "rounded=1;arcSize=12;"
+        "orthogonalLoop=1;jettySize=auto;"
         "endArrow=classic;html=1;"
         "strokeColor=#d6b656;strokeWidth=2;"
         "fontSize=10;fontColor=#333;"
@@ -533,97 +537,85 @@ def _strip_non_legend_cells(
     graph_root: ET.Element,
     legend_region: Optional[tuple[float, float, float, float]],
 ) -> None:
-    """Delete every vertex AND edge cell that lives outside the Legend
-    region. Sentinels (id=0, id=1) are preserved.
+    """Preserve ALL cells whose parent chain lands inside the Legend
+    region, plus edges connecting them, plus child labels of those edges.
+    Everything else is deleted. Sentinels (id=0, id=1) are never touched.
 
-    Vertex cells whose drawio parent chain lands inside the Legend region
-    are also preserved, even if their own (x, y) coords look "outside" —
-    drawio children use coords RELATIVE to the parent, so their bboxes
-    can't be compared to the absolute region bbox directly.
+    Propagation is transitive:
+      1. Vertex whose bbox overlaps the Legend region → kept.
+      2. Any cell whose drawio parent is kept → kept (children of kept
+         groups stay with them).
+      3. Edge whose source AND target are both kept → kept.
+      4. Any cell whose parent is a kept edge → kept (edge labels like
+         the Legend's "Exist Interface" / "Changed Interface" captions).
+      5. Iterate 2–4 until stable.
 
-    If `legend_region` is None, delete all non-sentinel cells.
+    If `legend_region` is None, delete every non-sentinel cell.
     """
-    # Collect ids of vertex cells we're keeping, so edges between kept
-    # cells can be kept too.
-    kept_vertex_ids: set[str] = set()
-    to_remove: list[ET.Element] = []
-
-    # First pass: figure out which vertex ids are "inside" the Legend
-    # either geometrically OR by parent-chain membership. We have to
-    # walk parents BOTTOM-UP repeatedly until stable, because a child's
-    # parent might itself be a child of the kept region.
+    # Build index over direct children of graph_root. Each child is
+    # either <mxCell> or <object>/<UserObject> wrapping an <mxCell>.
+    id_to_wrapper: dict[str, ET.Element] = {}
     id_to_cell: dict[str, ET.Element] = {}
     parent_of: dict[str, str] = {}
-    vertex_ids_geometric: set[str] = set()
     for child in list(graph_root):
-        cell = child if child.tag == "mxCell" else child.find("mxCell")
-        if cell is None:
-            continue
-        cid = cell.get("id")
-        if not cid or cid in ("0", "1"):
-            continue
-        id_to_cell[cid] = cell
-        pid = cell.get("parent")
-        if pid:
-            parent_of[cid] = pid
-        if cell.get("vertex") == "1":
-            bb = _cell_bbox(cell)
-            if legend_region and _inside_region(bb, legend_region):
-                vertex_ids_geometric.add(cid)
-
-    def _inside_by_parent_chain(cid: str) -> bool:
-        """Walk parent chain; if any ancestor is in vertex_ids_geometric,
-        the cell is considered part of the Legend."""
-        seen: set[str] = set()
-        cur = cid
-        while cur and cur not in ("0", "1") and cur not in seen:
-            seen.add(cur)
-            if cur in vertex_ids_geometric:
-                return True
-            cur = parent_of.get(cur, "")
-        return False
-
-    for child in list(graph_root):
-        tag = child.tag
-        if tag == "mxCell":
+        if child.tag == "mxCell":
             cell = child
         else:
             cell = child.find("mxCell")
             if cell is None:
                 continue
-
         cid = cell.get("id")
-        if cid in ("0", "1"):
+        if not cid or cid in ("0", "1"):
             continue
+        id_to_wrapper[cid] = child
+        id_to_cell[cid] = cell
+        pid = cell.get("parent")
+        if pid:
+            parent_of[cid] = pid
 
+    # Strip everything when there's no Legend to protect.
+    if legend_region is None:
+        for wrapper in id_to_wrapper.values():
+            graph_root.remove(wrapper)
+        return
+
+    # Seed: vertex cells whose bbox overlaps the Legend region.
+    kept: set[str] = set()
+    for cid, cell in id_to_cell.items():
         if cell.get("vertex") == "1":
-            if legend_region and cid and _inside_by_parent_chain(cid):
-                kept_vertex_ids.add(cid)
-            else:
-                to_remove.append(child)
-        elif cell.get("edge") == "1":
-            # handled below
-            continue
-        else:
-            # non-vertex, non-edge, non-sentinel: preserve (e.g. groups)
-            pass
+            bb = _cell_bbox(cell)
+            if _inside_region(bb, legend_region):
+                kept.add(cid)
 
-    # Second pass for edges — keep only if BOTH endpoints kept
-    for child in list(graph_root):
-        tag = child.tag
-        cell = child if tag == "mxCell" else child.find("mxCell")
-        if cell is None:
-            continue
-        if cell.get("edge") != "1":
-            continue
-        src = cell.get("source")
-        tgt = cell.get("target")
-        if src in kept_vertex_ids and tgt in kept_vertex_ids:
-            continue
-        to_remove.append(child)
+    # Propagate kept via parent-chain + edge-endpoint rules until stable.
+    while True:
+        grew = False
+        # Any cell whose parent is kept is also kept (children of groups
+        # AND edge labels whose parent edge is kept).
+        for cid, pid in parent_of.items():
+            if cid not in kept and pid in kept:
+                kept.add(cid)
+                grew = True
+        # Any edge whose both endpoints are kept is also kept.
+        for cid, cell in id_to_cell.items():
+            if cid in kept:
+                continue
+            if cell.get("edge") != "1":
+                continue
+            src = cell.get("source")
+            tgt = cell.get("target")
+            # Orphan edges (no source/target) or edges touching a kept
+            # vertex on both sides qualify.
+            if src and tgt and src in kept and tgt in kept:
+                kept.add(cid)
+                grew = True
+        if not grew:
+            break
 
-    for el in to_remove:
-        graph_root.remove(el)
+    # Remove cells not in kept.
+    for cid, wrapper in id_to_wrapper.items():
+        if cid not in kept:
+            graph_root.remove(wrapper)
 
 
 # ── hub-and-spoke layout ─────────────────────────────────────────
@@ -644,44 +636,29 @@ def _dedupe_apps(apps: list[dict]) -> list[dict]:
 
 
 def _split_apps_by_role(apps: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Return ([single_major], surrounds).
+    """Return (majors, surrounds).
 
-    Hub-and-spoke has exactly ONE Major at the center. If the caller
-    supplies multiple apps with role ∈ {major, primary}, we honor the
-    FIRST and demote the rest to Surround. This matches the architect's
-    mental model of a hub-and-spoke ("middle apps is the Major, others
-    are context") — multi-primary would produce a visually ambiguous
-    output where the architect can't tell what the design is *about*.
+    Multiple Majors are supported — they stack vertically in the middle
+    column, each rendered with the full Modify color. This is how an
+    architect expresses "these two apps are both central to the change
+    I'm making." Surround apps flank the Major cluster in left/right
+    columns.
 
-    If no majors are supplied, promote the first app to Major so the hub
-    has a center.
+    If no Major/Primary is supplied, the first app is promoted to Major
+    so the hub has a center.
     """
-    primaries: list[dict] = []
+    majors: list[dict] = []
     others: list[dict] = []
     for a in apps:
         role = a.get("role") or "major"
         if role in ("major", "primary"):
-            primaries.append(a)
+            majors.append(a)
         else:
             others.append(a)
 
-    if primaries:
-        major = primaries[0]
-        demoted = primaries[1:]
-        if demoted:
-            logger.info(
-                "design_generator: %d primary/major app(s) demoted to Surround "
-                "(hub-and-spoke allows one Major at the center): %s",
-                len(demoted),
-                [a.get("app_id") for a in demoted],
-            )
-        surrounds = demoted + others
-        return [major], surrounds
-
-    # No primary — promote the first of the 'others'
-    if others:
-        return [others[0]], others[1:]
-    return [], []
+    if not majors and others:
+        majors.append(others.pop(0))
+    return majors, others
 
 
 def _compute_canvas_bounds(
@@ -722,31 +699,27 @@ def _compute_block_height(
 def _place_major_cluster(
     graph_root: ET.Element,
     majors: list[dict],
-    canvas: tuple[float, float, float, float],
+    hub_cx: float,
+    cluster_top_y: float,
     block_h: float,
 ) -> tuple[dict[str, str], tuple[float, float]]:
-    """Draw the major app boxes (single Major after splitting, but we keep
-    the loop for safety — callers always pass [major]). Central major at
-    canvas center; `block_h` matches the surround column so visual heights
-    line up.
-    """
-    cxmin, cymin, cxmax, cymax = canvas
-    ccx = (cxmin + cxmax) / 2
-    ccy = (cymin + cymax) / 2
+    """Stack Major app boxes vertically, centered horizontally on `hub_cx`.
 
+    The cluster's TOP edge is at `cluster_top_y` — this pins the Majors
+    near the top of the usable canvas (just below the Legend / Users
+    entry) rather than floating at canvas middle.
+
+    Multiple Majors stack with _MAJOR_STACK_GAP between boxes. All
+    majors share the block_h so the cluster reads as a unit.
+
+    Returns (app_id_to_cell_id, (hub_cx, cluster_center_y)) — the center
+    of the ENTIRE major stack, so surround columns can line up.
+    """
     app_to_cell_id: dict[str, str] = {}
-    n_extras = len(majors) - 1
-    total_extras_h = n_extras * (block_h + _MAJOR_STACK_GAP)
-    top_y = ccy - block_h / 2 - total_extras_h
+    x = hub_cx - _MAJOR_BOX_W / 2
 
     for i, app in enumerate(majors):
-        if i == 0:
-            x = ccx - _MAJOR_BOX_W / 2
-            y = ccy - block_h / 2
-        else:
-            x = ccx - _MAJOR_BOX_W / 2
-            y = top_y + (i - 1) * (block_h + _MAJOR_STACK_GAP)
-
+        y = cluster_top_y + i * (block_h + _MAJOR_STACK_GAP)
         cell_id = _emit_app_cell(
             graph_root, app, x, y,
             _MAJOR_BOX_W, block_h, role="major",
@@ -754,51 +727,59 @@ def _place_major_cluster(
         if app.get("app_id"):
             app_to_cell_id[app["app_id"]] = cell_id
 
-    return app_to_cell_id, (ccx, ccy)
+    cluster_h = len(majors) * block_h + max(0, len(majors) - 1) * _MAJOR_STACK_GAP
+    cluster_cy = cluster_top_y + cluster_h / 2
+    return app_to_cell_id, (hub_cx, cluster_cy)
 
 
 def _place_surround_columns(
     graph_root: ET.Element,
     surrounds: list[dict],
-    hub_center: tuple[float, float],
+    hub_cx: float,
+    cluster_top_y: float,
+    major_count: int,
     block_h: float,
 ) -> dict[str, str]:
     """Arrange Surround apps in two vertical columns flanking the Major.
 
     - Left column: even-indexed surrounds (0, 2, 4, …)
     - Right column: odd-indexed surrounds (1, 3, 5, …)
-    - Each column is vertically centered on the hub center, so with
-      balanced counts the Major sits between two equal stacks. Odd total
-      → left column has one more, still visually centered.
-    - Box height = block_h (matches the Major) so all blocks read at
-      roughly the same visual size.
-    - Column x is offset from the Major center by
-      (_MAJOR_BOX_W/2 + _COLUMN_GAP_X) so there's breathing room for
-      orthogonal edge routing.
+    - Each column's TOP is pinned to `cluster_top_y`, same as the Major
+      cluster. So the first row reads as: [LeftS0] [Major0] [RightS0].
+      When a column is LONGER than the Major stack, the extra surrounds
+      fill downward. When SHORTER, the column is vertically centered
+      within the Major stack's height so it doesn't look lopsided.
+    - Box height = block_h (matches the Major) so all blocks read the
+      same visual size.
+    - Column x offset: Major's right edge + _COLUMN_GAP_X for right
+      column; mirror for left.
     """
     if not surrounds:
         return {}
 
-    hub_cx, hub_cy = hub_center
     left: list[dict] = []
     right: list[dict] = []
     for i, app in enumerate(surrounds):
         (left if i % 2 == 0 else right).append(app)
 
-    # Column x-positions (left edge of each surround box)
     left_x = hub_cx - _MAJOR_BOX_W / 2 - _COLUMN_GAP_X - _SURROUND_BOX_W
     right_x = hub_cx + _MAJOR_BOX_W / 2 + _COLUMN_GAP_X
 
-    def _stack_y(n_in_col: int, idx: int) -> float:
-        """Center an n-tall stack on hub_cy; return top-y of idx in that stack."""
-        col_h = n_in_col * block_h + (n_in_col - 1) * _ROW_GAP_Y
-        start_y = hub_cy - col_h / 2
-        return start_y + idx * (block_h + _ROW_GAP_Y)
+    def _col_top_y(n_in_col: int) -> float:
+        """Pin column top at cluster_top_y. If column is shorter than the
+        Major stack, center it within the Major stack's height so the
+        mid-row row's middle aligns with the Major cluster middle."""
+        col_h = n_in_col * block_h + max(0, n_in_col - 1) * _ROW_GAP_Y
+        major_h = major_count * block_h + max(0, major_count - 1) * _MAJOR_STACK_GAP
+        if col_h < major_h:
+            return cluster_top_y + (major_h - col_h) / 2
+        return cluster_top_y
 
     app_to_cell_id: dict[str, str] = {}
     for col_apps, col_x in ((left, left_x), (right, right_x)):
+        top_y = _col_top_y(len(col_apps))
         for idx, app in enumerate(col_apps):
-            y = _stack_y(len(col_apps), idx)
+            y = top_y + idx * (block_h + _ROW_GAP_Y)
             cell_id = _emit_app_cell(
                 graph_root, app, col_x, y,
                 _SURROUND_BOX_W, block_h, role="surround",
@@ -962,14 +943,32 @@ def generate_as_is_xml(
         return xml_bytes.decode("utf-8")
 
     # Step 3: hub-and-spoke layout
-    canvas = _compute_canvas_bounds(legend_region)
     majors, surrounds = _split_apps_by_role(apps)
-
+    canvas = _compute_canvas_bounds(legend_region)
     canvas_h = canvas[3] - canvas[1]
     block_h = _compute_block_height(len(surrounds), canvas_h)
 
-    major_map, hub_center = _place_major_cluster(graph_root, majors, canvas, block_h)
-    surround_map = _place_surround_columns(graph_root, surrounds, hub_center, block_h)
+    # Horizontal: Major cluster midline = Legend box midline (the
+    # architect's mental model is "Major sits under the Legend's
+    # example column, centered"). Falls back to canvas center when the
+    # template has no Legend.
+    if legend_region is not None:
+        hub_cx = (legend_region[0] + legend_region[2]) / 2
+    else:
+        hub_cx = (canvas[0] + canvas[2]) / 2
+
+    # Vertical: pin the Major cluster's TOP near the top of the usable
+    # canvas so it connects to the Users-entry bracket just below the
+    # Legend. Surround columns start at the same top.
+    cluster_top_y = canvas[1]
+
+    major_map, _hub_center = _place_major_cluster(
+        graph_root, majors, hub_cx, cluster_top_y, block_h,
+    )
+    surround_map = _place_surround_columns(
+        graph_root, surrounds, hub_cx, cluster_top_y,
+        major_count=len(majors), block_h=block_h,
+    )
 
     app_to_cell_id: dict[str, str] = {}
     app_to_cell_id.update(major_map)

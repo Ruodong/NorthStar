@@ -512,11 +512,12 @@ def test_promotes_surround_when_no_major():
     assert len(new_vertex) == 2
 
 
-def test_multiple_primaries_demoted_to_single_major():
-    """Hub-and-spoke has ONE Major. Extra primaries go to Surround."""
+def test_multiple_primaries_all_render_as_majors():
+    """All apps tagged primary/major render as Majors (yellow), stacked
+    vertically in the middle column. Related/surround apps go to the
+    side columns."""
     tpl = _ea_style_template()
     apps = [
-        # omit planned_status so role-based default (Modify/yellow) kicks in
         {"app_id": "M1", "name": "First primary", "role": "primary"},
         {"app_id": "M2", "name": "Second primary", "role": "primary"},
         {"app_id": "R1", "name": "Related app", "role": "related"},
@@ -528,16 +529,31 @@ def test_multiple_primaries_demoted_to_single_major():
         if c.get("vertex") == "1" and c.get("id") not in ("L1", "L2", "L3", "L4")
     ]
 
-    def _style(app_id: str) -> str:
+    def _cell(app_id: str) -> ET.Element:
         for c in new_cells:
             if f"ID: {app_id}" in (c.get("value") or ""):
-                return c.get("style") or ""
+                return c
         raise AssertionError(f"no cell for {app_id}")
 
-    # Only M1 gets Major (yellow) styling; M2 and R1 become Surrounds (blue)
-    assert "fillColor=#fff2cc" in _style("M1"), "first primary should be Major"
-    assert "fillColor=#dae8fc" in _style("M2"), "second primary should be demoted to Surround"
-    assert "fillColor=#dae8fc" in _style("R1"), "related stays Surround"
+    def _style(c: ET.Element) -> str:
+        return c.get("style") or ""
+
+    def _center(c: ET.Element) -> tuple[float, float]:
+        g = c.find("mxGeometry")
+        x = float(g.get("x")); y = float(g.get("y"))
+        w = float(g.get("width")); h = float(g.get("height"))
+        return (x + w / 2, y + h / 2)
+
+    # Both primaries are Major (yellow), the related is Surround (blue)
+    assert "fillColor=#fff2cc" in _style(_cell("M1")), "M1 should be Major/yellow"
+    assert "fillColor=#fff2cc" in _style(_cell("M2")), "M2 should also be Major/yellow"
+    assert "fillColor=#dae8fc" in _style(_cell("R1")), "R1 should be Surround/blue"
+
+    # Both Majors stack vertically on the same x (center column)
+    cx_m1, cy_m1 = _center(_cell("M1"))
+    cx_m2, cy_m2 = _center(_cell("M2"))
+    assert abs(cx_m1 - cx_m2) < 0.1, "both majors share the x-midline"
+    assert cy_m1 != cy_m2, "majors stack vertically (different y)"
 
 
 def test_edge_style_is_modify_yellow_orthogonal():
@@ -561,6 +577,97 @@ def test_edge_style_is_modify_yellow_orthogonal():
         # No platform-specific colors bleed through
         assert "#6ba6e8" not in style  # APIH blue
         assert "#5fc58a" not in style  # KPaaS green
+
+
+def test_edge_has_rounded_orthogonal_style():
+    """Soft folds: orthogonal routing with rounded=1 + arcSize."""
+    tpl = _ea_style_template()
+    apps = [_app("M1", "Major", role="major"), _app("S1", "S", role="surround")]
+    iface = {"from_app": "M1", "to_app": "S1", "platform": "",
+             "interface_name": "x", "planned_status": "change"}
+    out = generate_as_is_xml(tpl, apps, [iface])
+    edge = next(c for c in _parse_graph_root(out).iter("mxCell") if c.get("edge") == "1")
+    style = edge.get("style") or ""
+    assert "edgeStyle=orthogonalEdgeStyle" in style
+    assert "rounded=1" in style, "edge should use rounded corners"
+
+
+def test_legend_edge_labels_preserved():
+    """Edges between Legend vertices AND their child labels (e.g. 'Exist
+    Interface' text positioned on an edge) must survive the strip."""
+    # Build a template where the Legend contains:
+    #   two vertex boxes (ex1, ex2) connected by an edge
+    #   the edge has a child label cell ("Interface Kind")
+    #   a body cell below
+    cells = (
+        _mk_cell("ex1", x=100, y=60, w=100, h=40, value="Example A")
+        + _mk_cell("ex2", x=400, y=60, w=100, h=40, value="Example B")
+        + _mk_cell("marker", x=20, y=10, w=80, h=20, value="Legend")
+        # Edge between ex1 and ex2
+        + '<mxCell id="e1" style="endArrow=classic;" edge="1" parent="1" source="ex1" target="ex2">'
+          '<mxGeometry relative="1" as="geometry"/>'
+          '</mxCell>'
+        # Label on the edge (child of e1)
+        + '<mxCell id="elabel" value="Interface Kind" vertex="1" parent="e1" connectable="0">'
+          '<mxGeometry x="0.5" relative="1" as="geometry"/>'
+          '</mxCell>'
+        # A body cell well below the Legend
+        + _mk_cell("body1", x=200, y=500, w=200, h=80, value="Body")
+    )
+    tpl = _wrap_template(cells)
+    out = generate_as_is_xml(tpl, [_app("M1", "Hub", role="major")], [])
+    graph_root = _parse_graph_root(out)
+    ids = {c.get("id") for c in graph_root.iter("mxCell")}
+    # Legend cells kept
+    for cid in ("ex1", "ex2", "marker", "e1", "elabel"):
+        assert cid in ids, f"Legend cell {cid} must be preserved"
+    # Body cell cleared
+    assert "body1" not in ids
+
+
+def test_major_aligned_with_legend_horizontal_center():
+    """Major cluster's x-midline lines up with the Legend box's x-midline."""
+    # Build a Legend off-center (far-right of the canvas)
+    cells = (
+        _mk_cell("L1", x=500, y=40, w=140, h=60, value="L1")
+        + _mk_cell("L2", x=660, y=40, w=140, h=60, value="L2")
+        + _mk_cell("L3", x=820, y=40, w=140, h=60, value="L3")
+        + _mk_cell("body", x=100, y=400, w=200, h=80, value="Body")
+    )
+    tpl = _wrap_template(cells)
+    out = generate_as_is_xml(tpl, [_app("M1", "Hub", role="major")], [])
+    graph_root = _parse_graph_root(out)
+    major = next(
+        c for c in graph_root.iter("mxCell")
+        if c.get("vertex") == "1" and "ID: M1" in (c.get("value") or "")
+    )
+    g = major.find("mxGeometry")
+    major_cx = float(g.get("x")) + float(g.get("width")) / 2
+    # Legend region spans (L1.xmin = 500-20pad = 480) to (L3.xmax = 960+20 = 980),
+    # so Legend x-center = 730. Major x-center should match (±1 for float).
+    legend_xmin = 480  # 500 - _LEGEND_PADDING (20)
+    legend_xmax = 980  # 960 + 20
+    legend_xcenter = (legend_xmin + legend_xmax) / 2
+    assert abs(major_cx - legend_xcenter) < 1.5, (
+        f"Major x-center {major_cx} should match Legend x-center {legend_xcenter}"
+    )
+
+
+def test_major_top_pinned_near_canvas_top():
+    """Major's top edge should sit near canvas.ymin (= Legend.ymax + gap),
+    not float at canvas center."""
+    tpl = _ea_style_template()
+    out = generate_as_is_xml(tpl, [_app("M1", "Hub", role="major")], [])
+    graph_root = _parse_graph_root(out)
+    major = next(
+        c for c in graph_root.iter("mxCell")
+        if c.get("vertex") == "1" and "ID: M1" in (c.get("value") or "")
+    )
+    g = major.find("mxGeometry")
+    major_y = float(g.get("y"))
+    # EA fixture's Legend ends at y=150 (130 + 20 padding). canvas_top =
+    # 150 + 80 (_CANVAS_TOP_GAP) = 230. Major top should be right there.
+    assert 225 <= major_y <= 240, f"Major top {major_y} should be near 230"
 
 
 def test_edge_new_is_green_dashed():
