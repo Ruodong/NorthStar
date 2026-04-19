@@ -79,6 +79,33 @@ export default function CapabilitiesPage() {
     })();
   }, []);
 
+  const toggleL1 = useCallback((id: string) => {
+    setExpandedL1((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleL3 = useCallback(async (bcId: string, appCount: number) => {
+    if (appCount === 0) return;
+    setExpandedL3((prev) => prev === bcId ? null : bcId);
+    setL3Apps((prev) => {
+      if (prev[bcId]) return prev;
+      // Fetch in background
+      fetch(`/api/business-capabilities/${encodeURIComponent(bcId)}/apps`)
+        .then((r) => r.json())
+        .then((j) => {
+          if (j.success) {
+            setL3Apps((p) => ({ ...p, [bcId]: j.data.apps || [] }));
+          }
+        })
+        .catch(() => {});
+      return prev;
+    });
+  }, []);
+
   if (loading) return <div style={{ padding: 40, color: "var(--text-dim)" }}>Loading...</div>;
   if (err) return <div style={{ padding: 40, color: "var(--error)" }}>Error: {err}</div>;
   if (!data) return null;
@@ -103,33 +130,6 @@ export default function CapabilitiesPage() {
       return { ...l1, children: filteredChildren, _colorIdx: l1i };
     })
     .filter((l1) => l1.children.length > 0);
-
-  const toggleL1 = (id: string) => {
-    setExpandedL1((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
-  const toggleL3 = useCallback(async (bcId: string, appCount: number) => {
-    if (appCount === 0) return;
-    if (expandedL3 === bcId) {
-      setExpandedL3(null);
-      return;
-    }
-    setExpandedL3(bcId);
-    if (!l3Apps[bcId]) {
-      try {
-        const r = await fetch(`/api/business-capabilities/${encodeURIComponent(bcId)}/apps`);
-        const j = await r.json();
-        if (j.success) {
-          setL3Apps((prev) => ({ ...prev, [bcId]: j.data.apps || [] }));
-        }
-      } catch (_e) { /* ignore */ }
-    }
-  }, [expandedL3, l3Apps]);
 
   return (
     <div>
