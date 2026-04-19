@@ -14,6 +14,8 @@ import { EmptyState } from "../_shared/EmptyState";
 import { Kpi } from "../_shared/Kpi";
 import { CmdbField } from "../_shared/CmdbField";
 import { CITY_LABELS } from "../_shared/cities";
+import { MetadataList, type MetadataRow } from "@/components/MetadataList";
+import { Pill } from "@/components/Pill";
 
 export function OverviewTab({
   app,
@@ -49,96 +51,132 @@ export function OverviewTab({
     })();
   }, [app.app_id]);
 
+  // ---- MetadataList rows, per DESIGN.md §App Detail Redesign →
+  //      MetadataList primitive. No card chrome. Flat 2-col grid, rows
+  //      with null/empty values are dropped by MetadataList automatically.
+  const basicRows: MetadataRow[] = [
+    { label: "App ID", value: app.app_id, mono: true },
+    { label: "Full Name", value: app.app_full_name },
+    {
+      label: "Status",
+      value: app.status ? <Pill label={app.status} tone={pillToneForStatus(app.status)} /> : null,
+    },
+    { label: "Service Area", value: app.u_service_area },
+    { label: "Classification", value: app.app_classification?.replace(/^"|"$/g, "") },
+    { label: "Solution Type", value: app.app_solution_type },
+    { label: "Ownership", value: app.app_ownership },
+    { label: "Portfolio", value: app.portfolio_mgt },
+    { label: "Description", value: app.short_description, wide: true },
+  ];
+
+  const ownersRows: MetadataRow[] = [
+    { label: "Owned By", value: resolvedName(app.owned_by, app.owned_by_name), mono: true },
+    { label: "IT Owner", value: resolvedName(app.app_it_owner, app.app_it_owner_name), mono: true },
+    { label: "DT Owner", value: resolvedName(app.app_dt_owner, app.app_dt_owner_name), mono: true },
+    { label: "Ops Owner", value: resolvedName(app.app_operation_owner, app.app_operation_owner_name), mono: true },
+    { label: "Owner Tower", value: app.app_owner_tower },
+    { label: "Owner Domain", value: app.app_owner_domain },
+    { label: "Ops Tower", value: app.app_operation_owner_tower },
+    { label: "Ops Domain", value: app.app_operation_owner_domain },
+  ];
+
+  const deploymentRows: MetadataRow[] = [
+    { label: "Data Residency", value: app.data_residency_geo },
+    { label: "Country", value: app.data_residency_country },
+    { label: "Data Center", value: app.data_center },
+    { label: "Patch Level", value: app.patch_level },
+    { label: "Support", value: app.support },
+    {
+      label: "Decommissioned",
+      value: app.decommissioned_at
+        ? new Date(app.decommissioned_at).toISOString().slice(0, 10)
+        : null,
+      mono: true,
+    },
+  ];
+
+  const tcoRows: MetadataRow[] = tco
+    ? [
+        { label: "Classification", value: tco.application_classification },
+        { label: "Stamp (K$)", value: formatMoney(tco.stamp_k), mono: true },
+        { label: "Budget (K$)", value: formatMoney(tco.budget_k), mono: true },
+        { label: "Actual (K$)", value: formatMoney(tco.actual_k), mono: true },
+        { label: "Alloc Stamp (K$)", value: formatMoney(tco.allocation_stamp_k), mono: true },
+        { label: "Alloc Actual (K$)", value: formatMoney(tco.allocation_actual_k), mono: true },
+      ]
+    : [];
+
+  const hasDeploymentData =
+    deploymentRows.some((r) => r.value != null && r.value !== "") ||
+    (deploySummary && (deploySummary.servers + deploySummary.containers + deploySummary.databases) > 0);
+
   return (
-    <div style={{ display: "grid", gap: 16, gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))" }}>
-      <Panel title="Basic">
-        <CmdbField label="App ID" value={app.app_id} mono />
-        <CmdbField label="Name" value={app.name} />
-        <CmdbField label="Full Name" value={app.app_full_name} />
-        <CmdbField label="Status" value={app.status} pill />
-        <CmdbField label="Description" value={app.short_description} wide />
-        <CmdbField label="Service Area" value={app.u_service_area} />
-        <CmdbField label="Classification" value={app.app_classification?.replace(/^"|"$/g, "")} />
-        <CmdbField label="Solution Type" value={app.app_solution_type} />
-        <CmdbField label="Ownership" value={app.app_ownership} />
-        <CmdbField label="Portfolio" value={app.portfolio_mgt} />
-      </Panel>
+    <div style={{ display: "grid", gap: 36, maxWidth: 980 }}>
+      {/* Basic — flat MetadataList, no card chrome */}
+      <section aria-labelledby="overview-basic">
+        <SectionHeader id="overview-basic">Basic</SectionHeader>
+        <MetadataList rows={basicRows} />
+      </section>
 
-      <Panel title="Owners">
-        <CmdbField label="Owned By" value={app.owned_by} resolvedName={app.owned_by_name} mono />
-        <CmdbField label="IT Owner" value={app.app_it_owner} resolvedName={app.app_it_owner_name} mono />
-        <CmdbField label="DT Owner" value={app.app_dt_owner} resolvedName={app.app_dt_owner_name} mono />
-        <CmdbField label="Ops Owner" value={app.app_operation_owner} resolvedName={app.app_operation_owner_name} mono />
-        <CmdbField label="Owner Tower" value={app.app_owner_tower} />
-        <CmdbField label="Owner Domain" value={app.app_owner_domain} />
-        <CmdbField label="Ops Tower" value={app.app_operation_owner_tower} />
-        <CmdbField label="Ops Domain" value={app.app_operation_owner_domain} />
-      </Panel>
+      {/* Owners */}
+      <section aria-labelledby="overview-owners">
+        <SectionHeader id="overview-owners">Owners</SectionHeader>
+        <MetadataList rows={ownersRows} />
+      </section>
 
-      <Panel title="Deployment">
-        {!(app.data_residency_geo || app.data_residency_country || app.data_center || app.patch_level || app.support || app.decommissioned_at) &&
-          !(deploySummary && (deploySummary.servers + deploySummary.containers + deploySummary.databases) > 0) && (
+      {/* Deployment */}
+      <section aria-labelledby="overview-deployment">
+        <SectionHeader id="overview-deployment">Deployment</SectionHeader>
+        {!hasDeploymentData ? (
           <div style={{ color: "var(--text-muted)", fontSize: 13, lineHeight: 1.6 }}>
             No deployment data recorded for this application.
           </div>
-        )}
-        <CmdbField label="Data Residency" value={app.data_residency_geo} />
-        <CmdbField label="Country" value={app.data_residency_country} />
-        <CmdbField label="Data Center" value={app.data_center} />
-        <CmdbField label="Patch Level" value={app.patch_level} />
-        <CmdbField label="Support" value={app.support} />
-        {app.decommissioned_at && <CmdbField label="Decommissioned" value={new Date(app.decommissioned_at).toISOString().slice(0, 10)} />}
-        {deploySummary && (deploySummary.servers + deploySummary.containers + deploySummary.databases) > 0 && (
-          <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
-            <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--text-dim)", marginBottom: 8 }}>
-              Infrastructure (InfraOps)
-            </div>
-            <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-              {deploySummary.servers > 0 && (
-                <div style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                  <span style={{ color: "var(--accent)", fontWeight: 700, fontSize: 16 }}>{deploySummary.servers}</span>
-                  <span style={{ color: "var(--text-dim)", marginLeft: 4 }}>servers</span>
+        ) : (
+          <>
+            <MetadataList rows={deploymentRows} />
+            {deploySummary && (deploySummary.servers + deploySummary.containers + deploySummary.databases) > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: 0.5, color: "var(--text-dim)", marginBottom: 8, fontFamily: "var(--font-mono)" }}>
+                  Infrastructure (InfraOps)
                 </div>
-              )}
-              {deploySummary.containers > 0 && (
-                <div style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                  <span style={{ color: "var(--accent)", fontWeight: 700, fontSize: 16 }}>{deploySummary.containers}</span>
-                  <span style={{ color: "var(--text-dim)", marginLeft: 4 }}>containers</span>
+                <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+                  {deploySummary.servers > 0 && (
+                    <DeployStat label="servers" value={deploySummary.servers} />
+                  )}
+                  {deploySummary.containers > 0 && (
+                    <DeployStat label="containers" value={deploySummary.containers} />
+                  )}
+                  {deploySummary.databases > 0 && (
+                    <DeployStat label="databases" value={deploySummary.databases} />
+                  )}
                 </div>
-              )}
-              {deploySummary.databases > 0 && (
-                <div style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                  <span style={{ color: "var(--accent)", fontWeight: 700, fontSize: 16 }}>{deploySummary.databases}</span>
-                  <span style={{ color: "var(--text-dim)", marginLeft: 4 }}>databases</span>
-                </div>
-              )}
-            </div>
-            {deploySummary.top_cities.length > 0 && (
-              <div style={{ marginTop: 8, fontSize: 11, color: "var(--text-muted)" }}>
-                {deploySummary.top_cities.map((c, i) => (
-                  <span key={c.city}>
-                    {i > 0 && " · "}
-                    {CITY_LABELS[c.city] || c.city} ({c.total})
-                  </span>
-                ))}
+                {deploySummary.top_cities.length > 0 && (
+                  <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-muted)" }}>
+                    {deploySummary.top_cities.map((c, i) => (
+                      <span key={c.city}>
+                        {i > 0 && " · "}
+                        {CITY_LABELS[c.city] || c.city} ({c.total})
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
-          </div>
+          </>
         )}
-      </Panel>
+      </section>
 
+      {/* TCO — only when data present */}
       {tco && (
-        <Panel title="TCO / Financials">
-          <CmdbField label="Classification" value={tco.application_classification} />
-          <CmdbField label="Stamp (K$)" value={tco.stamp_k != null ? tco.stamp_k.toFixed(1) : null} mono />
-          <CmdbField label="Budget (K$)" value={tco.budget_k != null ? tco.budget_k.toFixed(1) : null} mono />
-          <CmdbField label="Actual (K$)" value={tco.actual_k != null ? tco.actual_k.toFixed(1) : null} mono />
-          <CmdbField label="Alloc Stamp (K$)" value={tco.allocation_stamp_k != null ? tco.allocation_stamp_k.toFixed(1) : null} mono />
-          <CmdbField label="Alloc Actual (K$)" value={tco.allocation_actual_k != null ? tco.allocation_actual_k.toFixed(1) : null} mono />
-        </Panel>
+        <section aria-labelledby="overview-tco">
+          <SectionHeader id="overview-tco">TCO / Financials</SectionHeader>
+          <MetadataList rows={tcoRows} />
+        </section>
       )}
 
-      <Panel title="Fiscal year presence">
+      {/* Fiscal year presence */}
+      <section aria-labelledby="overview-fiscal">
+        <SectionHeader id="overview-fiscal">Fiscal year presence</SectionHeader>
         {fyList.length === 0 ? (
           <EmptyState>No project investments recorded.</EmptyState>
         ) : (
@@ -161,14 +199,13 @@ export function OverviewTab({
             ))}
           </div>
         )}
-      </Panel>
+      </section>
 
-      <div style={{ gridColumn: "1 / -1" }}>
-        <LifeCycleChangePanel appId={app.app_id} />
-      </div>
+      <LifeCycleChangePanel appId={app.app_id} />
 
       {confluencePages.length > 0 && (
-        <Panel title="Confluence pages">
+        <section aria-labelledby="overview-confluence">
+          <SectionHeader id="overview-confluence">Confluence pages</SectionHeader>
           <ul style={{ margin: 0, padding: 0, listStyle: "none", fontSize: 13 }}>
             {confluencePages.map((p) => (
               <li key={p.page_id} style={{ marginBottom: 6 }}>
@@ -183,12 +220,70 @@ export function OverviewTab({
               </li>
             ))}
           </ul>
-        </Panel>
+        </section>
       )}
 
       <EaStandardsPanel appId={app.app_id} />
     </div>
   );
+}
+
+// ---- Helpers (Overview-local, not worth promoting to _shared) ----
+
+function SectionHeader({ id, children }: { id: string; children: React.ReactNode }) {
+  return (
+    <h2
+      id={id}
+      style={{
+        fontFamily: "var(--font-mono)",
+        fontSize: 11,
+        fontWeight: 600,
+        letterSpacing: 1.6,
+        textTransform: "uppercase",
+        color: "var(--text-muted)",
+        margin: "0 0 12px 0",
+        paddingBottom: 6,
+        borderBottom: "1px solid var(--border)",
+      }}
+    >
+      {children}
+    </h2>
+  );
+}
+
+function DeployStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div style={{ fontFamily: "var(--font-mono)" }}>
+      <span style={{ color: "var(--accent)", fontWeight: 700, fontSize: 18 }}>{value}</span>
+      <span style={{ color: "var(--text-dim)", marginLeft: 6, fontSize: 12 }}>{label}</span>
+    </div>
+  );
+}
+
+function resolvedName(code: string | null | undefined, name: string | null | undefined) {
+  if (!code && !name) return null;
+  if (name && code) {
+    return (
+      <>
+        {name}{" "}
+        <span style={{ color: "var(--text-dim)", fontSize: 11 }}>{code}</span>
+      </>
+    );
+  }
+  return name || code || null;
+}
+
+function formatMoney(v: number | null | undefined): string | null {
+  return v != null ? v.toFixed(1) : null;
+}
+
+function pillToneForStatus(s: string | null | undefined): "green" | "amber" | "red" | "blue" | "gray" {
+  const x = (s || "").toLowerCase();
+  if (x === "active" || x === "keep") return "green";
+  if (x === "change" || x === "new") return "amber";
+  if (x === "sunset" || x === "decommissioned") return "red";
+  if (x === "3rd party") return "blue";
+  return "gray";
 }
 
 /* ── EA Standards & Guidelines panel (contextual) ────────────── */

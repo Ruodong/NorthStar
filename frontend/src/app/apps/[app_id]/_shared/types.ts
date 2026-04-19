@@ -134,6 +134,12 @@ export interface AppDetailResponse {
   confluence_pages: ConfluencePageRef[];
   tco?: TcoData | null;
   review_pages?: ReviewPage[];
+  /**
+   * Count of linked business capabilities — added in PR 3 §3a backend.
+   * Optional in the type so older backends still typecheck, but the
+   * current backend always returns it (graph_query.py::get_application).
+   */
+  capability_count?: number;
 }
 
 // ---- Impact (reverse dependency) types ----

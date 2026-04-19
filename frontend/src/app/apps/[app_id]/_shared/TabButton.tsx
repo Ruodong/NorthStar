@@ -1,44 +1,68 @@
 import React from "react";
 import type { Tab } from "./types";
 
-// App-Detail-shared TabButton. Currently consumed only by AppDetailClient
-// (the orchestrator). Lives in _shared/ from the start because every
-// future entity detail page (/projects/[id], /capabilities/[id]) will use
-// the same component pattern.
+// App-Detail-shared TabButton. Consumed by AppDetailClient's tablist.
+// The parent manages keyboard navigation + roving tabindex; this button
+// renders the visual affordance + ARIA properties (role="tab",
+// aria-selected, aria-controls, id).
 //
-// CountBadge hide rule (per DESIGN.md PR 1 Component Primitives):
+// CountBadge hide rule (DESIGN.md § Component Primitives):
 //   count == null || count === 0  →  hide
 
-export function TabButton({
-  current,
-  value,
-  onClick,
-  count,
-  children,
-}: {
-  current: Tab;
+export interface TabButtonProps {
   value: Tab;
-  onClick: (t: Tab) => void;
+  selected: boolean;
+  onActivate: (t: Tab) => void;
   count?: number;
   children: React.ReactNode;
-}) {
-  const active = current === value;
+  /** 0 when selected (only one tabstop per tablist), -1 otherwise. */
+  tabIndex: 0 | -1;
+  /** Stable id of the associated tabpanel; set via aria-controls. */
+  panelId: string;
+  /** Stable id of this tab; set via id (for aria-labelledby on panels). */
+  tabId: string;
+  /** Parent supplies a single onKeyDown for arrow-key navigation. */
+  onKeyDown: (e: React.KeyboardEvent<HTMLButtonElement>) => void;
+  /** Parent assigns a ref so it can focus the right tab on arrow-key. */
+  buttonRef?: (el: HTMLButtonElement | null) => void;
+}
+
+export function TabButton({
+  value,
+  selected,
+  onActivate,
+  count,
+  children,
+  tabIndex,
+  panelId,
+  tabId,
+  onKeyDown,
+  buttonRef,
+}: TabButtonProps) {
   return (
     <button
       type="button"
-      onClick={() => onClick(value)}
+      role="tab"
+      id={tabId}
+      aria-selected={selected}
+      aria-controls={panelId}
+      tabIndex={tabIndex}
+      ref={buttonRef}
+      onClick={() => onActivate(value)}
+      onKeyDown={onKeyDown}
       style={{
         background: "transparent",
         border: "none",
-        color: active ? "var(--text)" : "var(--text-muted)",
+        color: selected ? "var(--text)" : "var(--text-muted)",
         padding: "10px 16px",
         fontSize: 13,
-        fontWeight: active ? 600 : 400,
+        fontWeight: selected ? 600 : 400,
         cursor: "pointer",
-        borderBottom: active
+        borderBottom: selected
           ? "2px solid var(--accent)"
           : "2px solid transparent",
         marginBottom: -1,
+        fontFamily: "var(--font-body)",
       }}
     >
       {children}

@@ -17,7 +17,18 @@ type Tone =
   | "error"
   | "info"
   | "neutral"
-  | "muted";
+  | "muted"
+  // Semantic shorthand (DESIGN.md Component Primitives — App Detail Redesign Extensions):
+  //   green  → active / live           (alias of success)
+  //   amber  → investment / review     (alias of accent)
+  //   red    → sunset / decommissioned (alias of error)
+  //   blue   → classification / tag    (alias of info)
+  //   gray   → neutral metadata        (alias of muted)
+  | "green"
+  | "amber"
+  | "red"
+  | "blue"
+  | "gray";
 
 const TONE_COLORS: Record<Tone, string> = {
   accent: "var(--accent)",
@@ -27,6 +38,12 @@ const TONE_COLORS: Record<Tone, string> = {
   info: "var(--info)",
   neutral: "var(--text-muted)",
   muted: "var(--text-dim)",
+  // Shorthand aliases — same tokens, semantic names architects can scan.
+  green: "var(--success)",
+  amber: "var(--accent)",
+  red: "var(--error)",
+  blue: "var(--info)",
+  gray: "var(--text-muted)",
 };
 
 export interface PillProps {

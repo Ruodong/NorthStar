@@ -30,6 +30,11 @@ export default function RootLayout({
         />
       </head>
       <body>
+        {/* Skip link — WCAG 2.4.1. Lives here, NOT per-page, per DESIGN.md
+            App Detail Redesign Extensions. First tab stop for keyboard users. */}
+        <a className="skip-link" href="#main-content">
+          Skip to main content
+        </a>
         <header className="nav">
           <div className="nav-inner">
             <Link href="/" className="brand">
@@ -41,7 +46,9 @@ export default function RootLayout({
             <NavLinks />
           </div>
         </header>
-        <main className="main">{children}</main>
+        <main id="main-content" className="main">
+          {children}
+        </main>
         <CommandPalette />
       </body>
     </html>

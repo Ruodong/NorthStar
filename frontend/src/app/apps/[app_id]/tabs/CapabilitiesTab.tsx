@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { useTabFetch } from "../_shared/useTabFetch";
 
 // -----------------------------------------------------------------------------
 // Types — mirror backend AppBusinessCapabilitiesResponse (api.md §6)
@@ -68,59 +69,191 @@ function ownerLine(leaf: BusinessCapabilityLeaf): string | null {
 }
 
 // -----------------------------------------------------------------------------
+// Tree model (flat sequence of visible nodes — one source of truth for
+// keyboard navigation).
+// -----------------------------------------------------------------------------
+type TreeNodeKind = "l1" | "l2" | "l3";
+
+interface TreeNode {
+  key: string;
+  kind: TreeNodeKind;
+  level: 1 | 2 | 3;
+  /** Key of the parent node. Root items have null parent. */
+  parentKey: string | null;
+  /** True if this node has children (L1 / L2) — arrow keys expand/collapse. */
+  expandable: boolean;
+  label: string;
+  /** L1/L2 count OR L3 bc_id prefix. */
+  meta: string | null;
+  /** L3 leaf details, only set for L3. */
+  leaf?: BusinessCapabilityLeaf;
+}
+
+function buildFlatTree(
+  data: AppBusinessCapabilitiesResponse,
+  collapsed: Set<string>,
+): TreeNode[] {
+  const out: TreeNode[] = [];
+  for (const l1 of data.l1_groups) {
+    const l1Key = `l1:${l1.l1_domain}`;
+    const l1Closed = collapsed.has(l1Key);
+    out.push({
+      key: l1Key,
+      kind: "l1",
+      level: 1,
+      parentKey: null,
+      expandable: true,
+      label: l1.l1_domain || "(no domain)",
+      meta: String(l1.count),
+    });
+    if (l1Closed) continue;
+
+    for (const l2 of l1.l2_groups) {
+      const l2Key = `l2:${l1.l1_domain}||${l2.l2_subdomain}`;
+      const l2Closed = collapsed.has(l2Key);
+      out.push({
+        key: l2Key,
+        kind: "l2",
+        level: 2,
+        parentKey: l1Key,
+        expandable: true,
+        label: l2.l2_subdomain || "(no subdomain)",
+        meta: String(l2.leaves.length),
+      });
+      if (l2Closed) continue;
+
+      l2.leaves.forEach((leaf, idx) => {
+        const l3Key = `l3:${l1.l1_domain}||${l2.l2_subdomain}||${leaf.bc_id}||${idx}`;
+        const hasDetails = !!(leaf.bc_name_cn || ownerLine(leaf));
+        out.push({
+          key: l3Key,
+          kind: "l3",
+          level: 3,
+          parentKey: l2Key,
+          expandable: hasDetails,
+          label: leaf.bc_name,
+          meta: leaf.bc_id,
+          leaf,
+        });
+      });
+    }
+  }
+  return out;
+}
+
+// -----------------------------------------------------------------------------
 // Component
 // -----------------------------------------------------------------------------
 export function CapabilitiesTab({ appId }: { appId: string }) {
-  const [data, setData] = useState<AppBusinessCapabilitiesResponse | null>(
-    null,
+  const { data, loading, err } = useTabFetch<AppBusinessCapabilitiesResponse>(
+    appId ? `/api/apps/${encodeURIComponent(appId)}/business-capabilities` : null,
+    [appId],
   );
-  const [loading, setLoading] = useState(true);
-  const [err, setErr] = useState<string | null>(null);
-  // Collapse state for L1 / L2 / L3 rows. Keys are prefixed by level so
-  // the same name at different levels never collides.
-  //   L1: "l1:{l1_domain}"
-  //   L2: "l2:{l1_domain}||{l2_subdomain}"
-  //   L3: "l3:{l1_domain}||{l2_subdomain}||{bc_id}||{idx}"
-  // Default (absent from set) = expanded.
+
+  // Collapse state per key. Default (absent) = expanded for L1/L2, collapsed for L3.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const toggle = (key: string) => {
+  // Single focus point for roving tabindex. First L1 by default.
+  const [focusedKey, setFocusedKey] = useState<string | null>(null);
+
+  const itemRefs = useRef(new Map<string, HTMLDivElement | null>());
+
+  const toggle = useCallback((key: string) => {
     setCollapsed((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
       return next;
     });
-  };
+  }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      setErr(null);
-      try {
-        const res = await fetch(
-          `/api/apps/${encodeURIComponent(appId)}/business-capabilities`,
-          { cache: "no-store" },
-        );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const j = await res.json();
-        if (cancelled) return;
-        if (!j.success) {
-          setErr(j.error || "Failed to load capabilities");
-          return;
-        }
-        setData(j.data as AppBusinessCapabilitiesResponse);
-      } catch (e) {
-        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
-      } finally {
-        if (!cancelled) setLoading(false);
+  const flatTree = useMemo(
+    () => (data ? buildFlatTree(data, collapsed) : []),
+    [data, collapsed],
+  );
+
+  // Normalize focus: if focusedKey dropped out of the visible set (user
+  // collapsed an ancestor while focus was on a descendant), move focus
+  // up to the closest visible ancestor. This is plan §14 F8's "focus
+  // loss in tree" failure mode — covered here.
+  const effectiveFocusKey: string | null = useMemo(() => {
+    if (flatTree.length === 0) return null;
+    if (!focusedKey) return flatTree[0].key;
+    if (flatTree.some((n) => n.key === focusedKey)) return focusedKey;
+    // Walk up parents until we find a visible one, else pick first item.
+    const parentChain = (k: string) => k.split("||").slice(0, -1).join("||");
+    let probe = focusedKey;
+    // L3 collapsed by parent → fall back to parent L2, then L1.
+    if (probe.startsWith("l3:")) {
+      probe = `l2:${parentChain(probe.slice(3))}`;
+    }
+    if (probe.startsWith("l2:") && !flatTree.some((n) => n.key === probe)) {
+      probe = `l1:${probe.slice(3).split("||")[0]}`;
+    }
+    if (flatTree.some((n) => n.key === probe)) return probe;
+    return flatTree[0].key;
+  }, [focusedKey, flatTree]);
+
+  const focusKey = useCallback((key: string) => {
+    setFocusedKey(key);
+    queueMicrotask(() => {
+      itemRefs.current.get(key)?.focus();
+    });
+  }, []);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>, node: TreeNode) => {
+      const idx = flatTree.findIndex((n) => n.key === node.key);
+      if (idx === -1) return;
+      switch (e.key) {
+        case "ArrowDown":
+          e.preventDefault();
+          if (idx < flatTree.length - 1) focusKey(flatTree[idx + 1].key);
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          if (idx > 0) focusKey(flatTree[idx - 1].key);
+          break;
+        case "ArrowRight":
+          e.preventDefault();
+          if (node.expandable && collapsed.has(node.key)) {
+            toggle(node.key); // expand
+          } else if (idx < flatTree.length - 1) {
+            // Move to first child — which, since flatTree is DFS-ordered
+            // and the node is already expanded, is flatTree[idx+1] when
+            // it's a descendant of the current node.
+            const maybeChild = flatTree[idx + 1];
+            if (maybeChild.level > node.level) focusKey(maybeChild.key);
+          }
+          break;
+        case "ArrowLeft":
+          e.preventDefault();
+          if (node.expandable && !collapsed.has(node.key)) {
+            toggle(node.key); // collapse
+          } else if (node.parentKey) {
+            focusKey(node.parentKey);
+          }
+          break;
+        case "Home":
+          e.preventDefault();
+          focusKey(flatTree[0].key);
+          break;
+        case "End":
+          e.preventDefault();
+          focusKey(flatTree[flatTree.length - 1].key);
+          break;
+        case "Enter":
+        case " ":
+          if (node.expandable) {
+            e.preventDefault();
+            toggle(node.key);
+          }
+          break;
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [appId]);
+    },
+    [flatTree, collapsed, toggle, focusKey],
+  );
 
+  // ---- Render states ----
   if (loading) {
     return (
       <div style={{ color: "var(--text-dim)", fontSize: 13, padding: 12 }}>
@@ -128,15 +261,15 @@ export function CapabilitiesTab({ appId }: { appId: string }) {
       </div>
     );
   }
-
   if (err) {
     return (
       <div
+        role="alert"
         style={{
-          color: "#ff6b6b",
+          color: "var(--error)",
           fontSize: 13,
           padding: 12,
-          border: "1px solid rgba(255,107,107,0.3)",
+          border: "1px solid color-mix(in srgb, var(--error) 30%, transparent)",
           borderRadius: 4,
         }}
       >
@@ -144,7 +277,6 @@ export function CapabilitiesTab({ appId }: { appId: string }) {
       </div>
     );
   }
-
   if (!data) return null;
 
   const isEmpty = data.total_count === 0;
@@ -174,225 +306,30 @@ export function CapabilitiesTab({ appId }: { appId: string }) {
           </div>
         </div>
       ) : (
-        data.l1_groups.map((l1) => {
-          const l1Key = `l1:${l1.l1_domain}`;
-          const l1Closed = collapsed.has(l1Key);
-          return (
-            <div
-              key={l1.l1_domain}
-              style={{
-                border: "1px solid var(--border-strong)",
-                borderRadius: 4,
-                overflow: "hidden",
+        <div
+          role="tree"
+          aria-label="Business capabilities"
+          style={{
+            border: "1px solid var(--border-strong)",
+            borderRadius: 4,
+            overflow: "hidden",
+          }}
+        >
+          {flatTree.map((node) => (
+            <TreeItem
+              key={node.key}
+              node={node}
+              expanded={node.expandable ? !collapsed.has(node.key) : undefined}
+              focused={node.key === effectiveFocusKey}
+              onToggle={() => toggle(node.key)}
+              onKeyDown={(e) => handleKeyDown(e, node)}
+              onFocus={() => setFocusedKey(node.key)}
+              elRef={(el) => {
+                itemRefs.current.set(node.key, el);
               }}
-            >
-              {/* L1 Domain header — collapsible */}
-              <button
-                type="button"
-                onClick={() => toggle(l1Key)}
-                style={{
-                  width: "100%",
-                  textAlign: "left",
-                  background: "var(--panel-raised, rgba(255,255,255,0.02))",
-                  border: "none",
-                  borderBottom: l1Closed
-                    ? "none"
-                    : "1px solid var(--border-strong)",
-                  color: "var(--text)",
-                  padding: "10px 14px",
-                  fontFamily: "var(--font-display)",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  cursor: "pointer",
-                }}
-              >
-                <span>
-                  <span
-                    style={{
-                      display: "inline-block",
-                      width: 10,
-                      color: "var(--text-dim)",
-                      marginRight: 6,
-                    }}
-                  >
-                    {l1Closed ? "▸" : "▾"}
-                  </span>
-                  {l1.l1_domain || "(no domain)"}
-                </span>
-                <span
-                  style={{
-                    fontFamily: "var(--font-mono)",
-                    fontSize: 11,
-                    color: "var(--text-dim)",
-                  }}
-                >
-                  {l1.count}
-                </span>
-              </button>
-
-              {!l1Closed &&
-                l1.l2_groups.map((l2, l2Idx) => {
-                  const l2Key = `l2:${l1.l1_domain}||${l2.l2_subdomain}`;
-                  const l2Closed = collapsed.has(l2Key);
-                  return (
-                    <div key={l2.l2_subdomain}>
-                      {/* L2 Subdomain header — collapsible, same family as L1 */}
-                      <button
-                        type="button"
-                        onClick={() => toggle(l2Key)}
-                        style={{
-                          width: "100%",
-                          textAlign: "left",
-                          background: "transparent",
-                          border: "none",
-                          borderTop:
-                            l2Idx === 0
-                              ? "none"
-                              : "1px solid rgba(255,255,255,0.04)",
-                          color: "var(--text)",
-                          padding: "8px 14px 8px 30px",
-                          fontFamily: "var(--font-display)",
-                          fontSize: 12,
-                          fontWeight: 500,
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          cursor: "pointer",
-                        }}
-                      >
-                        <span>
-                          <span
-                            style={{
-                              display: "inline-block",
-                              width: 10,
-                              color: "var(--text-dim)",
-                              marginRight: 6,
-                            }}
-                          >
-                            {l2Closed ? "▸" : "▾"}
-                          </span>
-                          {l2.l2_subdomain || "(no subdomain)"}
-                        </span>
-                        <span
-                          style={{
-                            fontFamily: "var(--font-mono)",
-                            fontSize: 11,
-                            color: "var(--text-dim)",
-                          }}
-                        >
-                          {l2.leaves.length}
-                        </span>
-                      </button>
-
-                      {!l2Closed &&
-                        l2.leaves.map((leaf, idx) => {
-                          const l3Key = `l3:${l1.l1_domain}||${l2.l2_subdomain}||${leaf.bc_id}||${idx}`;
-                          const l3Closed = collapsed.has(l3Key);
-                          const oline = ownerLine(leaf);
-                          const hasDetails = !!(leaf.bc_name_cn || oline);
-                          return (
-                            <div
-                              key={leaf.bc_id + idx}
-                              style={{
-                                borderTop:
-                                  "1px solid rgba(255,255,255,0.04)",
-                              }}
-                            >
-                              {/* L3 leaf header — clickable if there are details to fold */}
-                              <button
-                                type="button"
-                                onClick={() => hasDetails && toggle(l3Key)}
-                                title={leaf.bc_description || undefined}
-                                disabled={!hasDetails}
-                                style={{
-                                  width: "100%",
-                                  textAlign: "left",
-                                  background: "transparent",
-                                  border: "none",
-                                  color: "var(--text)",
-                                  padding: "8px 14px 8px 46px",
-                                  display: "flex",
-                                  gap: 10,
-                                  alignItems: "baseline",
-                                  cursor: hasDetails ? "pointer" : "default",
-                                  fontFamily: "var(--font-body)",
-                                }}
-                              >
-                                <span
-                                  style={{
-                                    display: "inline-block",
-                                    width: 10,
-                                    color: "var(--text-dim)",
-                                    flexShrink: 0,
-                                  }}
-                                >
-                                  {hasDetails ? (l3Closed ? "▸" : "▾") : ""}
-                                </span>
-                                <code
-                                  style={{
-                                    fontFamily: "var(--font-mono)",
-                                    fontSize: 11,
-                                    color: "var(--text-dim)",
-                                    minWidth: 68,
-                                    flexShrink: 0,
-                                  }}
-                                >
-                                  {leaf.bc_id}
-                                </code>
-                                <span
-                                  style={{
-                                    fontFamily: "var(--font-display)",
-                                    fontSize: 13,
-                                    color: "var(--text)",
-                                  }}
-                                >
-                                  {leaf.bc_name}
-                                </span>
-                              </button>
-                              {hasDetails && !l3Closed && (
-                                <div
-                                  style={{
-                                    padding: "0 14px 10px 134px",
-                                  }}
-                                >
-                                  {leaf.bc_name_cn && (
-                                    <div
-                                      style={{
-                                        fontStyle: "italic",
-                                        fontSize: 11,
-                                        color: "var(--text-muted)",
-                                        marginTop: 2,
-                                      }}
-                                    >
-                                      {leaf.bc_name_cn}
-                                    </div>
-                                  )}
-                                  {oline && (
-                                    <div
-                                      style={{
-                                        fontSize: 11,
-                                        color: "var(--text-dim)",
-                                        marginTop: 4,
-                                        fontFamily: "var(--font-mono)",
-                                      }}
-                                    >
-                                      {oline}
-                                    </div>
-                                  )}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                    </div>
-                  );
-                })}
-            </div>
-          );
-        })
+            />
+          ))}
+        </div>
       )}
 
       {/* Footer meta */}
@@ -413,7 +350,7 @@ export function CapabilitiesTab({ appId }: { appId: string }) {
           <span>
             Taxonomy {data.taxonomy_versions.map((v) => `v${v}`).join("/")}
             {mixedVersions && (
-              <span style={{ color: "#f6a623", marginLeft: 6 }}>
+              <span style={{ color: "var(--accent)", marginLeft: 6 }}>
                 ⚠ mixed versions
               </span>
             )}
@@ -426,6 +363,160 @@ export function CapabilitiesTab({ appId }: { appId: string }) {
           </span>
         )}
       </div>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// TreeItem — single row in the tree. Renders L1 / L2 / L3 variants from
+// the same component so the keyboard handler only has to deal with one
+// shape.
+// -----------------------------------------------------------------------------
+interface TreeItemProps {
+  node: TreeNode;
+  /** true=expanded, false=collapsed, undefined=leaf with no children. */
+  expanded: boolean | undefined;
+  focused: boolean;
+  onToggle: () => void;
+  onKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => void;
+  onFocus: () => void;
+  elRef: (el: HTMLDivElement | null) => void;
+}
+
+function TreeItem({
+  node,
+  expanded,
+  focused,
+  onToggle,
+  onKeyDown,
+  onFocus,
+  elRef,
+}: TreeItemProps) {
+  const indent = node.level === 1 ? 14 : node.level === 2 ? 30 : 46;
+  const fontSize = node.level === 3 ? 13 : node.level === 2 ? 12 : 13;
+  const fontWeight = node.level === 1 ? 600 : node.level === 2 ? 500 : 400;
+  const background =
+    node.level === 1
+      ? "color-mix(in srgb, var(--surface) 40%, transparent)"
+      : "transparent";
+  const borderTop =
+    node.level === 1
+      ? "1px solid var(--border-strong)"
+      : "1px solid color-mix(in srgb, white 4%, transparent)";
+
+  const caret = expanded === undefined ? "" : expanded ? "▾" : "▸";
+
+  const oline = node.leaf ? ownerLine(node.leaf) : null;
+  const l3DetailsVisible =
+    node.kind === "l3" && expanded === true && node.leaf;
+
+  return (
+    <div
+      role="treeitem"
+      aria-level={node.level}
+      aria-expanded={expanded}
+      aria-posinset={undefined /* skipped — flatTree keeps order stable */}
+      tabIndex={focused ? 0 : -1}
+      ref={elRef}
+      onClick={() => (node.expandable ? onToggle() : undefined)}
+      onKeyDown={onKeyDown}
+      onFocus={onFocus}
+      style={{
+        display: "block",
+        cursor: node.expandable ? "pointer" : "default",
+        borderTop: node.kind === "l1" ? borderTop : undefined,
+        background,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          gap: 10,
+          alignItems: "baseline",
+          padding: `${node.level === 3 ? "8" : node.level === 2 ? "8" : "10"}px 14px ${node.level === 3 ? "8" : node.level === 2 ? "8" : "10"}px ${indent}px`,
+          color: "var(--text)",
+          fontFamily: node.level === 3 ? "var(--font-body)" : "var(--font-display)",
+          fontSize,
+          fontWeight,
+        }}
+      >
+        <span
+          aria-hidden="true"
+          style={{
+            display: "inline-block",
+            width: 10,
+            color: "var(--text-dim)",
+            flexShrink: 0,
+          }}
+        >
+          {caret}
+        </span>
+        {node.kind === "l3" && (
+          <code
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+              color: "var(--text-dim)",
+              minWidth: 68,
+              flexShrink: 0,
+            }}
+          >
+            {node.meta}
+          </code>
+        )}
+        <span style={{ flex: 1 }}>{node.label}</span>
+        {node.kind !== "l3" && node.meta && (
+          <span
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+              color: "var(--text-dim)",
+            }}
+          >
+            {node.meta}
+          </span>
+        )}
+      </div>
+      {l3DetailsVisible && node.leaf && (
+        <div style={{ padding: "0 14px 10px 134px" }}>
+          {node.leaf.bc_name_cn && (
+            <div
+              style={{
+                fontStyle: "italic",
+                fontSize: 11,
+                color: "var(--text-muted)",
+                marginTop: 2,
+              }}
+            >
+              {node.leaf.bc_name_cn}
+            </div>
+          )}
+          {oline && (
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--text-dim)",
+                marginTop: 4,
+                fontFamily: "var(--font-mono)",
+              }}
+            >
+              {oline}
+            </div>
+          )}
+          {node.leaf.bc_description && (
+            <div
+              style={{
+                fontSize: 12,
+                color: "var(--text-muted)",
+                marginTop: 4,
+                lineHeight: 1.5,
+              }}
+            >
+              {node.leaf.bc_description}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Panel } from "../_shared/Panel";
 import { EmptyState } from "../_shared/EmptyState";
+import { useTabFetch } from "../_shared/useTabFetch";
 
 interface KBPage {
   page_id: string;
@@ -28,49 +29,30 @@ interface KBResponse {
 }
 
 export function KnowledgeBaseTab({ appId }: { appId: string }) {
-  const [data, setData] = useState<KBResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
+  // Preserves the 15-second timeout the hand-rolled version had (the
+  // Confluence CQL backend occasionally stalls). useTabFetch converts
+  // AbortError to silent no-op (matches previous behavior of treating
+  // abort as "stale request, ignore").
+  const { data, loading, err: rawErr } = useTabFetch<KBResponse>(
+    appId ? `/api/graph/nodes/${encodeURIComponent(appId)}/knowledge` : null,
+    [appId],
+    { timeoutMs: 15_000 },
+  );
+  // Translate generic err string to the original user-friendly timeout copy.
+  const err =
+    rawErr === "AbortError"
+      ? "Confluence search timed out — the server may be unreachable."
+      : rawErr;
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState("");
   const [showAll, setShowAll] = useState(false);
 
+  // Auto-expand top 2 spaces on first load (preserves previous behavior).
   useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
-    (async () => {
-      setLoading(true);
-      setErr(null);
-      try {
-        const res = await fetch(
-          `/api/graph/nodes/${encodeURIComponent(appId)}/knowledge`,
-          { cache: "no-store", signal: controller.signal }
-        );
-        if (!res.ok) throw new Error(`${res.status}`);
-        const j = await res.json();
-        if (!j.success) throw new Error(j.error || "API error");
-        const kb = j.data as KBResponse;
-        if (!cancelled) {
-          setData(kb);
-          // Auto-expand top 2 spaces
-          const topKeys = kb.spaces.slice(0, 2).map((s) => s.space_key);
-          setExpanded(new Set(topKeys));
-        }
-      } catch (e) {
-        if (!cancelled) {
-          const msg = e instanceof DOMException && e.name === "AbortError"
-            ? "Confluence search timed out — the server may be unreachable."
-            : e instanceof Error ? e.message : String(e);
-          setErr(msg);
-        }
-      } finally {
-        clearTimeout(timeout);
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; controller.abort(); };
-  }, [appId]);
+    if (!data) return;
+    const topKeys = data.spaces.slice(0, 2).map((s) => s.space_key);
+    setExpanded(new Set(topKeys));
+  }, [data]);
 
   if (loading) {
     return (

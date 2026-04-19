@@ -84,10 +84,50 @@ a { color: inherit; text-decoration: none; }
 /* focus-visible — accessibility ring for keyboard navigation */
 a:focus-visible,
 button:focus-visible,
-[role="button"]:focus-visible {
+[role="button"]:focus-visible,
+[role="tab"]:focus-visible,
+[role="treeitem"]:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
+}
+
+/* Skip link — WCAG 2.4.1. Visually hidden until focused, then pinned
+   top-left at the very start of the reading order. Lives in layout.tsx. */
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 8px;
+  z-index: 1000;
+  padding: 8px 14px;
+  background: var(--accent);
+  color: var(--accent-on, #1a1306);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  transition: top 80ms linear;
+}
+.skip-link:focus,
+.skip-link:focus-visible {
+  top: 8px;
+  outline: 2px solid #000;
+  outline-offset: 2px;
+}
+
+/* screen-reader-only utility — matches Tailwind convention so the markup
+   reads naturally even though we don't run Tailwind. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* ===== nav ===== */
