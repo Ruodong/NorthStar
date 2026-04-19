@@ -15,7 +15,7 @@
   /* text */
   --text: #e7eaf0;
   --text-muted: #9aa4b8;
-  --text-dim: #5f6a80;
+  --text-dim: #7d8aa3;   /* PR 4: bumped from #5f6a80 (3.66:1) → 5.73:1 for WCAG AA on --bg */
 
   /* accent — the NorthStar */
   --accent: #f6a623;

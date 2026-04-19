@@ -65,7 +65,7 @@ Single accent, earned use. Dark-first (this app is almost always viewed in dim r
 |-------|-----|-----|
 | `--text` | `#e7eaf0` | Primary text. Not pure white — reduces eye strain. |
 | `--text-muted` | `#9aa4b8` | Secondary, captions, meta. |
-| `--text-dim` | `#5f6a80` | Disabled, placeholders, tertiary data. |
+| `--text-dim` | `#7d8aa3` | Disabled, placeholders, tertiary data. *(PR 4 bumped from `#5f6a80` to pass axe-core WCAG AA at 11-14px body text — 3.66:1 → 5.73:1 on `--bg`.)* |
 
 ### Accent (THE color — the NorthStar)
 | Token | Hex | Use |
@@ -247,3 +247,4 @@ Display font (Space Grotesk) does not get a CJK fallback — page titles and KPI
 |------|----------|-----------|
 | 2026-04-10 | Initial design system created | Orbital Ops direction for IT command center aesthetic. Dark base + amber accent + Space Grotesk display. |
 | 2026-04-18 | App Detail Redesign Extensions section added (Motion, Interaction States, Responsive, Accessibility, Component Primitives, CJK Font Fallback) | First entity detail page (App Detail) needed shared patterns documented before redesign PRs land. Patterns apply forward to all entity detail pages. |
+| 2026-04-19 | `--text-dim` bumped `#5f6a80` → `#7d8aa3` | axe-core WCAG AA scan in PR 4 caught 3.66:1 contrast on `--text-dim` vs `--bg`, below the 4.5:1 AA minimum for body text at 11-14px. New token = 5.73:1, still visibly dimmer than `--text-muted` (7.95:1). |
