@@ -24,6 +24,12 @@ import {
   Tab,
   STATUS_COLORS,
 } from "./_shared/types";
+import { Panel } from "./_shared/Panel";
+import { EmptyState } from "./_shared/EmptyState";
+import { Kpi } from "./_shared/Kpi";
+import { StatusPill } from "./_shared/StatusPill";
+import { CmdbField } from "./_shared/CmdbField";
+import { TabButton } from "./_shared/TabButton";
 
 export default function AppDetailPage() {
   const params = useParams();
@@ -564,128 +570,9 @@ function BOBar({ count, max }: { count: number; max: number }) {
 
 // -----------------------------------------------------------------------------
 // Subcomponents
+// (TabButton, StatusPill, CmdbField, Panel, EmptyState moved to _shared/
+//  in PR 2 step 2c — see REFACTOR-INVENTORY.md)
 // -----------------------------------------------------------------------------
-function TabButton({
-  current,
-  value,
-  onClick,
-  count,
-  children,
-}: {
-  current: Tab;
-  value: Tab;
-  onClick: (t: Tab) => void;
-  count?: number;
-  children: React.ReactNode;
-}) {
-  const active = current === value;
-  return (
-    <button
-      type="button"
-      onClick={() => onClick(value)}
-      style={{
-        background: "transparent",
-        border: "none",
-        color: active ? "var(--text)" : "var(--text-muted)",
-        padding: "10px 16px",
-        fontSize: 13,
-        fontWeight: active ? 600 : 400,
-        cursor: "pointer",
-        borderBottom: active ? "2px solid var(--accent)" : "2px solid transparent",
-        marginBottom: -1,
-      }}
-    >
-      {children}
-      {count != null && count > 0 && (
-        <span
-          style={{
-            marginLeft: 6,
-            fontSize: 11,
-            color: "var(--text-dim)",
-            fontFamily: "var(--font-mono)",
-          }}
-        >
-          {count}
-        </span>
-      )}
-    </button>
-  );
-}
-
-function StatusPill({ status }: { status: string }) {
-  const color = STATUS_COLORS[status] || "var(--text-dim)";
-  return <Pill label={status || "Unknown"} tone={color} />;
-}
-
-function CmdbField({
-  label, value, resolvedName, mono, pill, wide,
-}: {
-  label: string;
-  value?: string | null;
-  resolvedName?: string | null;
-  mono?: boolean;
-  pill?: boolean;
-  wide?: boolean;
-}) {
-  if (!value && !pill) return null;
-  return (
-    <div style={{
-      display: wide ? "block" : "flex",
-      gap: 12,
-      fontSize: 13,
-      lineHeight: 1.8,
-    }}>
-      <dt style={{ color: "var(--text-dim)", minWidth: 130, flexShrink: 0 }}>{label}</dt>
-      <dd style={{
-        margin: 0,
-        fontFamily: mono ? "var(--font-mono)" : undefined,
-        fontSize: mono ? 12 : undefined,
-        ...(wide ? { marginTop: 2, color: "var(--text-muted)", fontSize: 12, lineHeight: 1.6 } : {}),
-      }}>
-        {pill ? <StatusPill status={value || "Unknown"} /> : (
-          <>
-            {resolvedName ? (
-              <>{resolvedName} <span style={{ color: "var(--text-dim)", fontSize: 11 }}>{value}</span></>
-            ) : (
-              Array.isArray(value) ? (value as string[]).join(", ") : value
-            )}
-          </>
-        )}
-      </dd>
-    </div>
-  );
-}
-
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div
-      style={{
-        background: "var(--surface)",
-        border: "1px solid var(--border)",
-        borderRadius: "var(--radius-lg)",
-        padding: 20,
-      }}
-    >
-      <div
-        style={{
-          fontSize: 11,
-          fontWeight: 600,
-          textTransform: "uppercase",
-          letterSpacing: 0.6,
-          color: "var(--text-muted)",
-          marginBottom: 12,
-        }}
-      >
-        {title}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function EmptyState({ children }: { children: React.ReactNode }) {
-  return <div style={{ color: "var(--text-dim)", fontSize: 12, padding: "8px 0" }}>{children}</div>;
-}
 
 // ---------------- Overview ----------------
 function OverviewTab({
@@ -946,33 +833,7 @@ function EaStandardsPanel({ appId }: { appId: string }) {
   );
 }
 
-function Kpi({ label, value }: { label: string; value: number | string }) {
-  return (
-    <div>
-      <div
-        style={{
-          fontSize: 10,
-          textTransform: "uppercase",
-          letterSpacing: 0.6,
-          color: "var(--text-dim)",
-          marginBottom: 2,
-        }}
-      >
-        {label}
-      </div>
-      <div
-        style={{
-          fontFamily: "var(--font-display)",
-          fontSize: 28,
-          fontWeight: 600,
-          fontVariantNumeric: "tabular-nums",
-        }}
-      >
-        {value}
-      </div>
-    </div>
-  );
-}
+// (Kpi moved to _shared/Kpi.tsx in PR 2 step 2c)
 
 // ---------------- Life Cycle Change ----------------
 // Spec: .specify/features/lifecycle-change/spec.md
