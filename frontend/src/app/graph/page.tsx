@@ -106,7 +106,7 @@ export default function GraphPage() {
       if (!j.success) throw new Error(j.error || "Not found");
 
       const data = j.data;
-      if (!data.root) throw new Error(`Application ${appId} not found in graph`);
+      if (!data.root) throw new Error(`${appId} has no integration data in the graph yet. It may exist in CMDB but has not appeared in any architecture diagram.`);
 
       const elements: ElementDefinition[] = [];
 
