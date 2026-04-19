@@ -382,6 +382,49 @@ def test_major_default_color_is_modify():
     assert "strokeColor=#d6b656" in style
 
 
+def test_major_with_explicit_keep_still_renders_modify():
+    """Wizard defaults planned_status='keep' for every app-in-scope. A
+    Major (the focus of the design) must NOT inherit the keep-blue from
+    that default — it should stay yellow/Modify. Only explicit new or
+    sunset overrides the Major's color."""
+    tpl = _ea_style_template()
+    app = {"app_id": "M1", "name": "X", "role": "major", "planned_status": "keep"}
+    out = generate_as_is_xml(tpl, [app], [])
+    graph_root = _parse_graph_root(out)
+    major = next(
+        c for c in graph_root.iter("mxCell")
+        if c.get("vertex") == "1" and c.get("id") not in ("L1", "L2", "L3", "L4")
+    )
+    style = major.get("style") or ""
+    assert "fillColor=#fff2cc" in style, (
+        f"Major with planned_status='keep' must still be Modify/yellow, got {style}"
+    )
+
+
+def test_major_explicit_new_is_green():
+    tpl = _ea_style_template()
+    app = {"app_id": "M1", "name": "X", "role": "major", "planned_status": "new"}
+    out = generate_as_is_xml(tpl, [app], [])
+    graph_root = _parse_graph_root(out)
+    major = next(
+        c for c in graph_root.iter("mxCell")
+        if c.get("vertex") == "1" and c.get("id") not in ("L1", "L2", "L3", "L4")
+    )
+    assert "fillColor=#d5e8d4" in (major.get("style") or "")
+
+
+def test_major_explicit_sunset_is_red():
+    tpl = _ea_style_template()
+    app = {"app_id": "M1", "name": "X", "role": "major", "planned_status": "sunset"}
+    out = generate_as_is_xml(tpl, [app], [])
+    graph_root = _parse_graph_root(out)
+    major = next(
+        c for c in graph_root.iter("mxCell")
+        if c.get("vertex") == "1" and c.get("id") not in ("L1", "L2", "L3", "L4")
+    )
+    assert "fillColor=#f8cecc" in (major.get("style") or "")
+
+
 def test_surround_uses_existing_color_not_grey_dashed():
     """Surround always renders in Existing (keep/blue), never dashed grey."""
     tpl = _ea_style_template()

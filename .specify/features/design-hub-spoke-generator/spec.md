@@ -43,11 +43,12 @@ Box color policy (tied to the architect's Legend):
 
 | Role → explicit status         | Resulting fill              |
 |--------------------------------|-----------------------------|
-| Major (default)                | Modify — yellow `#fff2cc`   |
-| Major + status=keep            | Existing — blue `#dae8fc`   |
+| Major + unset/`keep`/`change`  | Modify — yellow `#fff2cc`   |
 | Major + status=new             | New — green `#d5e8d4`       |
 | Major + status=sunset          | Sunset — pink `#f8cecc`     |
 | Surround (any status)          | Existing — blue `#dae8fc`   |
+
+Major's default is Modify/yellow; `keep` is treated as Modify too, because the wizard hardcodes `planned_status="keep"` as the form default for every app the architect adds to scope. If we honored that literal `keep`, every Major would render blue and nothing would be visually distinct from Surround. Only explicit `new` or `sunset` deviate. Architects who want a truly blue Major can drop the app to the Surround role instead.
 
 Surround boxes use the Existing color regardless of the underlying app's lifecycle — they are stable context for the major change, not subjects of change themselves.
 

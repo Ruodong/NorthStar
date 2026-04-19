@@ -130,17 +130,27 @@ def _app_style(planned_status: str, role: str = "major") -> str:
     """Style string for a freshly drawn app box.
 
     Color mapping per the architect's Legend:
-      - Major default → "Modify" (change / yellow). Explicit planned_status
-        (keep / new / sunset) still wins if set.
+      - Major → "Modify" (change / yellow) by default. Only explicit
+        `new` or `sunset` deviate. `keep` is treated as Modify because
+        the wizard's default for `planned_status` is `keep` for every
+        app-in-scope, and a hub-and-spoke design IS a change on the
+        Major — so `keep` on a Major is almost always just the wizard
+        default leaking through, not an architect intent. Architects
+        who truly want a blue Major can mark the app as Surround.
       - Surround → "Existing" (keep / blue), regardless of status. The
-        Major's own planned_status is what the design is *about*; surround
-        boxes are stable context, so we don't flag them with new/sunset/
-        change colors even if the underlying app happens to be those.
+        Major's own planned_status is what the design is *about*;
+        surround boxes are stable context, so we don't flag them with
+        new/sunset/change colors even if the underlying app carries
+        those.
     """
     if role == "surround":
         base = _APP_STATUS_STYLE["keep"]
     else:
-        base = _APP_STATUS_STYLE.get(planned_status or "change", _APP_STATUS_STYLE["change"])
+        # Only 'new' / 'sunset' override the Major's default Modify color.
+        if planned_status in ("new", "sunset"):
+            base = _APP_STATUS_STYLE[planned_status]
+        else:
+            base = _APP_STATUS_STYLE["change"]
     return (
         "rounded=1;whiteSpace=wrap;html=1;"
         + base
