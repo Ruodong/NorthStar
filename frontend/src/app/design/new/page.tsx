@@ -1283,7 +1283,10 @@ function InterfacesStep({
               }}>
                 {app.app_id}
               </code>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>{app.name}</span>
+              <span style={{
+                fontSize: 14, fontWeight: 600,
+                fontFamily: "var(--font-display)",
+              }}>{app.name}</span>
               <div style={{ flex: 1 }} />
               <span style={{ fontSize: 10, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
                 {cov.total_catalog} catalog · {providerTotal} provider · {consumerTotal} consumer
@@ -1361,15 +1364,14 @@ function IfaceRoleTree({
   return (
     <div>
       <div style={{
-        padding: "6px 14px",
+        padding: "8px 14px",
         borderLeft: `3px solid ${color}`,
-        fontSize: 10,
-        fontFamily: "var(--font-mono)",
+        fontSize: 13,
+        fontFamily: "var(--font-display)",
         color,
-        letterSpacing: 0.6,
         fontWeight: 600,
       }}>
-        {title} ({totalInterfaces} interfaces)
+        {title} <span style={{ color: "var(--text-dim)", fontWeight: 500 }}>({totalInterfaces} interfaces)</span>
       </div>
 
       {branches.map(branch => {
@@ -1403,7 +1405,7 @@ function IfaceRoleTree({
               <span style={{
                 width: 14, textAlign: "center",
                 color: l1Open ? color : "var(--text-dim)",
-                fontSize: 11, fontFamily: "var(--font-mono)",
+                fontSize: 12, fontFamily: "var(--font-mono)",
               }}>
                 {l1Open ? "▾" : "▸"}
               </span>
@@ -1415,7 +1417,7 @@ function IfaceRoleTree({
               }}>
                 {branch.platform}
               </span>
-              <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
+              <span style={{ color: "var(--text-dim)", fontSize: 12 }}>
                 ({visibleInterfaces.length} interface{visibleInterfaces.length === 1 ? "" : "s"})
               </span>
             </button>
@@ -1451,7 +1453,7 @@ function IfaceRoleTree({
                     <span style={{
                       width: 14, textAlign: "center",
                       color: l2Open ? color : "var(--text-dim)",
-                      fontSize: 11, fontFamily: "var(--font-mono)",
+                      fontSize: 12, fontFamily: "var(--font-mono)",
                     }}>
                       {l2Open ? "▾" : "▸"}
                     </span>
@@ -1461,7 +1463,7 @@ function IfaceRoleTree({
                     }}>
                       {iface.name}
                     </span>
-                    <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
+                    <span style={{ color: "var(--text-dim)", fontSize: 12 }}>
                       ({visibleRows.length} {counterLabel}{visibleRows.length === 1 ? "" : "s"})
                     </span>
                   </button>
@@ -1500,11 +1502,11 @@ function IfaceRoleTree({
                           {row.role === "provider" ? "→" : "←"}
                         </span>
                         {counterUnlinked ? (
-                          <span style={{ color: "var(--text-dim)", fontSize: 11 }}>(unlinked)</span>
+                          <span style={{ color: "var(--text-dim)", fontSize: 12 }}>(unlinked)</span>
                         ) : (
                           <>
                             <code style={{
-                              fontFamily: "var(--font-mono)", fontSize: 11,
+                              fontFamily: "var(--font-mono)", fontSize: 12,
                               color: "var(--accent)", minWidth: 72,
                             }}>
                               {row.counter_app_id}
