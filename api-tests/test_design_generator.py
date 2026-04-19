@@ -579,6 +579,58 @@ def test_edge_style_is_modify_yellow_orthogonal():
         assert "#5fc58a" not in style  # KPaaS green
 
 
+def test_untagged_template_cells_stripped():
+    """A cell in the template without an `id` attr is still stripped
+    when it lives outside the Legend region. Some Confluence drawio
+    exports produce these, and before the fix they leaked into output
+    as a nameless body rectangle."""
+    cells = (
+        # Legend proper
+        _mk_cell("marker", x=600, y=40, w=80, h=20, value="Legend")
+        + _mk_cell("L1", x=100, y=80, w=100, h=60, value="Ex1")
+        + _mk_cell("L2", x=260, y=80, w=100, h=60, value="Ex2")
+        + _mk_cell("L3", x=420, y=80, w=100, h=60, value="Ex3")
+        # Body cell with NO id attribute
+        + '<mxCell value="" style="rounded=1;dashed=1;fillColor=#fff2cc;" vertex="1" parent="1">'
+        + '<mxGeometry x="300" y="400" width="500" height="300" as="geometry"/>'
+        + '</mxCell>'
+    )
+    tpl = _wrap_template(cells)
+    out = generate_as_is_xml(tpl, [_app("M1", "Hub", role="major")], [])
+    graph_root = _parse_graph_root(out)
+
+    # No untagged body cells survive: count mxCells without id that are
+    # neither sentinels nor newly generated (ns-* ids always set).
+    leaked = [
+        c for c in graph_root.iter("mxCell")
+        if c.get("id") is None
+    ]
+    assert leaked == [], f"untagged cells leaked: {len(leaked)}"
+
+
+def test_edge_labels_lifted_above_the_line():
+    """Edge labels sit ABOVE the line via verticalAlign=bottom + a
+    <mxPoint as='offset' y='-12'/>. Keeps the label clear of the
+    connected boxes when the edge is a straight horizontal."""
+    tpl = _ea_style_template()
+    apps = [_app("M1", "Major", role="major"), _app("S1", "S", role="surround")]
+    iface = {"from_app": "M1", "to_app": "S1", "platform": "",
+             "interface_name": "a_long_interface_name",
+             "planned_status": "change"}
+    out = generate_as_is_xml(tpl, apps, [iface])
+    edge = next(c for c in _parse_graph_root(out).iter("mxCell") if c.get("edge") == "1")
+    style = edge.get("style") or ""
+    assert "verticalAlign=bottom" in style
+    assert "labelBackgroundColor=#ffffff" in style
+
+    # Offset point lifts label by -12px
+    geom = edge.find("mxGeometry")
+    assert geom is not None
+    offset = geom.find("mxPoint[@as='offset']")
+    assert offset is not None, "edge must have an offset mxPoint to lift the label"
+    assert offset.get("y") == "-12"
+
+
 def test_edge_has_rounded_orthogonal_style():
     """Soft folds: orthogonal routing with rounded=1 + arcSize."""
     tpl = _ea_style_template()

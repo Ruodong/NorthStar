@@ -188,6 +188,10 @@ def _edge_style(platform: str, planned_status: str) -> str:
     # Soft orthogonal routing: rounded corners, auto-avoid bends when
     # source/target align (drawio handles this natively via
     # orthogonalEdgeStyle). arcSize tunes the corner radius.
+    # Label placement:
+    #   verticalAlign=bottom  → label text sits ABOVE the line, not on it
+    #   labelBackgroundColor  → white halo so the text stays readable
+    #                           when the line passes through other cells
     base = (
         "edgeStyle=orthogonalEdgeStyle;"
         "rounded=1;arcSize=12;"
@@ -195,6 +199,8 @@ def _edge_style(platform: str, planned_status: str) -> str:
         "endArrow=classic;html=1;"
         "strokeColor=#d6b656;strokeWidth=2;"
         "fontSize=10;fontColor=#333;"
+        "verticalAlign=bottom;align=center;"
+        "labelBackgroundColor=#ffffff;"
     )
     if planned_status == "new":
         base += "strokeColor=#82b366;dashPattern=8 4;"  # Green, dashed = New
@@ -589,7 +595,11 @@ def _strip_non_legend_cells(
     """
     # Build index over direct children of graph_root. Each child is
     # either <mxCell> or <object>/<UserObject> wrapping an <mxCell>.
-    id_to_wrapper: dict[str, ET.Element] = {}
+    # Track three separate lists so we can strip untagged cells too:
+    # some real templates contain <mxCell> elements with no `id` attr
+    # (a drawio export oddity). Those would slip past an id-based
+    # strip and leak template body rectangles into the output.
+    all_children: list[tuple[ET.Element, ET.Element, Optional[str]]] = []
     id_to_cell: dict[str, ET.Element] = {}
     parent_of: dict[str, str] = {}
     for child in list(graph_root):
@@ -600,17 +610,18 @@ def _strip_non_legend_cells(
             if cell is None:
                 continue
         cid = cell.get("id")
-        if not cid or cid in ("0", "1"):
-            continue
-        id_to_wrapper[cid] = child
-        id_to_cell[cid] = cell
-        pid = cell.get("parent")
-        if pid:
-            parent_of[cid] = pid
+        all_children.append((child, cell, cid))
+        if cid and cid not in ("0", "1"):
+            id_to_cell[cid] = cell
+            pid = cell.get("parent")
+            if pid:
+                parent_of[cid] = pid
 
     # Strip everything when there's no Legend to protect.
     if legend_region is None:
-        for wrapper in id_to_wrapper.values():
+        for wrapper, _cell, cid in all_children:
+            if cid in ("0", "1"):
+                continue
             graph_root.remove(wrapper)
         return
 
@@ -655,9 +666,14 @@ def _strip_non_legend_cells(
         if not grew:
             break
 
-    # Remove cells not in kept.
-    for cid, wrapper in id_to_wrapper.items():
-        if cid not in kept:
+    # Remove cells not in kept. Untagged cells (no id) are always
+    # stripped — they can never be referenced by an edge source/target,
+    # can never be a parent in the chain, and can never carry a Legend
+    # marker that would make them semantically important.
+    for wrapper, _cell, cid in all_children:
+        if cid in ("0", "1"):
+            continue
+        if not cid or cid not in kept:
             graph_root.remove(wrapper)
 
 
@@ -896,6 +912,15 @@ def _emit_edges(
         geom = ET.SubElement(edge, "mxGeometry")
         geom.set("relative", "1")
         geom.set("as", "geometry")
+        # Lift the label ~12px above the line midpoint so long names
+        # don't cut through the Major/Surround boxes the edge connects.
+        # Combined with verticalAlign=bottom in the style, this puts the
+        # text cleanly above the arrow.
+        if iface_name:
+            offset = ET.SubElement(geom, "mxPoint")
+            offset.set("x", "0")
+            offset.set("y", "-12")
+            offset.set("as", "offset")
         emitted += 1
     return emitted
 
