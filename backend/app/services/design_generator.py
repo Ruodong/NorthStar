@@ -46,9 +46,9 @@ _APP_STATUS_STYLE: dict[str, str] = {
 }
 
 # Surround Applications — apps referenced by interfaces but not chosen by
-# the architect in the Apps panel. Rendered as muted grey boxes with a
-# dashed border so they read as context, not focus.
-_SURROUND_STYLE: str = "fillColor=#eef0f4;strokeColor=#9aa4b8;dashed=1;"
+# the architect in the Apps panel. Per the architect's Legend ("Existing"
+# = keep = blue), surround boxes use the keep color so the architect can
+# read them as "already present, context for the major change."
 
 _PLATFORM_EDGE_COLOR: dict[str, str] = {
     "APIH":                "#6ba6e8",
@@ -99,38 +99,40 @@ def _new_cell_id() -> str:
 
 
 def _app_label(app: dict) -> str:
-    """Build the raw-HTML cell label for a plain mxCell.
+    """Build the raw-HTML cell label: ID and Name only.
+
+    The architect asked for a minimum-ink box — just the CMDB ID and the
+    app name (bold). No description, no role prefix, no status tag. The
+    Legend carries the color semantics.
 
     ET.set("value", …) will XML-escape < and > on serialization — do NOT
     pre-escape here, otherwise drawio shows literal `&lt;b&gt;`.
     """
     app_id = app.get("app_id") or ""
     name = app.get("name") or app.get("app_name") or ""
-    desc = app.get("short_description") or ""
-    role_note = {
-        "keep":   "",
-        "change": "CHANGE: ",
-        "new":    "NEW: ",
-        "sunset": "SUNSET: ",
-    }.get(app.get("planned_status", "keep"), "")
-    lines = [f"ID: {app_id}"] if app_id else []
+    lines: list[str] = []
+    if app_id:
+        lines.append(f"ID: {app_id}")
     if name:
-        lines.append(f"<b>{role_note}{name}</b>")
-    if desc:
-        lines.append(desc[:120])
+        lines.append(f"<b>{name}</b>")
     return "<br>".join(lines) or (name or app_id)
 
 
 def _app_style(planned_status: str, role: str = "major") -> str:
     """Style string for a freshly drawn app box.
 
-    Surround boxes always render muted/dashed (context, not focus);
-    Major boxes pick color from planned_status.
+    Color mapping per the architect's Legend:
+      - Major default → "Modify" (change / yellow). Explicit planned_status
+        (keep / new / sunset) still wins if set.
+      - Surround → "Existing" (keep / blue), regardless of status. The
+        Major's own planned_status is what the design is *about*; surround
+        boxes are stable context, so we don't flag them with new/sunset/
+        change colors even if the underlying app happens to be those.
     """
     if role == "surround":
-        base = _SURROUND_STYLE
+        base = _APP_STATUS_STYLE["keep"]
     else:
-        base = _APP_STATUS_STYLE.get(planned_status, _APP_STATUS_STYLE["keep"])
+        base = _APP_STATUS_STYLE.get(planned_status or "change", _APP_STATUS_STYLE["change"])
     return (
         "rounded=1;whiteSpace=wrap;html=1;"
         + base
@@ -715,7 +717,11 @@ def _emit_app_cell(
     cell = ET.SubElement(graph_root, "mxCell")
     cell.set("id", cell_id)
     cell.set("value", _app_label(app))
-    cell.set("style", _app_style(app.get("planned_status", "keep"), role=role))
+    # Role-based default when the caller omitted planned_status:
+    # Major → Modify (the design is about it, so it's "changing"),
+    # Surround → Existing (stable context).
+    default_status = "change" if role != "surround" else "keep"
+    cell.set("style", _app_style(app.get("planned_status") or default_status, role=role))
     cell.set("vertex", "1")
     cell.set("parent", "1")
 
@@ -756,9 +762,10 @@ def _emit_edges(
         edge.set("parent", "1")
         edge.set("source", src_id)
         edge.set("target", tgt_id)
-        if iface_name or platform:
-            label = f"{platform}: {iface_name}" if platform else iface_name
-            edge.set("value", label[:60])
+        # Edge label is interface_name only — platform/integration-tier
+        # is intentionally omitted so the picture stays business-readable.
+        if iface_name:
+            edge.set("value", iface_name[:60])
 
         geom = ET.SubElement(edge, "mxGeometry")
         geom.set("relative", "1")

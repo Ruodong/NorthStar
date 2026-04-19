@@ -37,10 +37,22 @@ After clearing, the generator draws a new hub in the **largest empty rectangle b
 - **Major app** — the first app with role ∈ {major, primary}. Placed centered at `(canvas.cx, canvas.cy)`. Box 260×120.
 - **Additional majors** (if any) — placed in a small horizontal row immediately above the central major, 20px gap between, centered.
 - **Surround apps** — arranged on a single circle around the Major cluster. Radius `r = max(320, 80 + box_diag * N / π)` where N is surround count and box_diag is 200 (diagonal of a surround box). Angle for surround `i` is `-π/2 + 2π · i / N` (first surround at 12 o'clock, going clockwise). Box 180×80.
-- **Interfaces** — every user-selected interface whose endpoints both landed on the canvas gets an `<mxCell edge="1">` with the existing `_edge_style(platform, planned_status)` palette. drawio auto-routes the line; we just set `source` + `target`.
+- **Interfaces** — every user-selected interface whose endpoints both landed on the canvas gets an `<mxCell edge="1">` with the `_edge_style(platform, planned_status)` palette. Edge label is `interface_name` only — the platform / integration tier is intentionally omitted so the picture stays business-readable. drawio auto-routes the line; we just set `source` + `target`.
 - **Orphan interfaces** — edges whose endpoint app didn't make it onto the canvas (e.g., an interface referencing an app not in the apps list) are silently dropped.
 
-Box styling continues to use the existing helpers (`_app_style` + `_recolor_cell_style`) so color semantics (change → yellow, new → green, sunset → red, keep → blue, surround → muted grey dashed) are unchanged.
+Box color policy (tied to the architect's Legend):
+
+| Role → explicit status         | Resulting fill              |
+|--------------------------------|-----------------------------|
+| Major (default)                | Modify — yellow `#fff2cc`   |
+| Major + status=keep            | Existing — blue `#dae8fc`   |
+| Major + status=new             | New — green `#d5e8d4`       |
+| Major + status=sunset          | Sunset — pink `#f8cecc`     |
+| Surround (any status)          | Existing — blue `#dae8fc`   |
+
+Surround boxes use the Existing color regardless of the underlying app's lifecycle — they are stable context for the major change, not subjects of change themselves.
+
+Box label contains **only** CMDB ID and app name (name in `<b>`). No description, no role/status prefix, no "module" breakdown — the color + Legend carry the semantic, so the box stays dense and legible.
 
 ### FR-4: No Slot Substitution
 

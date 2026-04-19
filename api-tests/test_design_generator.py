@@ -346,6 +346,93 @@ def test_interfaces_produce_edges():
     assert edges[0].get("target") in vertex_ids
 
 
+def test_app_label_contains_only_id_and_name():
+    """Label must be ID + Name in bold. No description, no status prefix."""
+    tpl = _ea_style_template()
+    app = {
+        "app_id": "M1", "name": "Major App", "role": "major",
+        "planned_status": "change",
+        "short_description": "This description MUST NOT appear on the box",
+    }
+    out = generate_as_is_xml(tpl, [app], [])
+    graph_root = _parse_graph_root(out)
+    major = next(
+        c for c in graph_root.iter("mxCell")
+        if c.get("vertex") == "1" and c.get("id") not in ("L1", "L2", "L3", "L4")
+    )
+    value = major.get("value") or ""
+    assert "ID: M1" in value
+    assert "<b>Major App</b>" in value
+    assert "description" not in value.lower()
+    assert "CHANGE:" not in value, "no status-prefix tag in label"
+
+
+def test_major_default_color_is_modify():
+    """Major with no planned_status set defaults to Modify (change/yellow)."""
+    tpl = _ea_style_template()
+    app = {"app_id": "M1", "name": "X", "role": "major"}  # no planned_status
+    out = generate_as_is_xml(tpl, [app], [])
+    graph_root = _parse_graph_root(out)
+    major = next(
+        c for c in graph_root.iter("mxCell")
+        if c.get("vertex") == "1" and c.get("id") not in ("L1", "L2", "L3", "L4")
+    )
+    style = major.get("style") or ""
+    assert "fillColor=#fff2cc" in style, f"expected Modify (yellow), got {style}"
+    assert "strokeColor=#d6b656" in style
+
+
+def test_surround_uses_existing_color_not_grey_dashed():
+    """Surround always renders in Existing (keep/blue), never dashed grey."""
+    tpl = _ea_style_template()
+    apps = [
+        _app("M1", "Major", role="major"),
+        _app("S1", "Side", role="surround", status="new"),  # explicit 'new' ignored for surround
+    ]
+    out = generate_as_is_xml(tpl, apps, [])
+    graph_root = _parse_graph_root(out)
+    new_cells = [
+        c for c in graph_root.iter("mxCell")
+        if c.get("vertex") == "1" and c.get("id") not in ("L1", "L2", "L3", "L4")
+    ]
+    surround = next(c for c in new_cells if "ID: S1" in (c.get("value") or ""))
+    style = surround.get("style") or ""
+    assert "fillColor=#dae8fc" in style, f"Existing (blue), got {style}"
+    assert "strokeColor=#6c8ebf" in style
+    assert "dashed=1" not in style
+
+
+def test_edge_label_is_interface_name_only():
+    """Edge value is interface_name; platform prefix is NOT added."""
+    tpl = _ea_style_template()
+    apps = [_app("M1", "Major", role="major"), _app("S1", "S", role="surround")]
+    ifaces = [{
+        "from_app": "M1", "to_app": "S1",
+        "platform": "APIH", "interface_name": "Submit Order",
+        "planned_status": "change",
+    }]
+    out = generate_as_is_xml(tpl, apps, ifaces)
+    graph_root = _parse_graph_root(out)
+    edge = next(c for c in graph_root.iter("mxCell") if c.get("edge") == "1")
+    assert edge.get("value") == "Submit Order"
+    assert "APIH" not in (edge.get("value") or "")
+
+
+def test_edge_with_no_interface_name_has_no_label():
+    """If interface_name is empty, the edge is unlabeled (no 'APIH:' fallback)."""
+    tpl = _ea_style_template()
+    apps = [_app("M1", "Major", role="major"), _app("S1", "S", role="surround")]
+    ifaces = [{
+        "from_app": "M1", "to_app": "S1",
+        "platform": "APIH", "interface_name": "",
+        "planned_status": "change",
+    }]
+    out = generate_as_is_xml(tpl, apps, ifaces)
+    graph_root = _parse_graph_root(out)
+    edge = next(c for c in graph_root.iter("mxCell") if c.get("edge") == "1")
+    assert edge.get("value") in (None, "")
+
+
 def test_orphan_interface_dropped():
     """Interface referencing an app not in the apps list produces no edge."""
     tpl = _ea_style_template()
