@@ -275,29 +275,33 @@ export default function DesignEditorPage() {
         </div>
 
         <div style={{ padding: 14, borderBottom: "1px solid var(--border)" }}>
-          <h3 style={{ margin: "0 0 8px", fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>
-            Apps in scope ({apps.length})
-          </h3>
-          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-            {apps.map(a => (
-              <Link key={a.app_id} href={`/apps/${encodeURIComponent(a.app_id)}`}
-                style={{
-                  display: "flex", alignItems: "center", gap: 6,
-                  padding: "3px 4px", fontSize: 11, textDecoration: "none",
-                  color: "var(--text)",
-                }}>
-                <code style={{ color: "var(--accent)", fontFamily: "var(--font-mono)", minWidth: 70 }}>
-                  {a.app_id}
-                </code>
-                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {a.name || a.app_id}
-                </span>
-                <span style={{ fontSize: 9, color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
-                  {a.role[0].toUpperCase()}
-                </span>
-              </Link>
-            ))}
-          </div>
+          {/* Split into two semantic groups: Major (primary role — the
+              apps this design centers on) and Surround (related or
+              external — context pulled in via interfaces). This mirrors
+              the wizard's top-bar grouping so architects read the same
+              taxonomy across create, edit, and view modes. */}
+          {(() => {
+            const majors = apps.filter(a => a.role === "primary");
+            const surrounds = apps.filter(a => a.role !== "primary");
+            return (
+              <>
+                <AppGroup
+                  title={`Major Applications (${majors.length})`}
+                  apps={majors}
+                  emptyHint="none"
+                />
+                {surrounds.length > 0 && (
+                  <div style={{ marginTop: 14 }}>
+                    <AppGroup
+                      title={`Surround Applications (${surrounds.length})`}
+                      apps={surrounds}
+                      emptyHint="none"
+                    />
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </div>
 
         <div style={{ padding: 14 }}>
@@ -324,5 +328,49 @@ export default function DesignEditorPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+
+function AppGroup({
+  title, apps, emptyHint,
+}: {
+  title: string;
+  apps: Array<{ app_id: string; name: string | null; role: string }>;
+  emptyHint: string;
+}) {
+  return (
+    <>
+      <h3 style={{
+        margin: "0 0 6px", fontSize: 11, color: "var(--text-muted)",
+        textTransform: "uppercase", letterSpacing: 0.6,
+      }}>
+        {title}
+      </h3>
+      {apps.length === 0 ? (
+        <div style={{ fontSize: 11, color: "var(--text-dim)" }}>{emptyHint}</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {apps.map(a => (
+            <Link
+              key={a.app_id}
+              href={`/apps/${encodeURIComponent(a.app_id)}`}
+              style={{
+                display: "flex", alignItems: "center", gap: 6,
+                padding: "3px 4px", fontSize: 11, textDecoration: "none",
+                color: "var(--text)",
+              }}
+            >
+              <code style={{ color: "var(--accent)", fontFamily: "var(--font-mono)", minWidth: 70 }}>
+                {a.app_id}
+              </code>
+              <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {a.name || a.app_id}
+              </span>
+            </Link>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
