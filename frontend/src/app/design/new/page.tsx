@@ -216,7 +216,9 @@ export default function DesignNewPage() {
   const fetchedAppIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    if (step !== 3) return;
+    // Fire on ALL steps — the top bar's cascade cleanup needs scopedRows
+    // to be in sync even when the user removes Major Apps from tabs other
+    // than Interfaces (e.g., clicks × on a chip while on the Template tab).
     const currentIds = new Set(scopeApps.map(a => a.app_id));
     const toAdd = scopeApps.filter(a => !fetchedAppIdsRef.current.has(a.app_id));
     const toRemove = [...fetchedAppIdsRef.current].filter(id => !currentIds.has(id));
@@ -307,7 +309,7 @@ export default function DesignNewPage() {
       }
       if (isInitial) setCatalogLoading(false);
     })();
-  }, [step, scopeApps]);
+  }, [scopeApps]);
 
   const addApp = (app: { app_id: string; name: string }, role: ScopeApp["role"] = "primary") => {
     setScopeApps(prev => {
@@ -320,7 +322,57 @@ export default function DesignNewPage() {
 
   const removeApp = (appId: string) => {
     setScopeApps(prev => prev.filter(a => a.app_id !== appId));
+    // keepIfaceIds cleanup + orphan related-app cleanup both happen in the
+    // post-change effect below — the app's scopedRows get filtered out
+    // automatically when scopeApps changes, then we prune.
   };
+
+  // Remove a single kept interface by id. Cascades to drop any related
+  // (role="related") scope app whose only reason for being in scope was
+  // this (and any other already-dropped) interface.
+  const removeInterface = (interfaceId: number) => {
+    setKeepIfaceIds(prev => {
+      if (!prev.has(interfaceId)) return prev;
+      const next = new Set(prev);
+      next.delete(interfaceId);
+      return next;
+    });
+  };
+
+  // Cascade cleanup: whenever scopeApps, scopedRows, or keepIfaceIds change,
+  // drop (1) orphan kept interface ids (no matching scopedRow left after
+  // some scope app was removed) and (2) orphan related apps (role="related"
+  // scope apps with no kept interface still referencing them).
+  useEffect(() => {
+    // Pass 1: prune orphan interface ids
+    const validIds = new Set(scopedRows.map(r => r.interface_id));
+    let prunedKeep: Set<number> | null = null;
+    for (const id of keepIfaceIds) {
+      if (!validIds.has(id)) {
+        if (!prunedKeep) prunedKeep = new Set(keepIfaceIds);
+        prunedKeep.delete(id);
+      }
+    }
+    if (prunedKeep) {
+      setKeepIfaceIds(prunedKeep);
+      return; // let the next effect tick handle pass 2 with updated keep set
+    }
+
+    // Pass 2: prune orphan related apps
+    // A related app is orphan if no row in scopedRows has
+    // (counter_app_id === relatedApp.app_id AND keepIfaceIds.has(interface_id)).
+    const referenced = new Set<string>();
+    for (const r of scopedRows) {
+      if (keepIfaceIds.has(r.interface_id) && r.counter_app_id) {
+        referenced.add(r.counter_app_id);
+      }
+    }
+    const orphans = scopeApps.filter(a => a.role === "related" && !referenced.has(a.app_id));
+    if (orphans.length > 0) {
+      const orphanSet = new Set(orphans.map(a => a.app_id));
+      setScopeApps(prev => prev.filter(a => !orphanSet.has(a.app_id)));
+    }
+  }, [scopeApps, scopedRows, keepIfaceIds]);
 
   const toggleAppFromBc = (app: BCAppRow) => {
     setScopeApps(prev => {
@@ -473,6 +525,23 @@ export default function DesignNewPage() {
           );
         })}
       </div>
+
+      {/* ── Persistent summary bar — always visible at top.
+          Left column: Basic Information (read-only). Right column:
+          Major Applications + Interfaces (chips with × cascade removal). */}
+      <SummaryBar
+        name={name}
+        fiscalYear={fiscalYear}
+        projectId={projectId}
+        templates={templates}
+        templateId={templateId}
+        scopeApps={scopeApps}
+        scopedRows={scopedRows}
+        keepIfaceIds={keepIfaceIds}
+        onJumpTab={setStep}
+        onRemoveApp={removeApp}
+        onRemoveInterface={removeInterface}
+      />
 
       {err && <div className="panel" style={{ borderColor: "#5b1f1f", marginBottom: 14 }}>Error: {err}</div>}
 
@@ -639,35 +708,6 @@ export default function DesignNewPage() {
             )}
           </div>
 
-          {/* Selected scope — these are the Major Applications that will
-              drive the generated AS-IS diagram. Surround Applications
-              (auto-derived from interfaces) are rendered separately at
-              generate time; they aren't shown here. */}
-          <div className="panel" style={{ padding: 14, gridColumn: "span 2" }}>
-            <h3 style={{ marginTop: 0, fontSize: 11, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: 0.6 }}>
-              Major Applications ({scopeApps.length})
-            </h3>
-            {scopeApps.length === 0 ? (
-              <div style={{ color: "var(--text-dim)", fontSize: 12 }}>None yet — add apps from either panel above.</div>
-            ) : (
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {scopeApps.map(a => (
-                  <span key={a.app_id} style={{
-                    display: "inline-flex", alignItems: "center", gap: 6,
-                    background: "var(--bg-elevated)", border: "1px solid var(--border-strong)",
-                    borderRadius: 3, padding: "4px 10px", fontSize: 12,
-                  }}>
-                    <code style={{ color: "var(--accent)", fontFamily: "var(--font-mono)" }}>{a.app_id}</code>
-                    <span>{a.name}</span>
-                    <button onClick={() => removeApp(a.app_id)} style={{
-                      background: "none", border: "none", color: "var(--text-dim)",
-                      cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0,
-                    }}>×</button>
-                  </span>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
       )}
 
@@ -705,19 +745,6 @@ export default function DesignNewPage() {
           </div>
         </div>
       )}
-
-      {/* ── Persistent summary bar — always visible, shows current selections ── */}
-      <SummaryBar
-        name={name}
-        fiscalYear={fiscalYear}
-        projectId={projectId}
-        templates={templates}
-        templateId={templateId}
-        scopeApps={scopeApps}
-        catalogCount={scopedRows.length}
-        keptCount={keepIfaceIds.size}
-        onJumpTab={setStep}
-      />
 
       {/* ── Footer: prev/next convenience + always-visible Generate ── */}
       <div style={{
@@ -786,10 +813,16 @@ export default function DesignNewPage() {
 }
 
 // ── Small components ────────────────────────────────────────────
-/* ── SummaryBar: persistent footer showing current selections across tabs ── */
+/* ── SummaryBar: persistent top bar — two columns.
+      Left: Basic Information (read-only, click → jumps to relevant tab).
+      Right: Applications and Interfaces (two sub-columns, chips removable).
+      Surround apps are implicit — rendered inside each Interface chip as
+      the counterparty id+name, with × on the chip removing the interface
+      and cascading to drop orphan related apps. ── */
 function SummaryBar({
   name, fiscalYear, projectId, templates, templateId,
-  scopeApps, catalogCount, keptCount, onJumpTab,
+  scopeApps, scopedRows, keepIfaceIds,
+  onJumpTab, onRemoveApp, onRemoveInterface,
 }: {
   name: string;
   fiscalYear: string;
@@ -797,102 +830,148 @@ function SummaryBar({
   templates: TemplateRow[];
   templateId: number | null;
   scopeApps: ScopeApp[];
-  catalogCount: number;
-  keptCount: number;
+  scopedRows: ScopedIfaceRow[];
+  keepIfaceIds: Set<number>;
   onJumpTab: (idx: number) => void;
+  onRemoveApp: (appId: string) => void;
+  onRemoveInterface: (interfaceId: number) => void;
 }) {
   const templateName = templateId === null
     ? "Blank canvas"
     : (templates.find(t => t.attachment_id === templateId)?.title || `#${templateId}`);
 
-  const appPreview = scopeApps.slice(0, 3).map(a => a.app_id).join(", ");
-  const moreApps = Math.max(0, scopeApps.length - 3);
+  const majorApps = scopeApps.filter(a => a.role === "primary");
+
+  // Dedup kept interfaces by interface_id — same id can appear from both
+  // ends (scope app as provider AND consumer); pick the first occurrence.
+  const keptIfaceRows: ScopedIfaceRow[] = [];
+  const seen = new Set<number>();
+  for (const r of scopedRows) {
+    if (!keepIfaceIds.has(r.interface_id)) continue;
+    if (seen.has(r.interface_id)) continue;
+    seen.add(r.interface_id);
+    keptIfaceRows.push(r);
+  }
 
   return (
     <div style={{
-      marginTop: 16,
-      padding: "10px 14px",
+      marginBottom: 16,
+      padding: 12,
       background: "var(--bg-elevated)",
       border: "1px solid var(--border)",
       borderRadius: "var(--radius-md)",
       display: "grid",
-      gridTemplateColumns: "repeat(5, 1fr)",
-      gap: 10,
-      fontSize: 11,
+      gridTemplateColumns: "280px 1fr",
+      gap: 12,
     }}>
-      <SummaryCell label="Context" onJump={() => onJumpTab(1)} filled={name.trim().length > 0}>
-        {name.trim() ? (
-          <>
-            <div style={{ color: "var(--text)", fontWeight: 500 }}>{name}</div>
-            <div style={{ color: "var(--text-dim)", fontSize: 10 }}>
-              {fiscalYear}
-              {projectId && <> · <code style={{ fontFamily: "var(--font-mono)", color: "var(--accent)" }}>{projectId}</code></>}
-            </div>
-          </>
-        ) : (
-          <span style={{ color: "var(--text-dim)" }}>(unnamed)</span>
-        )}
-      </SummaryCell>
-
-      <SummaryCell label="Major Apps" onJump={() => onJumpTab(2)} filled={scopeApps.length > 0}>
-        {scopeApps.length === 0 ? (
-          <span style={{ color: "var(--text-dim)" }}>none</span>
-        ) : (
-          <>
-            <div style={{ color: "var(--text)" }}>
-              <strong>{scopeApps.length}</strong> app{scopeApps.length === 1 ? "" : "s"}
-            </div>
-            <div style={{ color: "var(--text-dim)", fontSize: 10, fontFamily: "var(--font-mono)" }}>
-              {appPreview}{moreApps > 0 && ` +${moreApps}`}
-            </div>
-          </>
-        )}
-      </SummaryCell>
-
-      <SummaryCell label="Interfaces" onJump={() => onJumpTab(3)} filled={keptCount > 0}>
-        {catalogCount === 0 && scopeApps.length > 0 ? (
-          <span style={{ color: "var(--text-dim)" }}>none in catalog</span>
-        ) : (
-          <>
-            <div style={{ color: "var(--text)" }}>
-              <strong>{keptCount}</strong> of {catalogCount} kept
-            </div>
-            <div style={{ color: "var(--text-dim)", fontSize: 10 }}>
-              {scopeApps.length > 0 ? "from catalog" : "pick apps first"}
-            </div>
-          </>
-        )}
-      </SummaryCell>
-
-      <SummaryCell label="Template" onJump={() => onJumpTab(4)} filled={true}>
+      {/* ── LEFT: Basic Information (read-only) ── */}
+      <div style={{
+        padding: 10,
+        background: "var(--surface)",
+        border: "1px solid var(--border)",
+        borderRadius: 4,
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+      }}>
         <div style={{
-          color: "var(--text)",
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
+          fontSize: 9, color: "var(--text-dim)", fontFamily: "var(--font-mono)",
+          letterSpacing: 0.6, textTransform: "uppercase",
         }}>
-          {templateName}
+          Basic Information
         </div>
-        <div style={{ color: "var(--text-dim)", fontSize: 10 }}>
-          {templateId === null ? "blank canvas" : "as starting point"}
-        </div>
-      </SummaryCell>
+        <InfoRow label="Solution" onJump={() => onJumpTab(1)} filled={name.trim().length > 0}>
+          {name.trim() ? name : <span style={{ color: "var(--text-dim)" }}>(unnamed)</span>}
+        </InfoRow>
+        <InfoRow label="Fiscal Year" onJump={() => onJumpTab(1)} filled>
+          <span style={{ fontFamily: "var(--font-mono)" }}>{fiscalYear}</span>
+        </InfoRow>
+        <InfoRow label="Project" onJump={() => onJumpTab(1)} filled={!!projectId}>
+          {projectId ? (
+            <code style={{ fontFamily: "var(--font-mono)", color: "var(--accent)" }}>{projectId}</code>
+          ) : <span style={{ color: "var(--text-dim)" }}>(none)</span>}
+        </InfoRow>
+        <InfoRow label="Template" onJump={() => onJumpTab(4)} filled>
+          <span style={{
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "inline-block",
+            maxWidth: "100%",
+          }} title={templateName}>{templateName}</span>
+        </InfoRow>
+      </div>
 
-      <SummaryCell label="Review" onJump={() => onJumpTab(5)} filled={name.trim().length > 0 && scopeApps.length > 0}>
-        <div style={{
-          color: name.trim().length > 0 && scopeApps.length > 0 ? "#5fc58a" : "#e8b458",
-          fontWeight: 500,
-        }}>
-          {name.trim().length > 0 && scopeApps.length > 0
-            ? "Ready to generate"
-            : "Missing required fields"}
+      {/* ── RIGHT: Applications and Interfaces (chips) ── */}
+      <div style={{
+        padding: 10,
+        background: "var(--surface)",
+        border: "1px solid var(--border)",
+        borderRadius: 4,
+        display: "grid",
+        gridTemplateColumns: "minmax(200px, 1fr) minmax(280px, 2fr)",
+        gap: 12,
+      }}>
+        {/* Sub-column: Major Applications */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+          <div style={{
+            fontSize: 9, color: "var(--text-dim)", fontFamily: "var(--font-mono)",
+            letterSpacing: 0.6, textTransform: "uppercase",
+          }}>
+            Major Applications ({majorApps.length})
+          </div>
+          {majorApps.length === 0 ? (
+            <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
+              — none — (add from <button
+                onClick={() => onJumpTab(2)}
+                style={{
+                  background: "none", border: "none", color: "var(--accent)",
+                  cursor: "pointer", padding: 0, fontSize: 11, textDecoration: "underline",
+                }}
+              >Apps tab</button>)
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {majorApps.map(a => (
+                <MajorAppChip key={a.app_id} app={a} onRemove={() => onRemoveApp(a.app_id)} />
+              ))}
+            </div>
+          )}
         </div>
-      </SummaryCell>
+
+        {/* Sub-column: Interfaces */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0 }}>
+          <div style={{
+            fontSize: 9, color: "var(--text-dim)", fontFamily: "var(--font-mono)",
+            letterSpacing: 0.6, textTransform: "uppercase",
+          }}>
+            Interfaces ({keptIfaceRows.length})
+          </div>
+          {keptIfaceRows.length === 0 ? (
+            <div style={{ fontSize: 11, color: "var(--text-dim)" }}>
+              — none — (pick from <button
+                onClick={() => onJumpTab(3)}
+                style={{
+                  background: "none", border: "none", color: "var(--accent)",
+                  cursor: "pointer", padding: 0, fontSize: 11, textDecoration: "underline",
+                }}
+              >Interfaces tab</button>)
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {keptIfaceRows.map(r => (
+                <InterfaceChip
+                  key={r.interface_id}
+                  row={r}
+                  onRemove={() => onRemoveInterface(r.interface_id)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
 
-function SummaryCell({
+function InfoRow({
   label, children, onJump, filled,
 }: {
   label: string;
@@ -903,30 +982,131 @@ function SummaryCell({
   return (
     <button
       onClick={onJump}
+      title={`Click to edit ${label.toLowerCase()}`}
       style={{
+        display: "grid",
+        gridTemplateColumns: "84px 1fr auto",
+        alignItems: "baseline",
+        gap: 6,
+        padding: "3px 4px",
         background: "transparent",
         border: "none",
-        padding: "4px 6px",
-        textAlign: "left",
-        cursor: "pointer",
         borderLeft: `2px solid ${filled ? "var(--accent)" : "var(--border-strong)"}`,
-        display: "flex",
-        flexDirection: "column",
-        gap: 2,
+        color: "var(--text)",
+        cursor: "pointer",
+        textAlign: "left",
+        fontSize: 12,
+        fontFamily: "var(--font-body)",
         minWidth: 0,
       }}
     >
-      <div style={{
-        fontSize: 9,
-        color: "var(--text-dim)",
-        fontFamily: "var(--font-mono)",
-        letterSpacing: 0.6,
-        textTransform: "uppercase",
+      <span style={{
+        fontSize: 10, color: "var(--text-dim)",
+        textTransform: "uppercase", letterSpacing: 0.4,
       }}>
         {label}
-      </div>
-      {children}
+      </span>
+      <span style={{
+        color: "var(--text)", overflow: "hidden",
+        textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0,
+      }}>
+        {children}
+      </span>
+      <span style={{ color: "var(--text-dim)", fontSize: 11 }}>→</span>
     </button>
+  );
+}
+
+function MajorAppChip({ app, onRemove }: { app: ScopeApp; onRemove: () => void }) {
+  return (
+    <span
+      title={`${app.app_id} — ${app.name}`}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 6,
+        background: "var(--bg-elevated)", border: "1px solid var(--border-strong)",
+        borderRadius: 3, padding: "4px 8px", fontSize: 12,
+        maxWidth: 280, minWidth: 0,
+      }}
+    >
+      <code style={{
+        color: "var(--accent)", fontFamily: "var(--font-mono)",
+        flexShrink: 0, fontSize: 11,
+      }}>
+        {app.app_id}
+      </code>
+      <span style={{
+        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        minWidth: 0, flex: 1,
+      }}>
+        {app.name}
+      </span>
+      <button
+        onClick={onRemove}
+        aria-label={`Remove ${app.name}`}
+        style={{
+          background: "none", border: "none", color: "var(--text-dim)",
+          cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0,
+          flexShrink: 0,
+        }}
+      >×</button>
+    </span>
+  );
+}
+
+function InterfaceChip({
+  row, onRemove,
+}: {
+  row: ScopedIfaceRow;
+  onRemove: () => void;
+}) {
+  const arrow = row.role === "provider" ? "→" : "←";
+  const counterId = row.counter_app_id || "(unlinked)";
+  const counterName = row.counter_app_name || "";
+  const platformColor = PLATFORM_COLORS[row.platform] || "#5f6a80";
+  const ifaceLabel = row.interface_name || "(unnamed)";
+
+  // Rich tooltip: full platform · iface · arrow · counter_id counter_name
+  const fullText = `${row.platform} · ${ifaceLabel} ${arrow} ${counterId}${counterName ? ` ${counterName}` : ""}`;
+
+  return (
+    <span
+      title={fullText}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 6,
+        background: "var(--bg-elevated)", border: "1px solid var(--border-strong)",
+        borderRadius: 3, padding: "4px 8px", fontSize: 12,
+        width: 280, minWidth: 0,
+      }}
+    >
+      <span style={{
+        fontSize: 10, color: platformColor, background: `${platformColor}26`,
+        padding: "1px 6px", borderRadius: 2, fontFamily: "var(--font-mono)",
+        fontWeight: 600, flexShrink: 0,
+      }}>
+        {row.platform}
+      </span>
+      <span style={{
+        fontFamily: "var(--font-mono)", fontSize: 11,
+        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        minWidth: 0, flex: 1,
+      }}>
+        {ifaceLabel} <span style={{ color: "var(--text-dim)" }}>{arrow}</span>{" "}
+        {row.counter_app_id && (
+          <code style={{ color: "var(--accent)" }}>{row.counter_app_id}</code>
+        )}
+        {counterName && <> {counterName}</>}
+        {!row.counter_app_id && <span style={{ color: "var(--text-dim)" }}>{counterId}</span>}
+      </span>
+      <button
+        onClick={onRemove}
+        aria-label="Remove interface"
+        style={{
+          background: "none", border: "none", color: "var(--text-dim)",
+          cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0,
+          flexShrink: 0,
+        }}
+      >×</button>
+    </span>
   );
 }
 
