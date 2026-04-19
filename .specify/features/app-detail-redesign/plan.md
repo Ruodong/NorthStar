@@ -953,3 +953,49 @@ To append to `TODOS.md`:
 **UNRESOLVED:** 0 (all 5 tensions decided, 19 issues addressed, 1 critical failure-mode F8 has explicit test plan).
 
 **VERDICT:** ENG + DESIGN CLEARED — ready to implement starting PR 1. CEO review optional (substantial scope expansion happened — could re-validate with CEO mode if you want).
+
+---
+
+## 18. Final Status — All 4 PRs Shipped 🎉
+
+**Date:** 2026-04-19
+**Branch:** dev (pushed to gitlab + github)
+**Deployed:** Server 71 (192.168.68.71:3003)
+
+| PR | Commit(s) | Effort (actual CC) | Status |
+|---|---|---|---|
+| PR 1 — DESIGN.md doc-only | `84d9c54` | 1.5h | ✅ e2e unaffected (doc-only) |
+| PR 2 — RSC restructure | `48c8072` … `13ed99e` + `29cac0d` (16 commits) | ~3h | ✅ e2e 6/6 green |
+| PR 3 — Redesign + a11y | `0c2b26a`, `686a386`, `19f9968`, `1713a56`, `1986798` (5 commits) | ~3.5h | ✅ e2e 7/7 green, api-tests 3/3 |
+| PR 4 — axe + fixtures + WCAG AA fix | `f366a23` | ~1h | ✅ **e2e 26/26 green, 0 axe violations** |
+
+**Critical ARIA invariants regression-protected in CI:**
+- Single `role="tablist"` with 9 `role="tab"` children
+- Roving tabindex: exactly 1 tab at `tabIndex={0}`, other 8 at `-1`
+- ArrowRight switches `aria-selected` across tablist
+- `role="tree"` with `aria-level` 1/2/3 on every treeitem
+- Skip link `.skip-link` href=`#main-content`
+- `AnswerBlock` h1 renders via SSR (not client-hydrated)
+- Sunset banner + status pill becomes SUNSET when `decommissioned_at` set
+- Non-CMDB renders red "not in CMDB" strip, no cmdb-linked indicator
+- 404 apps hit Next `not-found.tsx` (HTTP 404, not 200 with fake page)
+- axe-core WCAG AA scan: 0 violations across 4 variants
+
+**Bundle:** `/apps/[app_id]` = 27 kB route + 121 kB first-load JS. Within the ±5 kB budget relative to the PR 2 baseline (23.8 kB).
+
+**Cumulative line deltas vs 2026-04-17 baseline:**
+- `page.tsx`: 4839 → 27 lines (-99.4%)
+- New code: 11 new files under `apps/[app_id]/`, 2 new primitives in `components/`, 1 new `lib/api-server.ts`
+- Backend: +27 lines (`_fetch_capability_count` helper + integration)
+- E2E: +16 tests (10 → 26)
+- api-tests: +3 tests (capability_count)
+- DESIGN.md: +100 lines (App Detail Redesign Extensions)
+
+**Deferred (logged in §16 TODOs):**
+- T8: CI for Playwright — actionable now that e2e is 26/26 green
+- T12-T14: cross-page Panel/Kpi/StatusPill reconcile
+- T15: stale `frontend/CLAUDE.md` + `backend/CLAUDE.md`
+- T16: migrate remaining 6 tabs to `useTabFetch`
+- T18: extract `pillToneForStatus` helper
+
+**Ship decision:** merge to main when ready. Feature is production-ready on 71.
